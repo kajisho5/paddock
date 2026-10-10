@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.8.2  —  SEVENTHWELL
+SW NAS WATCH  v1.9.0  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.8.2"
+VERSION = "1.9.0"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -3525,7 +3525,40 @@ main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
 .col .list .empty{padding:24px 12px;font-size:12.5px}
 .col .ses{display:flex;align-items:center;gap:8px;margin:14px 0 5px;padding:8px 10px;font-size:14.5px;font-weight:700;letter-spacing:-.01em;color:var(--foreground);min-width:0;position:sticky;top:-4px;z-index:1;background:color-mix(in srgb,var(--vc) 17%,#0c0c0e);border:1px solid color-mix(in srgb,var(--vc) 45%,#0c0c0e);border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.45)}
 .col .list>.ses:first-child{margin-top:6px}
-.col .ses{cursor:pointer;user-select:none}
+.col .ses{cursor:pointer;user-select:none;flex-wrap:wrap;row-gap:4px}
+/* セッションの時刻と進行状況 */
+.tl{flex:1 1 100%;display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;padding-left:22px;font-weight:500}
+.shead .tl{padding-left:21px}
+.stime{font:600 11.5px var(--mono);color:#e4e4e7;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:0 6px;height:19px;display:inline-flex;align-items:center}
+.sst{font-size:11.5px;font-weight:600;white-space:nowrap}
+.sst.done{color:var(--dim)}
+.sst.live{color:var(--emerald)}
+.sst.live::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--emerald);margin-right:5px;vertical-align:1px;animation:pulse 1.2s infinite}
+.sst.next{color:var(--muted-fg)}
+.sst.next.soon{color:var(--amber)}
+.sw-un{font-size:11px;font-weight:700;color:#fff;background:rgba(239,68,68,.85);border-radius:5px;padding:0 6px;height:18px;display:inline-flex;align-items:center}
+.tbar{flex:1 1 100%;height:4px;border-radius:999px;background:rgba(0,0,0,.35);overflow:hidden;margin:0 0 0 22px}
+.tbar i{display:block;height:100%;background:var(--emerald)}
+.col .ses.st-done{opacity:.55}
+.col .ses.st-done:hover{opacity:.8}
+.col .ses.st-live{box-shadow:0 0 0 2px var(--emerald),0 2px 6px rgba(0,0,0,.45)}
+.shead{flex-wrap:wrap;row-gap:3px}
+.shead.st-done{opacity:.55}
+.shead.st-live{background:rgba(16,185,129,.08)}
+.dsep{display:flex;align-items:center;gap:8px;margin:14px 2px 2px;font-size:12px;font-weight:700;color:var(--muted-fg);letter-spacing:.04em}
+.dsep::after{content:"";flex:1;height:1px;background:var(--border)}
+.dsep span{font-size:10.5px;color:#082f49;background:var(--sky);border-radius:999px;padding:0 6px}
+.dsep.today{color:var(--foreground)}
+.col .list>.dsep:first-child{margin-top:6px}
+.dchip{font-size:11px;font-weight:600;color:var(--sky);border:1px solid rgba(56,189,248,.35);border-radius:5px;padding:0 5px;margin-right:6px}
+.nowl{display:flex;align-items:center;gap:7px;margin-top:6px;font-size:12px;color:var(--muted-fg);min-width:0}
+.nowl b{font-weight:700;color:var(--foreground);flex:none}
+.nowl.live b{color:var(--emerald)}
+.nowl .nn{color:#e4e4e7;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.nowl .nr{font:500 11.5px var(--mono);white-space:nowrap;flex:none}
+.nowl.done b{color:var(--dim);font-weight:500}
+.bp,.grp{user-select:none}
+.dhint{font-size:12px;color:var(--amber);white-space:nowrap}
 .col .ses:hover{background:color-mix(in srgb,var(--vc) 24%,#0c0c0e)}
 .col .ses:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
 .col .ses .chev{color:var(--muted-fg);margin-left:-2px}
@@ -3609,6 +3642,7 @@ main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
     <div class="ph"><div class="search"><span id="qi"></span><input id="q" type="text" placeholder="演者・セッションを検索" autocomplete="off"></div></div>
     <div class="tools">
       <select id="venue" title="この会場だけ表示・通知"></select>
+      <select id="lday" title="表示する日（日ごとのフォルダがあるとき）" style="display:none"></select>
       <label><input type="checkbox" id="onlyU">未確認のみ</label>
       <label><input type="checkbox" id="onlyN">未受付のみ</label>
       <span style="flex:1"></span>
@@ -3624,6 +3658,8 @@ main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
       <div class="flt">
         <span style="display:inline-flex;gap:2px"><button class="ghost fb" id="bOpenAll" title="すべてのセッションを開く"></button><button class="ghost fb" id="bCloseAll" title="すべてのセッションを閉じる（演者を隠してコンパクトに）"></button></span>
         <div class="search"><span id="bqi"></span><input id="bq" type="text" placeholder="演者・セッションを検索" autocomplete="off"></div>
+        <select id="bday" title="表示する日。day1などの名前のときは、選んだ日を「今日」として進行状況を出します（翌日になると自動で次の日へ）" style="display:none"></select>
+        <span id="bdayhint" class="dhint" style="display:none">← 今日の日を選ぶと進行状況が出ます</span>
         <select id="bvenue" title="この会場だけ表示・通知"></select>
         <label><input type="checkbox" id="bOnlyU">未確認のみ</label>
         <label><input type="checkbox" id="bOnlyN">未受付のみ</label>
@@ -3718,7 +3754,9 @@ let VENUE=ls.get("venue",""),FOLLOW=ls.get("follow",true),lastInteract=0;
 ["pointerdown","keydown","wheel"].forEach(t=>document.addEventListener(t,()=>{lastInteract=Date.now()},{passive:true,capture:true}));
 function rootById(id){return S&&S.roots.find(r=>r.id===id)}
 function effVenue(){return OPON()&&S.op.venue?S.op.root+"|"+S.op.venue:VENUE}
-function inVenue(root,group){const V=effVenue();if(!V)return true;const i=V.indexOf("|");if(root!==V.slice(0,i))return false;if(group==null||group==="")return true;return group.split("/")[0]===V.slice(i+1)}
+function inVenue(root,group){const V=effVenue();if(!V)return true;const i=V.indexOf("|");if(root!==V.slice(0,i))return false;if(group==null||group==="")return true;
+  if(OPON()&&S.op.venue&&root===S.op.root)return group.split("/")[0]===S.op.venue;   // 会場オペレーターモードはNASの最上位フォルダ単位
+  const r=rootById(root);return r?fuOf(r,group)===V.slice(i+1):group.split("/")[0]===V.slice(i+1)}
 
 async function loadState(){
   S=await api("/api/state");updateRates();
@@ -3860,7 +3898,7 @@ function renderVenue(){
   if(OPON()){const r=rootById(S.op.root);h=`<option value="">${esc(nfc(S.op.venue||(r?r.label:"")))}（会場オペレーター）</option>`;dis=true}
   else{
     for(const r of S.roots){if(r.depth<2)continue;
-      const segs=[...new Set((r.groups||[]).filter(g=>g.key).map(g=>g.key.split("/")[0]))].sort(cmpName);
+      const segs=[...new Set((r.groups||[]).filter(g=>g.key).map(g=>fuOf(r,g.key)).filter(Boolean))].sort(cmpName);
       segs.forEach(s=>opts.push([r.id+"|"+s,(S.roots.length>1?nfc(r.label)+" / ":"")+nfc(s)]));}
     if(VENUE&&!opts.some(o=>o[0]===VENUE))opts.push([VENUE,VENUE.slice(VENUE.indexOf("|")+1)+"（現在なし）"]);
     show=opts.length>0;
@@ -3920,36 +3958,121 @@ function anaChips(a){
 /* 会場の色分け・折りたたみ状態（このPCに保存） */
 const VPAL=["#38bdf8","#a78bfa","#34d399","#fbbf24","#f472b6","#fb923c","#2dd4bf","#818cf8","#f87171","#a3e635"];
 let VCOL=ls.get("vcol",{});
-function computeVenueColors(){let ch=false;for(const r of S.roots){if(r.depth<3)continue;
-  const vs=[...new Set((r.groups||[]).filter(g=>g.key).map(g=>g.key.split("/")[0]))].sort(cmpName);
+/* ---------- 階層の読み取り：日（day1・1日目・10月11日など）／会場／セッション ----------
+   日の階層は自動で見つける（会場の上でも下でも）。日の階層がなくても、セッション名の先頭が「day1_」「1日目 」なら日として扱う */
+const DAY_RE=/^(?:\d{1,3}[_\-\s.]+)?(?:day\s*[-_.]?\s*(\d{1,2})|(\d{1,2})\s*日目|第\s*(\d{1,2})\s*日目?|(\d{1,2})\s*月\s*(\d{1,2})\s*日|(\d{4})\s*[-_.年]\s*(\d{1,2})\s*[-_.月]\s*(\d{1,2})\s*日?)/i;
+function dayInfo(name){const t=nameKey(name);const m=DAY_RE.exec(t);if(!m)return null;
+  const o={tok:m[0].replace(/^\d{1,3}[_\-\s.]+/,"").trim(),rest:t.slice(m[0].length)};
+  if(m[1]||m[2]||m[3])o.n=+(m[1]||m[2]||m[3]);
+  else if(m[4])o.date={m:+m[4],d:+m[5]};else if(m[6])o.date={y:+m[6],m:+m[7],d:+m[8]};
+  return o}
+const LAYC={};
+function lay(r){
+  const c=LAYC[r.id];if(c&&c.ref===r.groups&&c.depth===r.depth)return c;
+  const L=Math.max(0,(r.depth||1)-1);const keys=(r.groups||[]).map(g=>g.key).filter(Boolean);
+  let dl=-1;
+  for(let i=0;i<L&&dl<0;i++){const vals=new Set();for(const k of keys){const x=k.split("/")[i];if(x!=null)vals.add(x)}
+    if(vals.size&&vals.size<=31&&[...vals].every(v=>{const d=dayInfo(v);return d&&d.rest.replace(/[\s_\-.()（）［］\[\]・,、曜月火水木金土日]/g,"").length<=8}))dl=i}
+  const others=[];for(let i=0;i<L;i++)if(i!==dl)others.push(i);
+  const vl=others.length>=2?others[0]:-1,sl=others.length>=2?others.slice(1):others;
+  let sd=false;
+  if(dl<0&&sl.length){const vals=new Set(keys.map(k=>k.split("/")[sl[0]]));let hit=0;vals.forEach(v=>{if(v&&dayInfo(v))hit++});sd=hit>0&&hit*2>=vals.size}
+  const o={ref:r.groups,depth:r.depth,dl,vl,sl,sd,L};LAYC[r.id]=o;return o}
+function parts(r,key){const y=lay(r);const segs=String(key).split("/");
+  const venue=y.vl>=0?(segs[y.vl]||""):"";const sesSegs=y.sl.map(i=>segs[i]).filter(x=>x!=null&&i_ok(x));
+  let day=y.dl>=0?(segs[y.dl]||""):"";
+  if(!day&&y.sd&&sesSegs.length){const d=dayInfo(sesSegs[0]);if(d)day=d.tok}
+  return {venue,day,ses:sesSegs.join("/"),sesKey:segs.slice(0,-1).join("/"),name:segs[segs.length-1]}}
+function i_ok(x){return x!==""}
+/* 「この会場だけ」の単位：会場（会場の階層がなければ最初のフォルダ。階層2ならセッション＝従来どおり） */
+function fuOf(r,key){const y=lay(r);const segs=String(key).split("/");
+  if(y.vl>=0)return segs[y.vl]||"";const i=y.dl===0&&y.sl.length?y.sl[0]:0;return segs[i]||""}
+function dayOrd(label){const d=label?dayInfo(label):null;if(!d)return 1e9;
+  if(d.date)return (d.date.y||new Date().getFullYear())*10000+d.date.m*100+d.date.d;return d.n!=null?d.n:1e9-1}
+function cmpDay(a,b){return (a?0:1)-(b?0:1)||dayOrd(a)-dayOrd(b)||cmpName(a,b)}
+function isTodayLabel(label){const d=label&&dayInfo(label);if(!d||!d.date)return false;const t=new Date();
+  return d.date.m===t.getMonth()+1&&d.date.d===t.getDate()&&(!d.date.y||d.date.y===t.getFullYear())}
+/* 表示する日（PCごとに保存）。「1日目」を選んだまま翌日になったら、自動で「2日目」に進める */
+let DAYSEL=ls.get("day",null);
+function ymd(t){t=t||new Date();return t.getFullYear()+"-"+p2(t.getMonth()+1)+"-"+p2(t.getDate())}
+function allDays(){const set=new Set();const EV=effVenue();
+  for(const r of (S?S.roots:[])){if(EV&&EV.slice(0,EV.indexOf("|"))!==r.id)continue;for(const g of (r.groups||[]))if(g.key){const d=parts(r,g.key).day;if(d)set.add(d)}}
+  return [...set].sort(cmpDay)}
+function effDay(days){if(!DAYSEL||!DAYSEL.v)return "";days=days||allDays();const d=dayInfo(DAYSEL.v);
+  if(d&&d.n!=null&&DAYSEL.at){const diff=Math.round((new Date(ymd()+"T00:00:00")-new Date(DAYSEL.at+"T00:00:00"))/864e5);
+    if(diff>0){const hit=days.find(x=>{const e=dayInfo(x);return e&&e.n===d.n+diff});if(hit)return hit}}
+  return DAYSEL.v}
+function dayOK(r,key,ed){return !ed||parts(r,key).day===ed}
+/* 進行状況の基準になる「今日」：日付の名前なら今日の日付、day1 などなら選んでいる日。日の情報がなければ全部今日 */
+function todayDay(days,ed){const t=days.find(isTodayLabel);return t||ed||null}
+/* セッション名の時刻：0900-1030 / 9:00〜10:30 / 9時30分 / 先頭の0900_ など */
+const TMS=String.raw`(\d{1,2})(?::([0-5]\d)|時(?!間)(?:([0-5]?\d)分?)?)`,SEPS=String.raw`\s*[-~〜ー−–—]+\s*`;
+const RE_TR=new RegExp(String.raw`(?<!\d)`+TMS+SEPS+TMS),RE_T=new RegExp(String.raw`(?<!\d)`+TMS);
+const RE_HR=/(?<!\d)([01]\d|2[0-3])([0-5]\d)\s*[-~〜ー−–—]+\s*([01]\d|2[0-3])([0-5]\d)(?!\d)/,RE_HH=/(?:^|[_\s])([01]\d|2[0-3])([0-5]\d)(?=[_\s\-.]|$)/;
+function sesTime(path){if(!path)return null;const t=nameKey(path);let m,a=null,b=null;
+  const tm=(h,mm,m2)=>{h=+h;const mi=mm!=null&&mm!==""?+mm:(m2!=null&&m2!==""?+m2:0);return h<=24&&mi<60?h*60+mi:null};
+  if((m=RE_TR.exec(t))){a=tm(m[1],m[2],m[3]);b=tm(m[4],m[5],m[6])}
+  else if((m=RE_HR.exec(t))){a=+m[1]*60+ +m[2];b=+m[3]*60+ +m[4]}
+  else if((m=RE_T.exec(t)))a=tm(m[1],m[2],m[3]);
+  else for(const seg of t.split("/")){if((m=RE_HH.exec(seg))){a=+m[1]*60+ +m[2];break}}
+  if(a==null)return null;if(b!=null&&b<=a)b=null;return {s:a,e:b}}
+const fmtT=m=>Math.floor(m/60)+":"+p2(m%60);
+const fmtDur=m=>m>=60?Math.floor(m/60)+"時間"+(m%60?(m%60)+"分":""):m+"分";
+/* 同じ会場・同じ日のセッション（開始順）から、終了／進行中／次 を決める。終わりの時刻がなければ次のセッションの開始まで */
+function sesStatus(list){const now=new Date();const nm=now.getHours()*60+now.getMinutes()+now.getSeconds()/60;
+  const out=new Map();let nextSet=false;
+  list.forEach((x,i)=>{const end=x.t.e!=null?x.t.e:(list[i+1]?list[i+1].t.s:null);let st;
+    if(nm<x.t.s){st=nextSet?"later":"next";nextSet=true}
+    else if(end!=null?nm<end:nm<x.t.s+180)st="live";else st="done";
+    out.set(x.key,{st,s:x.t.s,end,rem:end!=null?Math.max(0,Math.ceil(end-nm)):null,until:Math.ceil(x.t.s-nm),
+      pct:end!=null&&end>x.t.s?Math.min(100,Math.max(0,(nm-x.t.s)*100/(end-x.t.s))):null})});
+  return out}
+function timeChip(t){return t?`<span class="stime">${fmtT(t.s)}${t.e!=null?"–"+fmtT(t.e):"〜"}</span>`:""}
+function statusHtml(st,list){if(!st)return"";const un=list.filter(g=>!isRecv(g)).length;
+  const soon=st.st==="live"||((st.st==="next"||st.st==="later")&&st.until<=30);
+  const warn=un&&soon?`<span class="sw-un" title="開始前・進行中なのに未受付の演者がいます">未受付 ${un}</span>`:"";
+  if(st.st==="done")return `<span class="sst done">終了</span>${warn}`;
+  if(st.st==="live")return `<span class="sst live">進行中${st.rem!=null?" · 残り"+fmtDur(st.rem):""}</span>${warn}`;
+  if(st.st==="next")return `<span class="sst next ${st.until<=30?"soon":""}">次 · あと${fmtDur(Math.max(0,st.until))}</span>${warn}`;
+  return warn}
+function computeVenueColors(){let ch=false;for(const r of S.roots){if(lay(r).vl<0)continue;
+  const vs=[...new Set((r.groups||[]).filter(g=>g.key).map(g=>parts(r,g.key).venue).filter(Boolean))].sort(cmpName);
   const used=new Set(Object.keys(VCOL).filter(k=>k.startsWith(r.id+"|")).map(k=>VCOL[k]));
   for(const v of vs){const k=r.id+"|"+v;if(VCOL[k])continue;
     VCOL[k]=VPAL.find(c=>!used.has(c))||VPAL[used.size%VPAL.length];used.add(VCOL[k]);ch=true}}
   if(ch)ls.set("vcol",VCOL)}
-const venueOf=(root,group)=>{const r=rootById(root);if(!r||r.depth<3||!group)return null;return group.split("/")[0]};
+const venueOf=(root,group)=>{const r=rootById(root);if(!r||!group)return null;const v=parts(r,group).venue;return v||null};
 const vColor=(root,v)=>VCOL[root+"|"+v]||"#a1a1aa";
 let FOLD=ls.get("fold",{});
 const isFold=k=>!!FOLD[k];
 function setFold(k,v){if(v)FOLD[k]=1;else delete FOLD[k];ls.set("fold",FOLD)}
+/* 開閉のキー：会場＝「root|会場名」、セッション＝「root|演者フォルダの親のパス」（日をまたいでも別々に開閉できる） */
 function foldKeysOf(root,group){const r=rootById(root);if(!r||!group||r.depth<2)return[];const segs=group.split("/");const ks=[];
-  if(r.depth>=3){ks.push(root+"|"+segs[0]);if(segs.length>2)ks.push(root+"|"+segs.slice(0,-1).join("/"))}
-  else if(segs.length>1)ks.push(root+"|"+segs.slice(0,-1).join("/"));return ks}
+  const v=parts(r,group).venue;if(v)ks.push(root+"|"+v);
+  if(segs.length>1)ks.push(root+"|"+segs.slice(0,-1).join("/"));return ks}
 function unfold(root,group){let ch=false;foldKeysOf(root,group).forEach(k=>{if(FOLD[k]){delete FOLD[k];ch=true}});if(ch)ls.set("fold",FOLD);return ch}
 /* 受付状況：ファイルが1つ以上確定していれば「受付済み」 */
 const recvState=g=>g.pending?"copying":(g.files>0?"recv":"none");
 const isRecv=g=>recvState(g)==="recv";
 function progHtml(list,suffix){const t=list.length,n=list.filter(isRecv).length;const pct=t?Math.round(n*100/t):0;
   return `<span class="prog ${t&&n===t?"done":n?"":"zero"}" title="受付 ${n}/${t}"><span class="bar"><i style="width:${pct}%"></i></span>${n}/${t}${suffix||""}</span>`}
+/* リスト用：会場ごと・日ごとの進行状況 */
+function listTimeline(r,v,sessions,SI){const days=allDays(),ed=effDay(days),td=todayDay(days,ed);const out=new Map();
+  if(days.length&&!td)return out;
+  const arr=[];for(const [skey] of sessions){const info=SI[skey];if(!info)continue;if(days.length&&info.day!==td)continue;
+    const t=sesTime(info.ses);if(t)arr.push({key:skey,t})}
+  arr.sort((a,b)=>a.t.s-b.t.s);return sesStatus(arr)}
 function renderGroups(){
   const el=$("#groups");const q=nfc($("#q").value).toLowerCase().trim();const onlyU=$("#onlyU").checked;const sort=$("#sort").value;
   if(!S.roots.length){el.innerHTML=`<div class="empty"><div class="ico">${IC.folder}</div><b>監視フォルダがありません</b>［設定］から学会名フォルダを追加してください。<br><span class="mono" style="font-size:11.5px;color:var(--dim)">例: \\\\192.168.0.10\\share\\学会名</span></div>`;return}
-  computeVenueColors();
+  computeVenueColors();renderDaySel(allDays(),effDay());
   const onlyN=$("#onlyN").checked;
   const filtering=!!(q||onlyU||onlyN);
   let h="";
   for(const r of S.roots){
     const EV=effVenue();if(EV&&EV.slice(0,EV.indexOf("|"))!==r.id)continue;
-    let gs=(r.groups||[]).filter(g=>inVenue(r.id,g.key));
+    const ED=effDay();
+    let gs=(r.groups||[]).filter(g=>inVenue(r.id,g.key)&&(g.key===""||dayOK(r,g.key,ED)));
     if(q)gs=gs.filter(g=>nfc(g.key).toLowerCase().includes(q));
     if(onlyU)gs=gs.filter(g=>g.unread);
     if(onlyN)gs=gs.filter(g=>g.key!==""&&!isRecv(g));
@@ -3958,20 +4081,21 @@ function renderGroups(){
       if(sort==="recent")return (b.last_ts||0)-(a.last_ts||0)||cmpPath(a.key,b.key);
       if(sort==="unread")return (b.unread?1:0)-(a.unread?1:0)||(b.last_ts||0)-(a.last_ts||0)||cmpPath(a.key,b.key);
       return cmpPath(a.key,b.key)});
-    const all=(r.groups||[]).filter(g=>g.key!==""&&inVenue(r.id,g.key));const un=all.filter(g=>g.unread).length;
+    const all=(r.groups||[]).filter(g=>g.key!==""&&inVenue(r.id,g.key)&&dayOK(r,g.key,ED));const un=all.filter(g=>g.unread).length;
     const hier=sort==="name"&&r.depth>=2;
     h+=`<div class="rhead"><div class="r1"><span class="dot ${r.online===false?"off":r.online?"on":"busy"}"></span><span class="rl">${esc(nfc(r.label))}</span>${hier?`<span class="tb"><button class="ghost" data-all="open" data-r="${esc(r.id)}" title="すべて開く">${IC.expand}</button><button class="ghost" data-all="close" data-r="${esc(r.id)}" title="すべてたたむ">${IC.collapse}</button></span>`:""}</div><div class="r2">${progHtml(all," 受付")}${un?`<span class="cnt">未確認 ${un}</span>`:""}</div><span class="p" title="${esc(r.path)}"><bdi>${esc(nfc(r.path))}</bdi></span></div>`;
     if(!gs.length){h+=`<div class="empty" style="padding:18px">${r.online===false?"接続できません":filtering?"該当なし":"フォルダがありません"}</div>`;continue}
     if(!hier){for(const g of gs)h+=rowHtml(r,g,false);continue}
-    // 会場 → セッション → 演者 のツリー
-    const tree=new Map();const rest=[];
+    // 会場 → （日）→ セッション → 演者 のツリー（日の階層があれば、会場の中で日ごとに並べる）
+    const tree=new Map();const rest=[];const SI={};
     for(const g of gs){
       if(g.key===""){rest.push(g);continue}
-      const segs=g.key.split("/");
-      const v=r.depth>=3?segs[0]:"";const ses=(r.depth>=3?segs.slice(1,-1):segs.slice(0,-1)).join("/");
-      if(!tree.has(v))tree.set(v,new Map());const m=tree.get(v);if(!m.has(ses))m.set(ses,[]);m.get(ses).push(g);
+      const pp=parts(r,g.key);const v=pp.venue;const sk=pp.sesKey;
+      if(!tree.has(v))tree.set(v,new Map());const m=tree.get(v);if(!m.has(sk))m.set(sk,[]);m.get(sk).push(g);
+      if(!SI[sk])SI[sk]={day:pp.day,ses:pp.ses};
     }
-    for(const [v,sessions] of tree){
+    const venues=[...tree.keys()].sort(cmpName);
+    for(const v of venues){const sessions=new Map([...tree.get(v).entries()].sort((a,b)=>cmpDay(SI[a[0]].day,SI[b[0]].day)||cmpPath(SI[a[0]].ses,SI[b[0]].ses)));
       const vlist=[...sessions.values()].flat();
       const vk=r.id+"|"+v;
       if(v){
@@ -3980,12 +4104,15 @@ function renderGroups(){
         h+=`<div class="vhead ${vfold?"fold":""} ${vflash?"flashh":""}" data-fold="${esc(vk)}" tabindex="0" role="button" aria-expanded="${!vfold}" style="--vc:${vColor(r.id,v)}"><span class="vic">${IC.building}</span><span class="vn">${esc(nfc(v))}</span>${vpend?`<span class="pdot" title="コピー中"></span>`:""}${progHtml(vlist)}${vun?`<span class="badge">${vun}</span>`:""}<span class="chev">${IC.down}</span></div>`;
         if(vfold)continue;
       }
-      for(const [ses,list] of sessions){
-        if(ses){
-          const sk=r.id+"|"+(v?v+"/":"")+ses;const sfold=!filtering&&isFold(sk);
+      const TL=listTimeline(r,v,sessions,SI);
+      for(const [skey,list] of sessions){
+        const info=SI[skey]||{day:"",ses:""};const ses=info.ses;
+        if(ses||info.day){
+          const sk=r.id+"|"+skey;const sfold=!filtering&&isFold(sk);
           const sun=list.filter(g=>g.unread).length;const spend=list.some(g=>g.pending);
           const sflash=sfold&&list.some(g=>flashKeys.has(r.id+"|"+g.key));
-          h+=`<div class="shead ${sfold?"fold":""} ${sflash?"flashh":""}" data-fold="${esc(sk)}" tabindex="0" role="button" aria-expanded="${!sfold}"><span class="chev">${IC.down}</span><span class="sn">${ses.split("/").map(x=>esc(nfc(x))).join('<span class="sep"> › </span>')}</span>${spend?`<span class="pdot" title="コピー中"></span>`:""}${progHtml(list)}${sun?`<span class="badge">${sun}</span>`:""}</div>`;
+          const tt=sesTime(ses);const st=TL.get(skey);
+          h+=`<div class="shead ${sfold?"fold":""} ${sflash?"flashh":""} ${st?"st-"+st.st:""}" data-fold="${esc(sk)}" tabindex="0" role="button" aria-expanded="${!sfold}"><span class="chev">${IC.down}</span><span class="sn">${info.day&&lay(r).dl>=0?`<span class="dchip">${esc(nfc(info.day))}</span>`:""}${(ses||"").split("/").map(x=>esc(nfc(x))).join('<span class="sep"> › </span>')}</span>${spend?`<span class="pdot" title="コピー中"></span>`:""}${progHtml(list)}${sun?`<span class="badge">${sun}</span>`:""}${tt?`<span class="tl">${timeChip(tt)}${statusHtml(st,list)}</span>`:""}</div>`;
           if(sfold)continue;
         }
         for(const g of list)h+=rowHtml(r,g,true);
@@ -4016,7 +4143,9 @@ $("#groups").addEventListener("click",e=>{
     const keys=new Set();(r.groups||[]).forEach(g=>foldKeysOf(rid,g.key).forEach(k=>keys.add(k)));
     keys.forEach(k=>{if(a.dataset.all==="close")FOLD[k]=1;else delete FOLD[k]});ls.set("fold",FOLD);renderGroups();return}
   const f=e.target.closest("[data-fold]");if(f){setFold(f.dataset.fold,!isFold(f.dataset.fold));renderGroups();return}
-  const d=e.target.closest(".grp");if(d)selectGroup(d.dataset.r,d.dataset.g)});
+  const dh=dblHit(e);if(dh){openFolderOS(dh.r,dh.g);return}
+  const d=e.target.closest(".grp");if(!d)return;
+  if(d.dataset.g!=="")noteClick(e,d.dataset.r,d.dataset.g);selectGroup(d.dataset.r,d.dataset.g)});
 $("#groups").addEventListener("keydown",e=>{const f=e.target.closest("[data-fold]");if(f&&(e.key==="Enter"||e.key===" ")){e.preventDefault();setFold(f.dataset.fold,!isFold(f.dataset.fold));renderGroups();const n=[...document.querySelectorAll("[data-fold]")].find(x=>x.dataset.fold===f.dataset.fold);if(n)n.focus()}});
 $("#q").addEventListener("input",renderGroups);
 /* 「未確認のみ」「未受付のみ」はリストと会場ボードで共通 */
@@ -4048,7 +4177,9 @@ if(innerWidth<=1180)$("#bLogClose").style.display="inline-block";
 /* ---------- 会場ボード（全会場を横に並べて受付状況を一覧） ---------- */
 let VIEW=ls.get("view","list")==="board"?"board":"list",followKey=null,boardHtml="";
 const drawerOpen=()=>VIEW==="board"&&$("#main").classList.contains("drawer");
-function openDrawer(){if(VIEW==="board"){$("#main").classList.add("drawer");setTimeout(updNav,0)}}
+function openDrawer(){if(VIEW!=="board")return;const m=$("#main");
+  if(!m.classList.contains("drawer")){const c=$("#board .col");if(c)$("#board").style.gridAutoColumns=c.getBoundingClientRect().width+"px"}  // 開いても列の幅を変えない
+  m.classList.add("drawer");setTimeout(updNav,0)}
 /* 右パネルに隠れないよう、演者の列を左側へスクロールして見せる */
 function revealInBoard(row){
   row.scrollIntoView({block:"nearest",inline:"nearest"});
@@ -4057,11 +4188,11 @@ function revealInBoard(row){
   if(r.right>lim)bd.scrollLeft+=Math.ceil(r.right-lim);           // 列全体が見えるように
   else if(r.left<br.left+12)bd.scrollLeft-=Math.ceil(br.left+12-r.left);
 }
-function closeDrawer(){$("#main").classList.remove("drawer");document.querySelectorAll(".bp.sel").forEach(x=>x.classList.remove("sel"));setTimeout(updNav,0)}
+function closeDrawer(){$("#main").classList.remove("drawer");$("#board").style.gridAutoColumns="";document.querySelectorAll(".bp.sel").forEach(x=>x.classList.remove("sel"));setTimeout(updNav,0)}
 function setView(v,save){
   VIEW=v==="board"?"board":"list";if(save!==false)ls.set("view",VIEW);
   const m=$("#main");const b=VIEW==="board";
-  m.classList.toggle("vboard",b);document.body.classList.toggle("vboard",b);m.classList.remove("showlog");if(!b)m.classList.remove("drawer");
+  m.classList.toggle("vboard",b);document.body.classList.toggle("vboard",b);m.classList.remove("showlog");if(!b){m.classList.remove("drawer");$("#board").style.gridAutoColumns=""}
   $("#vList").setAttribute("aria-selected",String(!b));$("#vBoard").setAttribute("aria-selected",String(b));
   $("#bLogClose").style.display=(b||innerWidth<=1180)?"inline-flex":"none";
   if(!S)return;
@@ -4081,7 +4212,7 @@ function bpRow(r,g){
   const cats=Object.entries(g.cats||{}).filter(([c])=>!(g.ana&&c==="PPT")).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([c,n])=>`<span class="chip c-${esc(c)}">${esc(c)}${n>1?" "+n:""}</span>`).join("");
   const tags=st==="none"?`<span class="tag t-dim">未受付</span>`:replTag(g)+cps+anaChips(g.ana)+cats;
   const stl=st==="recv"?"受付済み":st==="copying"?"コピー中":"未受付";
-  const tip=nfc(name)+"\n"+stl+(g.files?` · ${g.files}ファイル · ${fmtSize(g.size)}`:"")+(g.recv_ts?` · 受付 ${dtm(g.recv_ts)}`:"")+(g.repl?` · 差し替え ${g.repl}回`:"")+(g.last_ts?` · 最終変更 ${ago(g.last_ts)}`:"")+(g.unread?` · 未確認 ${g.unread}`:"");
+  const tip=nfc(name)+"\n"+stl+(g.files?` · ${g.files}ファイル · ${fmtSize(g.size)}`:"")+(g.recv_ts?` · 受付 ${dtm(g.recv_ts)}`:"")+(g.repl?` · 差し替え ${g.repl}回`:"")+(g.last_ts?` · 最終変更 ${ago(g.last_ts)}`:"")+(g.unread?` · 未確認 ${g.unread}`:"")+(S.ui.os_open&&S.local?"\nダブルクリックでフォルダを開く":"");
   return `<div class="bp st-${st} ${g.unread?"unread":""} ${isSel?"sel":""} ${flashKeys.has(r.id+"|"+g.key)?"flash":""}" data-r="${esc(r.id)}" data-g="${esc(g.key)}" tabindex="0" role="button" title="${esc(tip)}"><span class="sti">${sti}</span><span class="nm">${esc(nfc(name))}</span>${g.unread?`<span class="badge">${g.unread}</span>`:""}${tags?`<span class="tg">${tags}</span>`:""}${progHtmlRow(r,g)}</div>`;
 }
 function renderBoard(){
@@ -4091,12 +4222,14 @@ function renderBoard(){
   const filtering=!!(q||onlyU||onlyN);
   computeVenueColors();
   COLSES={};const nav=[];
+  const DAYS=allDays(),ED=effDay(DAYS),TD=todayDay(DAYS,ED);renderDaySel(DAYS,ED);
   const EV=effVenue();let scope=[],h="";
   S.roots.forEach((r,ri)=>{
     if(EV&&EV.slice(0,EV.indexOf("|"))!==r.id)return;
-    const base=(r.groups||[]).filter(g=>g.key!==""&&inVenue(r.id,g.key));scope=scope.concat(base);
+    const y=lay(r);
+    const base=(r.groups||[]).filter(g=>g.key!==""&&inVenue(r.id,g.key)&&dayOK(r,g.key,ED));scope=scope.concat(base);
     const byV=new Map();
-    for(const g of base){const v=r.depth>=3?g.key.split("/")[0]:"";if(!byV.has(v))byV.set(v,[]);byV.get(v).push(g)}
+    for(const g of base){const v=parts(r,g.key).venue;if(!byV.has(v))byV.set(v,[]);byV.get(v).push(g)}
     if(!byV.size){
       if(q)return;
       h+=`<section class="col" data-col="${esc(r.id)}|" style="--vc:${VPAL[ri%VPAL.length]}"><div class="vh"><div class="n">${IC.building}<span class="vn">${esc(nfc(r.label))}</span></div></div><div class="list"><div class="empty">${r.online===false?"接続できません":r.online==null?"確認中…":"演者フォルダがありません"}</div></div></section>`;return}
@@ -4107,31 +4240,45 @@ function renderBoard(){
       if(onlyU)gs=gs.filter(g=>g.unread);
       if(onlyN)gs=gs.filter(g=>!isRecv(g));
       if(q&&!gs.length)continue;
-      const vc=r.depth>=3?vColor(r.id,v):VPAL[ri%VPAL.length];
-      const vname=r.depth>=3?v:r.label;
-      const sub=r.depth>=3&&S.roots.length>1?r.label:"";
+      const vc=y.vl>=0?vColor(r.id,v):VPAL[ri%VPAL.length];
+      const vname=y.vl>=0?v:r.label;
+      const sub=y.vl>=0&&S.roots.length>1?r.label:"";
       const vun=full.filter(g=>g.unread).length,vcp=full.filter(g=>g.pending).length;
       {const n=full.filter(isRecv).length;nav.push([r.id+"|"+v,vname,vc,n,full.length,vun])}
-      h+=`<section class="col" data-col="${esc(r.id+"|"+v)}" style="--vc:${vc}"><div class="vh"><div class="n">${IC.building}<span class="vn" title="${esc(nfc(vname))}">${esc(nfc(vname))}</span>${vun?`<span class="badge" title="未確認の演者">${vun}</span>`:""}${COLSES_MARK}</div>${sub?`<div class="rl">${esc(nfc(sub))}</div>`:""}<div class="s"><span>受付</span>${progHtml(full)}${vcp?`<span class="cpg">${IC.spin}コピー中 ${vcp}</span>`:""}</div></div><div class="list">`;
-      if(!gs.length){h=h.replace(COLSES_MARK,"");h+=`<div class="empty">${onlyN&&!onlyU?"全員受付済み":onlyU&&!onlyN?"未確認はありません":"該当なし"}</div></div></section>`;continue}
-      // セッションごとにまとめる（並びは会場・セッション順）
-      const sesOf=g=>{const segs=g.key.split("/");return (r.depth>=3?segs.slice(1,-1):segs.slice(0,-1)).join("/")};
+      h+=`<section class="col" data-col="${esc(r.id+"|"+v)}" style="--vc:${vc}"><div class="vh"><div class="n">${IC.building}<span class="vn" title="${esc(nfc(vname))}">${esc(nfc(vname))}</span>${vun?`<span class="badge" title="未確認の演者">${vun}</span>`:""}${COLSES_MARK}</div>${sub?`<div class="rl">${esc(nfc(sub))}</div>`:""}<div class="s"><span>受付</span>${progHtml(full)}${vcp?`<span class="cpg">${IC.spin}コピー中 ${vcp}</span>`:""}</div>${NOW_MARK}</div><div class="list">`;
+      if(!gs.length){h=h.replace(COLSES_MARK,"").replace(NOW_MARK,"");h+=`<div class="empty">${onlyN&&!onlyU?"全員受付済み":onlyU&&!onlyN?"未確認はありません":"該当なし"}</div></div></section>`;continue}
+      // セッションごとにまとめる（会場の中で 日 → セッション名 の順。日が2つ以上なら日の区切りを入れる）
       const sessions=new Map();
-      for(const g of full){const k=sesOf(g);if(!sessions.has(k))sessions.set(k,{all:[],vis:[]});sessions.get(k).all.push(g)}
-      for(const g of gs)sessions.get(sesOf(g)).vis.push(g);
-      const colKey=r.id+"|"+v,fks=[];
-      for(const k of [...sessions.keys()].sort(cmpPath)){
+      for(const g of full){const pp=parts(r,g.key);const k=pp.sesKey;if(!sessions.has(k))sessions.set(k,{all:[],vis:[],day:pp.day,ses:pp.ses});sessions.get(k).all.push(g)}
+      for(const g of gs)sessions.get(parts(r,g.key).sesKey).vis.push(g);
+      const order=[...sessions.keys()].sort((a,b)=>{const A=sessions.get(a),B=sessions.get(b);return cmpDay(A.day,B.day)||cmpPath(A.ses,B.ses)});
+      // 進行状況（今日の分だけ）：開始順に並べて 終了／進行中／次 を決める
+      const tl=[];for(const k of order){const x=sessions.get(k);if(DAYS.length&&(!TD||x.day!==TD))continue;const t=sesTime(x.ses);if(t)tl.push({key:k,t})}
+      tl.sort((a,b)=>a.t.s-b.t.s);const STS=sesStatus(tl);
+      const multiDay=new Set(order.map(k=>sessions.get(k).day)).size>1;
+      const colKey=r.id+"|"+v,fks=[];let lastDay=null;
+      for(const k of order){
         const x=sessions.get(k);if(!x.vis.length)continue;
         x.vis.sort((a,b)=>cmpPath(a.key,b.key));
-        if(k){
-          const fk=r.id+"|"+(v?v+"/":"")+k;fks.push(fk);
+        if(multiDay&&x.day!==lastDay){lastDay=x.day;h+=`<div class="dsep ${x.day&&x.day===TD?"today":""}">${esc(nfc(x.day||"日の指定なし"))}${x.day&&x.day===TD?"<span>今日</span>":""}</div>`}
+        if(x.ses||x.day){
+          const fk=r.id+"|"+k;fks.push(fk);
           const sf=!filtering&&isFold(fk);const sun=x.all.filter(g=>g.unread).length;
           const sflash=sf&&x.all.some(g=>flashKeys.has(r.id+"|"+g.key));
-          h+=`<div class="ses ${sf?"fold":""} ${sflash?"flashh":""}" data-fold="${esc(fk)}" tabindex="0" role="button" aria-expanded="${!sf}" title="${esc(nfc(k))}（クリックで${sf?"開く":"閉じる"}）"><span class="chev">${IC.down}</span><span class="sn">${k.split("/").map(t=>esc(nfc(t))).join('<span class="sep"> › </span>')}</span>${x.all.some(g=>g.pending)?`<span class="pdot" title="コピー中"></span>`:""}${sun?`<span class="badge" title="未確認の演者">${sun}</span>`:""}${progHtml(x.all)}</div>`;
+          const tt=sesTime(x.ses),st=STS.get(k);
+          const label=x.ses||x.day;
+          h+=`<div class="ses ${sf?"fold":""} ${sflash?"flashh":""} ${st?"st-"+st.st:""}" data-fold="${esc(fk)}" tabindex="0" role="button" aria-expanded="${!sf}" title="${esc(nfc((x.day&&!multiDay&&y.dl>=0?x.day+" / ":"")+label))}（クリックで${sf?"開く":"閉じる"}）"><span class="chev">${IC.down}</span><span class="sn">${label.split("/").map(t=>esc(nfc(t))).join('<span class="sep"> › </span>')}</span>${x.all.some(g=>g.pending)?`<span class="pdot" title="コピー中"></span>`:""}${sun?`<span class="badge" title="未確認の演者">${sun}</span>`:""}${progHtml(x.all)}${tt?`<span class="tl">${timeChip(tt)}${statusHtml(st,x.all)}</span>`:""}${st&&st.st==="live"&&st.pct!=null?`<span class="tbar"><i style="width:${st.pct.toFixed(1)}%"></i></span>`:""}</div>`;
           if(sf)continue;
         }
         h+=x.vis.map(g=>bpRow(r,g)).join("");
       }
+      // 会場の見出しに「いま／次」
+      {let nowh="";const live=tl.find(z=>STS.get(z.key).st==="live"),nx=tl.find(z=>STS.get(z.key).st==="next");
+        const nm=z=>esc(nfc(sessions.get(z.key).ses.split("/").pop()));
+        if(live){const a=STS.get(live.key);nowh=`<div class="nowl live"><b>いま</b><span class="nn">${nm(live)}</span>${a.rem!=null?`<span class="nr">残り${fmtDur(a.rem)}</span>`:""}</div>`}
+        else if(nx){const a=STS.get(nx.key);nowh=`<div class="nowl"><b>次</b><span class="nn">${nm(nx)}</span><span class="nr">${fmtT(a.s)}〜（あと${fmtDur(Math.max(0,a.until))}）</span></div>`}
+        else if(tl.length)nowh=`<div class="nowl done"><b>本日のセッションは終了</b></div>`;
+        h=h.replace(NOW_MARK,()=>nowh)}
       COLSES[colKey]=fks;
       if(fks.length&&!filtering){const allF=fks.every(isFold);
         const btn=`<button class="ghost cf" data-colfold="${esc(colKey)}" title="この会場のセッションを${allF?"すべて開く":"すべて閉じる"}">${allF?IC.expand:IC.collapse}</button>`;h=h.replace(COLSES_MARK,()=>btn)}
@@ -4148,6 +4295,8 @@ function renderBoard(){
     el.scrollLeft=sx;
   }
   renderNav(nav);
+  {let anyT=false;if(DAYS.length&&!TD)for(const r of S.roots){for(const g of (r.groups||[])){if(g.key&&sesTime(parts(r,g.key).ses)){anyT=true;break}}if(anyT)break}
+    $("#bdayhint").style.display=anyT?"":"none"}
   if(followKey){const k=followKey;followKey=null;const row=[...el.querySelectorAll(".bp")].find(x=>x.dataset.r+"|"+x.dataset.g===k);
     if(row)revealInBoard(row);
     else{const i=k.indexOf("|"),fk=foldKeysOf(k.slice(0,i),k.slice(i+1)).slice(-1)[0];   // 閉じたセッションなら、その見出しまで
@@ -4157,19 +4306,38 @@ function renderBoard(){
   const cpn=scp.filter(g=>g.pending).length,unn=scp.filter(g=>g.unread).length;
   $("#bCp").innerHTML=`コピー中 <b>${cpn}</b>`;$("#bUn").innerHTML=`未確認 <b>${unn}</b>`;
 }
-let COLSES={};const COLSES_MARK="<!--cf-->";
+let COLSES={};const COLSES_MARK="<!--cf-->",NOW_MARK="<!--now-->";
+/* 日の切り替え（ボードとリストで共通。PCごとに保存） */
+function renderDaySel(days,ed){
+  const show=days.length>0;
+  const h=`<option value="">すべての日</option>`+days.map(d=>`<option value="${esc(d)}" ${d===ed?"selected":""}>${esc(nfc(d))}${isTodayLabel(d)?"（今日）":""}</option>`).join("")+(ed&&!days.includes(ed)?`<option value="${esc(ed)}" selected>${esc(nfc(ed))}（現在なし）</option>`:"");
+  for(const sel of [$("#bday"),$("#lday")]){sel.style.display=show?"":"none";if(sel.dataset.h!==h){sel.innerHTML=h;sel.dataset.h=h}if(sel.value!==ed)sel.value=ed}}
+function setDay(v){DAYSEL=v?{v,at:ymd()}:null;ls.set("day",DAYSEL);boardHtml="";renderBoard();renderGroups();renderDaySel(allDays(),effDay())}
+$("#bday").addEventListener("change",()=>setDay($("#bday").value));
+$("#lday").addEventListener("change",()=>setDay($("#lday").value));
 /* セッションの開閉（このPCに保存。リスト表示の開閉と共通） */
 function toggleSes(fk){setFold(fk,!isFold(fk));renderBoard();renderGroups();
   const n=[...document.querySelectorAll("#board .ses[data-fold]")].find(x=>x.dataset.fold===fk);if(n)n.focus({preventScroll:true})}
 function setFoldMany(keys,v){keys.forEach(k=>{if(v)FOLD[k]=1;else delete FOLD[k]});ls.set("fold",FOLD);renderBoard();renderGroups()}
 function boardSesKeys(){const out=[];Object.values(COLSES).forEach(a=>out.push(...a));return out}
 $("#board").addEventListener("click",e=>{
+  const dh=dblHit(e);if(dh){openFolderOS(dh.r,dh.g);return}
   const cf=e.target.closest("[data-colfold]");if(cf){const ks=COLSES[cf.dataset.colfold]||[];setFoldMany(ks,!ks.every(isFold));return}
   const f=e.target.closest(".ses[data-fold]");if(f){toggleSes(f.dataset.fold);return}
-  const d=e.target.closest(".bp");if(d)selectGroup(d.dataset.r,d.dataset.g)});
+  const d=e.target.closest(".bp");if(!d)return;
+  noteClick(e,d.dataset.r,d.dataset.g);selectGroup(d.dataset.r,d.dataset.g)});
 $("#board").addEventListener("keydown",e=>{if(e.key!=="Enter"&&e.key!==" ")return;
   const f=e.target.closest(".ses[data-fold]");if(f){e.preventDefault();toggleSes(f.dataset.fold);return}
   const d=e.target.closest(".bp");if(d){e.preventDefault();selectGroup(d.dataset.r,d.dataset.g)}});
+/* 演者をダブルクリック → Explorer / Finder でそのフォルダを開く（設定で「Explorer / Finder で開く」がオンのときだけ） */
+function openFolderOS(root,group){
+  if(!S.local){toast("フォルダを開くのは監視PCでのみできます",4000);return}
+  if(!S.ui.os_open){toast("ダブルクリックでフォルダを開くには、［設定］→「Explorer / Finder で開く」をオンにしてください（会場側への影響を避けるため、通常はオフです）",7000);return}
+  openOS(root,group);toast("フォルダを開いています…",1800)}
+/* 1回目のクリックで画面が書き換わっても判定できるよう、「同じ演者を0.45秒以内に2回クリック」でダブルクリックとみなす */
+let LASTCLK=null;
+function dblHit(e){const c=LASTCLK;if(!c)return null;if(Date.now()-c.t<450&&Math.abs(e.clientX-c.x)<8&&Math.abs(e.clientY-c.y)<8){LASTCLK=null;return c}return null}
+function noteClick(e,r,g){LASTCLK={r,g,t:Date.now(),x:e.clientX,y:e.clientY}}
 $("#bOpenAll").innerHTML=IC.expand+"開く";$("#bCloseAll").innerHTML=IC.collapse+"閉じる";
 $("#bOpenAll").onclick=()=>setFoldMany(boardSesKeys(),false);
 $("#bCloseAll").onclick=()=>setFoldMany(boardSesKeys(),true);
@@ -4272,7 +4440,7 @@ function renderFolder(){
   const cats={};files.forEach(i=>cats[i.c]=(cats[i.c]||0)+1);
   const osName=S.os==="win"?"Explorer":S.os==="mac"?"Finder":"ファイラー";
   const fv=venueOf(F.root,F.group);
-  let h=`<div class="fh"><div class="crumb"><span>${esc(nfc(F.label))}</span>${segs.length>1?segs.slice(0,-1).map((s,i)=>i===0&&fv?`${IC.chev}<span class="vbadge" style="--vc:${vColor(F.root,fv)}">${IC.building}${esc(nfc(s))}</span>`:`${IC.chev}<b>${esc(nfc(s))}</b>`).join(""):""}</div>
+  let h=`<div class="fh"><div class="crumb"><span>${esc(nfc(F.label))}</span>${segs.length>1?segs.slice(0,-1).map((s,i)=>r&&i===lay(r).vl&&fv?`${IC.chev}<span class="vbadge" style="--vc:${vColor(F.root,fv)}">${IC.building}${esc(nfc(s))}</span>`:`${IC.chev}<b>${esc(nfc(s))}</b>`).join(""):""}</div>
     <h1>${esc(nfc(name))}</h1>
     <div class="facts">${F.group===""?"":pend?`<span class="rtag copying">${IC.spin}コピー中</span>`:files.length?`<span class="rtag recv">${IC.ok}受付済み</span>`:`<span class="rtag none">${IC.todo}未受付</span>`}<span>${files.length} ファイル</span><span>${fmtSize(size)}</span>${latest?`<span>最終更新 ${dtm(latest)}</span>`:""}${F.track&&F.track.recv?`<span>受付 ${dtm(F.track.recv)}</span>`:""}${F.track&&F.track.n?`<span class="tag t-repl">差し替え ${F.track.n}回（最終 ${dtm(F.track.last)}）</span>`:""}${pend?`<span class="copying">● コピー中/確定待ち ${pend}</span>`:""}${(()=>{const rr=rootById(F.root);const gg=rr&&(rr.groups||[]).find(x=>x.key===F.group);return rr&&gg?progHtmlRow(rr,gg):""})()}</div>
     <div class="acts">${S.local&&S.ui.os_open?`<button id="bOpen" title="NAS上のフォルダを${osName}で開く">${IC.ext}${osName}で開く</button>`:""}<button id="bCopy">${IC.copy}パスをコピー</button>
