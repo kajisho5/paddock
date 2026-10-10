@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.11.0  —  SEVENTHWELL
+SW NAS WATCH  v1.11.1  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.11.0"
+VERSION = "1.11.1"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -57,7 +57,7 @@ DIR = "D"                 # スナップショット上のフォルダ印
 MAX_GROUP_WAIT = 180.0    # 書き込みが続いていても、この秒数で途中経過を確定させる
 RECENT_KEEP = 6 * 3600    # フォルダ表示で「最近の変更」印を残す時間
 EVENT_KEEP = 3000
-ANA_VERSION = 3   # 解析内容を変えたら上げる（保存済みの解析結果を作り直す）  3: 動画の形式チェック
+ANA_VERSION = 4   # 解析内容を変えたら上げる（保存済みの解析結果を作り直す）  3: 動画の形式チェック  4: リンク動画の解析失敗を修正
 SYNC_ANALYSIS_BUDGET = 12.0  # 通知に解析結果を載せるため、確定直後に待つ最大秒数
 
 DEFAULT_IGNORE = [
@@ -391,25 +391,26 @@ def _resolve(base_dir, target):
 
 
 def _link_status(tgt, pptx_dir):
-    """リンク動画の参照先。NAS上の相対パスだけ存在確認（stat）する。"""
+    """リンク動画の参照先。NAS上の相対パスだけ存在確認（stat）する。(状態, 表示用, 見つかったファイルのパス or None) を返す。"""
     t = tgt.strip()
     low = t.lower()
     if re.match(r"^(https?|rtsp|rtmp|mms)://", low):
-        return "online", t
+        return "online", t, None
     if low.startswith("file:"):
         t = unquote(t[5:])
-        if re.match(r"^/+[A-Za-z]:", t):
-            t = t.lstrip("/")
-        elif t.startswith("//"):
-            pass
+        if t.startswith("///") or (t.startswith("/") and not t.startswith("//")):
+            t = "/" + t.lstrip("/")          # ローカルのパス（file:///C:/… や file:///Users/…）
+            if re.match(r"^/[A-Za-z]:", t):
+                t = t[1:]
+        # file://サーバー/共有/… はネットワーク上の場所（UNC）のまま
     else:
         t = unquote(t)
     if re.match(r"^[A-Za-z]:[\\/]", t):
-        return "abs", t.replace("/", "\\")
+        return "abs", t.replace("/", "\\"), None
     if t.startswith(("\\\\", "//")):
-        return "unc", t.replace("/", "\\")
+        return "unc", t.replace("/", "\\"), None
     if t.startswith("/"):
-        return "abs", t
+        return "abs", t, None
     rel = t.replace("\\", "/")
     p = os.path.normpath(os.path.join(pptx_dir, *[x for x in rel.split("/") if x]))
     try:
@@ -425,6 +426,8 @@ def _link_status(tgt, pptx_dir):
 # Baseline / Main / High（8bit・4:2:0）・レベル5.1まで。HEVC は別途「HEVC拡張」が必要。ProRes は非対応。
 PROBE_MOOV_MAX = 48 * 1024 * 1024     # moov（形式情報）の上限
 PROBE_SEQ_MAX = 64 * 1024 * 1024      # 圧縮されたZIPメンバーを前から読むときの上限
+PROBE_TOTAL_MAX = 192 * 1024 * 1024   # 1つのPowerPointで、動画の形式確認のために読む量の合計の上限
+PROBE_VIDEOS_MAX = 60                 # 1つのPowerPointで形式を確認する動画の数の上限（画面に出す数と同じ）
 PRORES = {"apcn", "apch", "apcs", "apco", "ap4h", "ap4x", "aprn", "aprh"}
 H264_OK = {66: "Baseline", 77: "Main", 88: "Extended", 100: "High"}
 H264_NG = {110: "High 10（10bit）", 122: "High 4:2:2", 244: "High 4:4:4", 44: "CAVLC 4:4:4"}
@@ -434,10 +437,21 @@ class _ProbeStop(Exception):
     pass
 
 
+class _Meter:
+    """1つのPowerPointの中の動画すべてで共有する、読み取り量の残り。"""
+    def __init__(self, left):
+        self.left = left
+
+    def take(self, n):
+        self.left -= n
+        if self.left < 0:
+            raise _ProbeStop("動画が多く、読み取り量の上限に達したため省略しました。試写で確認を")
+
+
 class _DirectReader:
     """ファイル（またはZIP内の無圧縮メンバー）を、必要な位置だけシークして読む。"""
-    def __init__(self, f, base, size):
-        self.f, self.base, self.size, self.used = f, base, size, 0
+    def __init__(self, f, base, size, meter=None):
+        self.f, self.base, self.size, self.used, self.meter = f, base, size, 0, meter
 
     def read_at(self, off, n):
         if off >= self.size:
@@ -446,15 +460,23 @@ class _DirectReader:
         self.used += n
         if self.used > PROBE_MOOV_MAX + (1 << 20):
             raise _ProbeStop("読み取り量の上限")
+        if self.meter:
+            self.meter.take(n)
         self.f.seek(self.base + off)
         return self.f.read(n)
 
 
 class _SeqReader:
     """ZIP内の圧縮メンバー：前から順に読むしかないので、上限までで打ち切る（直前に読んだ分だけ手元に残す）。"""
-    def __init__(self, fp, size):
-        self.fp, self.size = fp, size
+    def __init__(self, fp, size, meter=None):
+        self.fp, self.size, self.meter = fp, size, meter
         self.buf, self.boff = b"", 0        # 手元にある範囲 [boff, boff+len(buf))
+
+    def _read(self, n):
+        b = self.fp.read(n)
+        if self.meter and b:
+            self.meter.take(len(b))
+        return b
 
     def read_at(self, off, n):
         if off < self.boff:
@@ -465,7 +487,7 @@ class _SeqReader:
         if off >= end:
             skip = off - end
             while skip > 0:
-                b = self.fp.read(min(skip, 1 << 20))
+                b = self._read(min(skip, 1 << 20))
                 if not b:
                     return b""
                 skip -= len(b)
@@ -473,7 +495,7 @@ class _SeqReader:
         else:
             self.buf, self.boff = self.buf[off - self.boff:], off
         while len(self.buf) < n:
-            b = self.fp.read(n - len(self.buf))
+            b = self._read(n - len(self.buf))
             if not b:
                 break
             self.buf += b
@@ -664,7 +686,7 @@ def probe_video(reader, name):
     return {"container": container, "v": "warn", "why": "形式情報（moov）が見つかりません。試写を"}
 
 
-def probe_zip_member(f, z, name):
+def probe_zip_member(f, z, name, meter=None):
     info = z.getinfo(name)
     if info.flag_bits & 0x1:
         return {"container": "不明", "v": "warn", "why": "暗号化されています"}
@@ -674,17 +696,17 @@ def probe_zip_member(f, z, name):
         if len(lh) < 30 or lh[:4] != b"PK\x03\x04":
             raise _ProbeStop("ZIPの構造が読めません")
         nlen, elen = struct.unpack("<HH", lh[26:30])
-        return probe_video(_DirectReader(f, info.header_offset + 30 + nlen + elen, info.file_size), name)
+        return probe_video(_DirectReader(f, info.header_offset + 30 + nlen + elen, info.file_size, meter), name)
     with z.open(name) as fp:
-        return probe_video(_SeqReader(fp, info.file_size), name)
+        return probe_video(_SeqReader(fp, info.file_size, meter), name)
 
 
-def probe_file(path):
+def probe_file(path, meter=None):
     """リンク動画（同じフォルダにある実ファイル）の形式。開き方は解析と同じ安全な読み取り専用。"""
     f = open_ro(path)
     try:
         st0 = os.fstat(f.fileno())
-        r = probe_video(_DirectReader(f, 0, st0.st_size), path)
+        r = probe_video(_DirectReader(f, 0, st0.st_size, meter), path)
         st1 = os.fstat(f.fileno())
         if (st0.st_size, st0.st_mtime_ns) != (st1.st_size, st1.st_mtime_ns):
             raise _ProbeStop("読み取り中に変更されました")
@@ -854,15 +876,17 @@ def _parse_pptx(z, path, coi, f=None):
     vids = [m for m in media.values() if m["av"] == "video"]
     auds = [m for m in media.values() if m["av"] == "audio"]
     # 動画の形式（会場PCで再生できるか）。見出しと形式情報だけを読む。失敗しても解析全体は止めない
-    for m in vids[:12]:
+    # 動画がいくつあっても全部確認する（読む量の合計に上限。超えた分は「省略」と明示する）
+    meter = _Meter(PROBE_TOTAL_MAX)
+    for m in vids[:PROBE_VIDEOS_MAX]:
         lp = m.pop("_lp", None)
         try:
             if m["kind"] == "embed" and f is not None:
                 key = _resolve("", m.get("_part", "")) if m.get("_part") else None
                 if key and key in names:
-                    m["fmt"] = probe_zip_member(f, z, key)
+                    m["fmt"] = probe_zip_member(f, z, key, meter)
             elif lp and ext_of(lp) in VIDEO_EXTS:
-                m["fmt"] = probe_file(lp)
+                m["fmt"] = probe_file(lp, meter)
         except (_ProbeStop, OSError, UnsafeOpen, ValueError, struct.error, zipfile.BadZipFile,
                 RuntimeError, EOFError, NotImplementedError, IndexError, KeyError) as e:
             m["fmt"] = {"container": "不明", "v": "unk", "why": "形式を確認できません（%s）" % (str(e) or type(e).__name__)}
