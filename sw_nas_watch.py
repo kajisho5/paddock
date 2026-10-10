@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.10.1  —  SEVENTHWELL
+SW NAS WATCH  v1.11.0  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.10.1"
+VERSION = "1.11.0"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -67,9 +67,26 @@ DEFAULT_IGNORE = [
     "@eaDir", "#recycle", "#snapshot", "@Recycle", ".@__thumb", "@Recently-Snapshot",
     "$RECYCLE.BIN", "System Volume Information",
 ]
-# 「受付済」「取得済」などの目印（画像ファイル）。ファイル名にこの文字があれば、データではなく状況の目印として扱う
-DEFAULT_MARK_RECV = ["受付済", "受付完了"]
-DEFAULT_MARK_GOT = ["取得済", "受取済", "受け取り済", "DL済", "ダウンロード済"]
+# 現場で演者フォルダに入れる「目印」の画像（例: 00_受付済.jpg / 13_変更有.jpg / 17_会場取得.jpg / 18_発表終了.jpg）。
+# ファイル名にこの文字を含む画像・テキストは、データではなく目印として扱う（全角半角・大文字小文字・空白や _ - は区別しない）。
+# role: recv=受付済 / got=会場取得済 / done=発表終了 / drop=演題取り下げ / direct=会場直（データは会場で受け取る）
+#       warn=注意として目立たせる / info=表示だけ
+MARK_ROLES = ("recv", "got", "done", "drop", "direct", "warn", "info")
+DEFAULT_MARKS = [
+    {"w": "受付済", "role": "recv"}, {"w": "受付完了", "role": "recv"},
+    {"w": "動画有", "role": "info"}, {"w": "音声有", "role": "info"}, {"w": "動画のみ音声不要", "role": "info"},
+    {"w": "Win持込", "role": "info"}, {"w": "Mac持込", "role": "info"}, {"w": "Backup", "role": "info"},
+    {"w": "持込リモプレ", "role": "info"}, {"w": "OP卓PC 発表者ツール", "role": "info"}, {"w": "発表者ツール", "role": "info"},
+    {"w": "ミラーリング", "role": "info"}, {"w": "Mac PPT", "role": "info"}, {"w": "Mac Keynote", "role": "info"},
+    {"w": "変更有", "role": "warn"}, {"w": "演者変更", "role": "warn"},
+    {"w": "演題取り下げ", "role": "drop"}, {"w": "取り下げ", "role": "drop"}, {"w": "取下げ", "role": "drop"},
+    {"w": "会場直", "role": "direct"},
+    {"w": "会場取得", "role": "got"}, {"w": "取得済", "role": "got"}, {"w": "受取済", "role": "got"},
+    {"w": "受け取り済", "role": "got"}, {"w": "DL済", "role": "got"}, {"w": "ダウンロード済", "role": "got"},
+    {"w": "発表終了", "role": "done"}, {"w": "発表済", "role": "done"},
+]
+MARK_STATUS_ROLES = ("recv", "got", "done", "drop", "direct")   # 演者の状態を決める目印
+MARK_CHIP_ROLES = ("direct", "warn", "info")                    # 演者の行にチップで出す目印
 MARK_MAX = 20 * 1024 * 1024
 # 設定に関係なく常に無視するもの：SW NAS RECEPTION（受付アプリ）がNASへ書き込む途中の一時ファイル
 BUILTIN_IGNORE = [".swnr_*.part"]
@@ -91,8 +108,7 @@ DEFAULT_CFG = {
     "report_while_stopped": True,
     "analyze": True,
     "coi_keywords": DEFAULT_COI,
-    "mark_recv": DEFAULT_MARK_RECV,
-    "mark_got": DEFAULT_MARK_GOT,
+    "marks": DEFAULT_MARKS,
     "max_depth": 12,
     "max_entries": 200000,
     # 会場オペレーターモード：自分の会場だけを監視し、受信が完了した演者フォルダをコピー先へコピーする
@@ -296,9 +312,37 @@ def in_use_by_office(path):
     return False
 
 
+_MK_SEP = re.compile(r"[\s_\-\u2010-\u2015\u2212\u30fb.,\u3001\u3002()\[\]\u3010\u3011\u300c-\u300f\u3014\u3015]+")
+
+
+def mark_norm(s):
+    """目印の照合用：全角半角・大文字小文字をそろえ、空白・_・-・括弧などを取り除く。"""
+    return _MK_SEP.sub("", unicodedata.normalize("NFKC", str(s)).lower())
+
+
 def compile_marks(cfg):
-    norm = lambda ws: [unicodedata.normalize("NFKC", str(w)).strip().lower() for w in ws if str(w).strip()]
-    return norm(cfg.get("mark_got", DEFAULT_MARK_GOT)), norm(cfg.get("mark_recv", DEFAULT_MARK_RECV))
+    out = []
+    for i, m in enumerate(cfg.get("marks") or []):
+        k = mark_norm(m.get("w", ""))
+        if k:
+            out.append((k, m.get("role") if m.get("role") in MARK_ROLES else "info", str(m.get("w")).strip(), i))
+    out.sort(key=lambda x: -len(x[0]))   # 長いキーワードを優先（「OP卓PC 発表者ツール」と「発表者ツール」など）
+    return out
+
+
+def migrate_marks(raw):
+    """v1.10 の「受付済」「会場取得済」の設定（mark_recv / mark_got）を、目印の一覧へ移す。"""
+    out = [dict(m) for m in DEFAULT_MARKS]
+    have = {mark_norm(m["w"]) for m in out}
+    for key, role in (("mark_recv", "recv"), ("mark_got", "got")):
+        v = raw.get(key)
+        if isinstance(v, list):
+            for w in v:
+                k = mark_norm(w)
+                if k and k not in have:
+                    have.add(k)
+                    out.append({"w": str(w).strip()[:40], "role": role})
+    return out
 
 
 def coi_signature(words):
@@ -992,8 +1036,22 @@ def validate_cfg(raw, data_dir, old=None):
 
     cfg["ignore"] = strlist("ignore", 300)
     cfg["coi_keywords"] = strlist("coi_keywords", 60)
-    cfg["mark_recv"] = strlist("mark_recv", 30)
-    cfg["mark_got"] = strlist("mark_got", 30)
+    mv = raw.get("marks")
+    if mv is None:
+        mv = migrate_marks(raw) if ("mark_recv" in raw or "mark_got" in raw) else old.get("marks", DEFAULT_MARKS)
+    marks, seen_mk = [], set()
+    for x in (mv if isinstance(mv, list) else DEFAULT_MARKS):
+        if isinstance(x, str):
+            x = {"w": x}
+        if not isinstance(x, dict):
+            continue
+        w = str(x.get("w", "")).strip()[:40]
+        k = mark_norm(w)
+        if not k or k in seen_mk:
+            continue
+        seen_mk.add(k)
+        marks.append({"w": w, "role": x.get("role") if x.get("role") in MARK_ROLES else "info"})
+    cfg["marks"] = marks[:100]
     nt = raw.get("notify", old.get("notify", {}))
     nt = nt if isinstance(nt, dict) else {}
     cfg["notify"] = {k: bool(nt.get(k, True)) for k in NOTIFY_KINDS}
@@ -1253,6 +1311,7 @@ class Watcher(threading.Thread):
         self.notified_pending = set()
         self.recent = {}           # rel -> (op, ts)
         self.groups = []
+        self.mk_gen = mgr.mk_gen
         self.online = None
         self.error = ""
         self.warns = []
@@ -1388,11 +1447,13 @@ class Watcher(threading.Thread):
         changes = self._process(cur, now, settle)
         events = self._make_events(changes, now, flag) if changes else []
         incoming = self._incoming() if not flag else []
+        mk_gen = self.mgr.mk_gen
         with self.lock:
             self.current = cur
             self.warns = warns[:100]
             self.groups = self._summarize(cur)
-        if events or before != self._pend_sig():
+        if events or before != self._pend_sig() or mk_gen != self.mk_gen:
+            self.mk_gen = mk_gen
             self.ver += 1
         if events or first or before != self._pend_sig():
             self.mgr.copier.kick()
@@ -1685,12 +1746,16 @@ class Watcher(threading.Thread):
         items += [{"op": "dir_del", "path": s} for s in sorted(ddel)]
 
         mo = self.mgr.marker_of
-        mk_add = [mo(prefix + sub, sig) for sub, sig in adds]
+        mk_add = [m for m in (mo(prefix + sub, sig) for sub, sig in adds) if m]
         parts = []
-        if "got" in mk_add:
-            parts.append("会場取得済")
-        elif "recv" in mk_add:
-            parts.append("受付済（目印）")
+        if mk_add:
+            rs = {m[0] for m in mk_add}
+            for r, txt in (("drop", "演題取り下げ"), ("done", "発表終了"), ("got", "会場取得済"), ("recv", "受付済（目印）"), ("direct", "会場直")):
+                if r in rs:
+                    parts.append(txt)
+            lab = sorted({(m[2], m[1]) for m in mk_add if m[0] in ("warn", "info")})
+            if lab:
+                parts.append("目印 " + "・".join(x[1] for x in lab[:4]) + (" ほか%d" % (len(lab) - 4) if len(lab) > 4 else ""))
         if new_folder:
             parts.append("新しい演者フォルダ")
         if del_folder:
@@ -1760,8 +1825,11 @@ class Watcher(threading.Thread):
                 s["dirs"] += 1
             else:
                 mk = self.mgr.marker_of(k, sig)
-                if mk:   # 目印（受付済・取得済）はデータとして数えない
-                    s["mk_" + mk] = 1
+                if mk:   # 目印（受付済・会場取得・動画有 など）はデータとして数えない
+                    if mk[0] in MARK_STATUS_ROLES:
+                        s["mk_" + mk[0]] = 1
+                    if mk[0] in MARK_CHIP_ROLES:
+                        s.setdefault("fl", {})[mk[1]] = (mk[2], mk[0])
                     continue
                 s["files"] += 1
                 s["size"] += sig[0]
@@ -1784,6 +1852,8 @@ class Watcher(threading.Thread):
             if key == "" and s["files"] == 0 and s["pending"] == 0:
                 continue
             s["mtime"] = s["mtime"] / 1e9 if s["mtime"] else 0
+            if "fl" in s:
+                s["fl"] = [[lb, r] for lb, (_i, r) in sorted(s["fl"].items(), key=lambda x: x[1][0])]
             out.append(s)
         return out
 
@@ -1812,7 +1882,7 @@ class Watcher(threading.Thread):
             if sig != DIR:
                 mk = self.mgr.marker_of(k, sig)
                 if mk:
-                    it["mk"] = mk
+                    it["mk"], it["ml"] = mk[0], mk[1]
                 it["s"] = sig[0]
                 it["m"] = sig[1] / 1e9
                 it["c"] = file_cat(rel)
@@ -2441,6 +2511,8 @@ class Manager:
         self.ignore_re = compile_ignore(list(cfg["ignore"]) + BUILTIN_IGNORE)
         self.coi = compile_coi(cfg["coi_keywords"])
         self.marks = compile_marks(cfg)
+        self._mk_cache = {}
+        self.mk_gen = 0          # 目印の設定を変えたら増やす（演者の状態を作り直して画面へ知らせる）
         self.watchers = {}
         self.cond = threading.Condition()
         self.events = deque(maxlen=EVENT_KEEP)
@@ -2526,19 +2598,21 @@ class Manager:
         self.copier.join(timeout=5)
 
     def marker_of(self, rel, sig):
-        """「受付済」「取得済」などの目印ファイルなら 'recv' / 'got' を返す（ファイル名だけで判断）。"""
+        """目印ファイル（00_受付済.jpg など）なら (role, 表示名, 設定での順番) を返す。ファイル名だけで判断し、中身は読まない。"""
         if sig is None or sig == DIR or sig[0] > MARK_MAX:
             return None
         name = base(rel)
         if ext_of(name) not in MARK_EXTS:
             return None
-        stem = unicodedata.normalize("NFKC", name.rsplit(".", 1)[0] if "." in name else name).lower()
-        got, recv = self.marks
-        if any(w in stem for w in got):
-            return "got"
-        if any(w in stem for w in recv):
-            return "recv"
-        return None
+        cache = self._mk_cache
+        r = cache.get(name, False)
+        if r is False:
+            stem = mark_norm(name.rsplit(".", 1)[0] if "." in name else name)
+            r = next(((role, label, i) for k, role, label, i in self.marks if k in stem), None)
+            if len(cache) > 50000:
+                cache.clear()
+            cache[name] = r
+        return r
 
     def poke(self):
         with self.cond:
@@ -2658,7 +2732,10 @@ class Manager:
         self.cfg = new
         self.ignore_re = compile_ignore(list(new["ignore"]) + BUILTIN_IGNORE)
         self.coi = compile_coi(new["coi_keywords"])
-        self.marks = compile_marks(new)
+        if old.get("marks") != new.get("marks"):
+            self.marks = compile_marks(new)
+            self._mk_cache = {}
+            self.mk_gen += 1
         self.store.roots = [r["path"] for r in new["roots"]]
         self.store.write_json("config.json", new)
         want = {r["id"]: r for r in new["roots"] if r["enabled"]}
@@ -3006,7 +3083,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(self.M.folder_payload(rid, group))
             elif u.path == "/api/config":
                 self.send_json({"config": self.M.cfg, "defaults": {"ignore": DEFAULT_IGNORE, "coi": DEFAULT_COI,
-                                                                   "mark_recv": DEFAULT_MARK_RECV, "mark_got": DEFAULT_MARK_GOT},
+                                                                   "marks": DEFAULT_MARKS},
                                 "data_dir": self.M.store.dir if self.is_local() else ""})
             elif u.path == "/api/venues":
                 self.send_json({"venues": self.M.list_venues((q.get("root") or [""])[0])})
@@ -3629,6 +3706,34 @@ main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
 .grp.st-got{background:rgba(56,189,248,.07);box-shadow:inset 3px 0 0 var(--sky)}
 .grp.st-got .sti{color:var(--sky)}
 .rtag.got{background:rgba(56,189,248,.12);color:var(--sky);border:1px solid rgba(56,189,248,.3)}
+/* 現場の目印（発表終了・取り下げ・会場直・動画有 など） */
+.rtag.done{background:var(--muted);color:#d4d4d8;border:1px solid var(--border)}
+.rtag.drop{background:rgba(239,68,68,.1);color:#fca5a5;border:1px solid rgba(239,68,68,.3)}
+.rtag.direct{background:rgba(139,92,246,.12);color:var(--violet);border:1px solid rgba(139,92,246,.35)}
+.fl{display:inline-flex;align-items:center;height:19px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;white-space:nowrap;border:1px solid var(--border);color:#d4d4d8;background:rgba(255,255,255,.04);line-height:1}
+.fl-warn{color:var(--amber);border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.13)}
+.fl-direct{color:var(--violet);border-color:rgba(139,92,246,.5);background:rgba(139,92,246,.13)}
+.fl-more{color:var(--muted-fg)}
+.facts .fl{height:22px;font-size:11.5px;padding:0 8px}
+.t-drop{background:rgba(239,68,68,.1);color:#fca5a5;border-color:rgba(239,68,68,.3)}
+.t-done{background:var(--muted);color:#d4d4d8;border-color:var(--border)}
+.t-direct{background:rgba(139,92,246,.12);color:var(--violet);border-color:rgba(139,92,246,.35)}
+.bp.st-done,.grp.st-done{opacity:.55}
+.bp.st-done .sti,.grp.st-done .sti{color:var(--muted-fg)}
+.bp.st-drop,.grp.st-drop{opacity:.6}
+.bp.st-drop .nm,.grp.st-drop .nm{text-decoration:line-through;color:var(--muted-fg)}
+.bp.st-drop .sti,.grp.st-drop .sti{color:var(--red)}
+.bp.st-direct,.grp.st-direct{background:rgba(139,92,246,.08);box-shadow:inset 3px 0 0 var(--violet)}
+.bp.st-direct .sti,.grp.st-direct .sti{color:var(--violet)}
+.bp.st-done:hover,.bp.st-drop:hover,.grp.st-done:hover,.grp.st-drop:hover{opacity:.9}
+.mkt{width:100%;border-collapse:collapse;margin-top:4px}
+.mkt td{padding:2px 4px 2px 0}
+.mkt input[type=text],.mkt select{height:30px;font-size:13px}
+tr.mkrow td{color:var(--muted-fg)}
+.mkt input{width:100%}
+.mkt select{width:100%}
+.mkt td:last-child{width:34px}
+.mkt .x{width:30px;height:30px;padding:0}
 .t-got{background:rgba(56,189,248,.12);color:var(--sky);border-color:rgba(56,189,248,.3)}
 .gotc{font:500 11.5px var(--mono);color:var(--sky);white-space:nowrap}
 .gotc.done{font-weight:700}
@@ -3739,7 +3844,7 @@ main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
         <label><input type="checkbox" id="bOnlyN">未受付のみ</label>
       </div>
     </div>
-    <div class="bleg"><span><i class="sw" style="background:var(--emerald)"></i>受付済み</span><span><i class="sw" style="background:var(--sky)"></i>会場取得済</span><span><i class="sw" style="background:var(--amber)"></i>コピー中</span><span><i class="sw" style="border:1.5px dashed #52525b"></i>未受付</span><span><i class="sw" style="outline:1px solid var(--sky);outline-offset:-1px"></i>未確認（新着）</span><span style="color:var(--dim)">演者をクリックすると中身と解析結果を表示</span></div>
+    <div class="bleg"><span><i class="sw" style="background:var(--emerald)"></i>受付済み</span><span><i class="sw" style="background:var(--sky)"></i>会場取得済</span><span><i class="sw" style="background:var(--amber)"></i>コピー中</span><span><i class="sw" style="border:1.5px dashed #52525b"></i>未受付</span><span><i class="sw" style="background:var(--violet)"></i>会場直</span><span style="opacity:.6"><i class="sw" style="background:#71717a"></i>発表終了</span><span style="opacity:.7;text-decoration:line-through">取り下げ</span><span><i class="sw" style="outline:1px solid var(--sky);outline-offset:-1px"></i>未確認（新着）</span><span style="color:var(--dim)">演者をクリックすると中身と解析結果を表示</span></div>
     <div class="bnav" id="bnav"><button class="ghost nv" id="bPrev" title="前の会場へ（←キー）"></button><div class="chips" id="bchips"></div><button class="ghost nv" id="bNext" title="次の会場へ（→キー）"></button></div>
     <div class="board" id="board"></div>
   </section>
@@ -3781,12 +3886,17 @@ const IC={
  expand:SV('<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>'),
  collapse:SV('<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>'),
  chk:SV('<path d="M20 6 9 17l-5-5"/>'),
+ flag:SV('<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>'),
+ ban:SV('<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>'),
+ direct:SV('<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>'),
  hd:SV('<path d="M22 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01"/><path d="M10 16h.01"/>'),
 };
 const KIND={incoming:["受信中","mod"],folder_new:["新規フォルダ","acc"],add:["追加","add"],mod:["更新","mod"],rename:["名前変更","ren"],del:["削除","del"],folder_rename:["フォルダ名変更","ren"],folder_del:["フォルダ削除","del"],offline:["接続断","del"],online:["復帰","add"],copied:["コピー完了","add"],copy_err:["コピー要確認","del"]};
 const OPS={add:["＋","add","追加"],mod:["✎","mod","更新"],rename:["↔","ren","名前変更"],del:["−","del","削除"],dir_add:["＋","add","フォルダ追加"],dir_del:["−","del","フォルダ削除"],folder_rename:["↔","ren","フォルダ名変更"],copy:["⇢","add","コピー"]};
 /* コピー状況（会場オペレーターモード） */
 const CPL={ok:["コピー済み","ok"],todo:["コピー待ち","dim"],copying:["コピー中","run"],wait:["受信完了待ち","dim"],srcbusy:["NAS側で使用中","warn"],busy:["差し替え待ち","warn"],edited:["コピー先で変更あり","warn"],err:["エラー","bad"],off:["接続できません","bad"]};
+const MKC={recv:"t-ok",got:"t-got",done:"t-done",drop:"t-drop",direct:"t-direct",warn:"t-warn",info:"t-dim"};
+const MKR={recv:"受付済",got:"会場取得済",done:"発表終了",drop:"演題取り下げ",direct:"会場直",warn:"注意",info:"表示だけ"};
 const OPON=()=>!!(S&&S.op&&S.op.enabled);
 const opDests=()=>OPON()?S.op.dests.filter(d=>d.enabled):[];
 function cpPill(label,st,msg){const x=CPL[st]||[st,"dim"];const ic=st==="ok"?IC.chk:st==="copying"?IC.spin:"";
@@ -3834,7 +3944,7 @@ function inVenue(root,group){const V=effVenue();if(!V)return true;const i=V.inde
 
 async function loadState(){
   S=await api("/api/state");updateRates();
-  ANYGOT=S.roots.some(r=>(r.groups||[]).some(g=>g.mk_got));
+  ANYGOT=S.roots.some(r=>(r.groups||[]).some(g=>g.mk_got||g.mk_done));
   if(!ready){ready=true;lastId=S.last_event_id;boot=S.boot;connect();}
   renderAll();
   if(SEL&&!rootById(SEL.root)){SEL=null;ls.set("sel",null);renderFolderEmpty();return}
@@ -4105,7 +4215,7 @@ function sesStatus(list){const now=new Date();const nm=now.getHours()*60+now.get
       pct:end!=null&&end>x.t.s?Math.min(100,Math.max(0,(nm-x.t.s)*100/(end-x.t.s))):null})});
   return out}
 function timeChip(t){return t?`<span class="stime">${fmtT(t.s)}${t.e!=null?"–"+fmtT(t.e):"〜"}</span>`:""}
-function statusHtml(st,list){if(!st)return"";const un=list.filter(g=>!isRecv(g)).length;
+function statusHtml(st,list){if(!st)return"";const un=list.filter(isTodo).length;
   const soon=st.st==="live"||((st.st==="next"||st.st==="later")&&st.until<=30);
   const warn=un&&soon?`<span class="sw-un" title="開始前・進行中なのに未受付の演者がいます">未受付 ${un}</span>`:"";
   if(st.st==="done")return `<span class="sst done">終了</span>${warn}`;
@@ -4130,13 +4240,24 @@ function foldKeysOf(root,group){const r=rootById(root);if(!r||!group||r.depth<2)
 function unfold(root,group){let ch=false;foldKeysOf(root,group).forEach(k=>{if(FOLD[k]){delete FOLD[k];ch=true}});if(ch)ls.set("fold",FOLD);return ch}
 /* 受付状況：ファイルが1つ以上確定していれば「受付済み」 */
 /* 「取得済」の目印＝会場側が受け取った。「受付済」の目印 か データがあれば受付済み */
-const recvState=g=>g.pending?"copying":g.mk_got?"got":((g.files>0||g.mk_recv)?"recv":"none");
-const isRecv=g=>{const s=recvState(g);return s==="recv"||s==="got"};
-const isGot=g=>recvState(g)==="got";
+/* 目印：「演題取り下げ」→取り下げ（受付の数に入れない）、「発表終了」→発表終了、「会場直」→データがなくても未受付にしない */
+const recvState=g=>g.pending?"copying":g.mk_drop?"drop":g.mk_done?"done":g.mk_got?"got":((g.files>0||g.mk_recv)?"recv":g.mk_direct?"direct":"none");
+const RECV_OK=new Set(["recv","got","done","direct"]);
+const isRecv=g=>RECV_OK.has(recvState(g));
+const isGot=g=>{const s=recvState(g);return s==="got"||s==="done"};
+const actv=list=>list.filter(g=>!g.mk_drop);
+const isTodo=g=>!g.mk_drop&&!isRecv(g);
+const STL={got:"会場取得済",recv:"受付済み",copying:"コピー中",none:"未受付",done:"発表終了",drop:"演題取り下げ",direct:"会場直"};
+const stIcon=st=>st==="got"?IC.check2:st==="recv"?IC.ok:st==="copying"?IC.spin:st==="done"?IC.flag:st==="drop"?IC.ban:st==="direct"?IC.direct:IC.todo;
+/* 目印のチップ（注意 → 会場直 → 表示だけ の順。max を超えた分は「+n」） */
+const FLO={warn:0,direct:1,info:2};
+function flagChips(g,max){const f=(g.fl||[]).map((x,i)=>[x[0],x[1],i]).sort((a,b)=>(FLO[a[1]]??3)-(FLO[b[1]]??3)||a[2]-b[2]);if(!f.length)return"";
+  const sh=max&&f.length>max?f.slice(0,max-1):f;
+  return sh.map(([l,r])=>`<span class="fl fl-${esc(r)}" title="目印：${esc(nfc(l))}">${esc(nfc(l))}</span>`).join("")+(sh.length<f.length?`<span class="fl fl-more" title="${esc(f.slice(sh.length).map(x=>nfc(x[0])).join("、"))}">+${f.length-sh.length}</span>`:"")}
 let ANYGOT=false;
-function gotHtml(list){if(!ANYGOT)return"";const t=list.length,n=list.filter(isGot).length;
+function gotHtml(list){if(!ANYGOT)return"";list=actv(list);const t=list.length,n=list.filter(isGot).length;
   return `<span class="gotc ${t&&n===t?"done":""}" title="会場取得済（「取得済」の目印あり）">取得 ${n}/${t}</span>`}
-function progHtml(list,suffix){const t=list.length,n=list.filter(isRecv).length;const pct=t?Math.round(n*100/t):0;
+function progHtml(list,suffix){list=actv(list);const t=list.length,n=list.filter(isRecv).length;const pct=t?Math.round(n*100/t):0;
   return `<span class="prog ${t&&n===t?"done":n?"":"zero"}" title="受付 ${n}/${t}"><span class="bar"><i style="width:${pct}%"></i></span>${n}/${t}${suffix||""}</span>`}
 /* リスト用：会場ごと・日ごとの進行状況 */
 function listTimeline(r,v,sessions,SI){const days=allDays(),ed=effDay(days),td=todayDay(days,ed);const out=new Map();
@@ -4157,7 +4278,7 @@ function renderGroups(){
     let gs=(r.groups||[]).filter(g=>inVenue(r.id,g.key)&&(g.key===""||dayOK(r,g.key,ED)));
     if(q)gs=gs.filter(g=>nfc(g.key).toLowerCase().includes(q));
     if(onlyU)gs=gs.filter(g=>g.unread);
-    if(onlyN)gs=gs.filter(g=>g.key!==""&&!isRecv(g));
+    if(onlyN)gs=gs.filter(g=>g.key!==""&&isTodo(g));
     gs.sort((a,b)=>{
       if(a.key==="")return 1;if(b.key==="")return -1;
       if(sort==="recent")return (b.last_ts||0)-(a.last_ts||0)||cmpPath(a.key,b.key);
@@ -4212,9 +4333,11 @@ function rowHtml(r,g,hier){
   const cats=Object.entries(g.cats||{}).filter(([c])=>!(g.ana&&c==="PPT")).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([c,n])=>`<span class="chip c-${esc(c)}">${esc(c)}${n>1?" "+n:""}</span>`).join("");
   const pre=!hier&&where?`<span class="pre">${v?`<span class="vdot" style="--vc:${vColor(r.id,v)}"></span>`:""}${esc(whereText(where))} › </span>`:"";
   const st=g.key===""?"":recvState(g);
-  const sti=st==="got"?`<span class="sti" title="会場取得済">${IC.check2}</span>`:st==="recv"?`<span class="sti" title="受付済み">${IC.ok}</span>`:st==="copying"?`<span class="sti" title="コピー中">${IC.spin}</span>`:st==="none"?`<span class="sti" title="未受付">${IC.todo}</span>`:"";
+  const sti=st?`<span class="sti" title="${STL[st]||""}">${stIcon(st)}</span>`:"";
   const cps=OPON()&&g.cp?opDests().map(d=>g.cp[d.id]?cpPill(d.label,g.cp[d.id]):"").join(""):"";
-  const meta=st==="none"?`<span class="tag t-dim">未受付</span>${progHtmlRow(r,g)}`:`${cps}${replTag(g)}<span>${g.files}ファイル</span><span>${fmtSize(g.size)}</span>${anaChips(g.ana)}${cats}${g.last_kind?kindPill(g.last_kind):""}${progHtmlRow(r,g)}`;
+  const stTag=st==="drop"?`<span class="tag t-drop">演題取り下げ</span>`:st==="done"?`<span class="tag t-done">発表終了</span>`:st==="none"?`<span class="tag t-dim">未受付</span>`:"";
+  const fc=flagChips(g);
+  const meta=(!g.files&&!g.pending)?`${stTag}${(st==="recv"||st==="got"||st==="done")&&g.key!==""?`<span class="tag t-dim">データなし</span>`:""}${fc}${g.last_kind&&st!=="none"?kindPill(g.last_kind):""}${progHtmlRow(r,g)}`:`${stTag}${cps}${replTag(g)}${fc}<span>${g.files}ファイル</span><span>${fmtSize(g.size)}</span>${anaChips(g.ana)}${cats}${g.last_kind?kindPill(g.last_kind):""}${progHtmlRow(r,g)}`;
   return `<div class="grp ${hier?"hier":""} ${st?"st-"+st:""} ${g.unread?"unread":""} ${isSel?"sel":""} ${flashKeys.has(r.id+"|"+g.key)?"flash":""}" data-r="${esc(r.id)}" data-g="${esc(g.key)}">
     <div class="n">${sti}<span class="nm">${pre}${esc(nfc(name))}</span>${g.unread?`<span class="badge">${g.unread}</span>`:""}<span class="ago">${g.last_ts?ago(g.last_ts):""}</span></div>
     <div class="meta">${meta}</div></div>`;
@@ -4289,12 +4412,13 @@ $("#bq").addEventListener("input",renderBoard);
 function bpRow(r,g){
   const name=g.key.split("/").pop();const st=recvState(g);
   const isSel=drawerOpen()&&SEL&&SEL.root===r.id&&SEL.group===g.key;
-  const sti=st==="got"?IC.check2:st==="recv"?IC.ok:st==="copying"?IC.spin:IC.todo;
+  const sti=stIcon(st);
   const cps=OPON()&&g.cp?opDests().map(d=>g.cp[d.id]?cpPill(d.label,g.cp[d.id]):"").join(""):"";
   const cats=Object.entries(g.cats||{}).filter(([c])=>!(g.ana&&c==="PPT")).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([c,n])=>`<span class="chip c-${esc(c)}">${esc(c)}${n>1?" "+n:""}</span>`).join("");
-  const tags=st==="none"?`<span class="tag t-dim">未受付</span>`:replTag(g)+cps+anaChips(g.ana)+cats;
-  const stl=st==="got"?"会場取得済":st==="recv"?"受付済み":st==="copying"?"コピー中":"未受付";
-  const tip=nfc(name)+"\n"+stl+(g.files?` · ${g.files}ファイル · ${fmtSize(g.size)}`:"")+(g.recv_ts?` · 受付 ${dtm(g.recv_ts)}`:"")+(g.repl?` · 差し替え ${g.repl}回`:"")+(g.last_ts?` · 最終変更 ${ago(g.last_ts)}`:"")+(g.unread?` · 未確認 ${g.unread}`:"")+(S.ui.os_open&&S.local?"\nダブルクリックでフォルダを開く":"");
+  const fc=flagChips(g,3);
+  const tags=st==="none"?`<span class="tag t-dim">未受付</span>`+fc:st==="drop"?`<span class="tag t-drop">取り下げ</span>`+fc:st==="done"?`<span class="tag t-done">発表終了</span>`+replTag(g)+fc:(!g.files&&!g.pending&&st!=="direct"?`<span class="tag t-dim">データなし</span>`:"")+replTag(g)+cps+fc+anaChips(g.ana)+cats;
+  const stl=STL[st]||"";
+  const tip=nfc(name)+"\n"+stl+(g.files?` · ${g.files}ファイル · ${fmtSize(g.size)}`:"")+(g.recv_ts?` · 受付 ${dtm(g.recv_ts)}`:"")+(g.repl?` · 差し替え ${g.repl}回`:"")+(g.last_ts?` · 最終変更 ${ago(g.last_ts)}`:"")+(g.unread?` · 未確認 ${g.unread}`:"")+(g.fl&&g.fl.length?"\n目印: "+g.fl.map(x=>nfc(x[0])).join("、"):"")+(S.ui.os_open&&S.local?"\nダブルクリックでフォルダを開く":"");
   return `<div class="bp st-${st} ${g.unread?"unread":""} ${isSel?"sel":""} ${flashKeys.has(r.id+"|"+g.key)?"flash":""}" data-r="${esc(r.id)}" data-g="${esc(g.key)}" tabindex="0" role="button" title="${esc(tip)}"><span class="sti">${sti}</span><span class="nm">${esc(nfc(name))}</span>${g.unread?`<span class="badge">${g.unread}</span>`:""}${tags?`<span class="tg">${tags}</span>`:""}${progHtmlRow(r,g)}</div>`;
 }
 function renderBoard(){
@@ -4320,13 +4444,13 @@ function renderBoard(){
       let gs=full;
       if(q)gs=gs.filter(g=>nfc(g.key).toLowerCase().includes(q));
       if(onlyU)gs=gs.filter(g=>g.unread);
-      if(onlyN)gs=gs.filter(g=>!isRecv(g));
+      if(onlyN)gs=gs.filter(isTodo);
       if(q&&!gs.length)continue;
       const vc=y.vl>=0?vColor(r.id,v):VPAL[ri%VPAL.length];
       const vname=y.vl>=0?v:r.label;
       const sub=y.vl>=0&&S.roots.length>1?r.label:"";
       const vun=full.filter(g=>g.unread).length,vcp=full.filter(g=>g.pending).length;
-      {const n=full.filter(isRecv).length;nav.push([r.id+"|"+v,vname,vc,n,full.length,vun])}
+      {const a=actv(full);nav.push([r.id+"|"+v,vname,vc,a.filter(isRecv).length,a.length,vun])}
       h+=`<section class="col" data-col="${esc(r.id+"|"+v)}" style="--vc:${vc}"><div class="vh"><div class="n">${IC.building}<span class="vn" title="${esc(nfc(vname))}">${esc(nfc(vname))}</span>${vun?`<span class="badge" title="未確認の演者">${vun}</span>`:""}${COLSES_MARK}</div>${sub?`<div class="rl">${esc(nfc(sub))}</div>`:""}<div class="s"><span>受付</span>${progHtml(full)}${gotHtml(full)}${vcp?`<span class="cpg">${IC.spin}コピー中 ${vcp}</span>`:""}</div>${NOW_MARK}</div><div class="list">`;
       if(!gs.length){h=h.replace(COLSES_MARK,"").replace(NOW_MARK,"");h+=`<div class="empty">${onlyN&&!onlyU?"全員受付済み":onlyU&&!onlyN?"未確認はありません":"該当なし"}</div></div></section>`;continue}
       // セッションごとにまとめる（会場の中で 日 → セッション名 の順。日が2つ以上なら日の区切りを入れる）
@@ -4383,7 +4507,7 @@ function renderBoard(){
     if(row)revealInBoard(row);
     else{const i=k.indexOf("|"),fk=foldKeysOf(k.slice(0,i),k.slice(i+1)).slice(-1)[0];   // 閉じたセッションなら、その見出しまで
       const sh=fk&&[...el.querySelectorAll(".ses[data-fold]")].find(x=>x.dataset.fold===fk);if(sh)revealInBoard(sh)}}
-  const scp=scope.filter(g=>g.key!=="");const n=scp.filter(isRecv).length,t=scp.length,pct=t?Math.round(n*100/t):0;
+  const scp=actv(scope.filter(g=>g.key!==""));const n=scp.filter(isRecv).length,t=scp.length,pct=t?Math.round(n*100/t):0;
   $("#bTot").innerHTML=`全体 <b>受付 ${n}/${t}</b><span class="prog ${t&&n===t?"done":n?"":"zero"}"><span class="bar"><i style="width:${pct}%"></i></span>${pct}%</span>`;
   const cpn=scp.filter(g=>g.pending).length,unn=scp.filter(g=>g.unread).length;
   $("#bCp").innerHTML=`コピー中 <b>${cpn}</b>`;$("#bUn").innerHTML=`未確認 <b>${unn}</b>`;
@@ -4519,7 +4643,7 @@ function anaCard(it){
 function renderFolder(){
   const segs=F.group.split("/");const r=rootById(F.root);
   const name=F.group===""?((r&&r.depth>1)?"（演者フォルダより上のファイル）":"（直下のファイル）"):segs[segs.length-1];
-  const files=F.items.filter(i=>!i.d);const size=files.reduce((a,i)=>a+(i.s||0),0);const latest=files.reduce((a,i)=>Math.max(a,i.m||0),0);
+  const files=F.items.filter(i=>!i.d&&!i.mk);const size=files.reduce((a,i)=>a+(i.s||0),0);const latest=files.reduce((a,i)=>Math.max(a,i.m||0),0);
   const pend=F.items.filter(i=>i.st==="pending").length;
   const cats={};files.forEach(i=>cats[i.c]=(cats[i.c]||0)+1);
   const osName=S.os==="win"?"Explorer":S.os==="mac"?"Finder":"ファイラー";
@@ -4528,7 +4652,7 @@ function renderFolder(){
     <h1>${esc(nfc(name))}</h1>
     <div class="facts">${F.group===""?"":(()=>{const rr=rootById(F.root);const gg=rr&&(rr.groups||[]).find(x=>x.key===F.group);
       const st=pend?"copying":gg?recvState(gg):(files.length?"recv":"none");
-      return st==="copying"?`<span class="rtag copying">${IC.spin}コピー中</span>`:st==="got"?`<span class="rtag got">${IC.check2}会場取得済</span>`:st==="recv"?`<span class="rtag recv">${IC.ok}受付済み</span>`:`<span class="rtag none">${IC.todo}未受付</span>`})()}<span>${files.length} ファイル</span><span>${fmtSize(size)}</span>${latest?`<span>最終更新 ${dtm(latest)}</span>`:""}${F.track&&F.track.recv?`<span>受付 ${dtm(F.track.recv)}</span>`:""}${F.track&&F.track.n?`<span class="tag t-repl">差し替え ${F.track.n}回（最終 ${dtm(F.track.last)}）</span>`:""}${pend?`<span class="copying">● コピー中/確定待ち ${pend}</span>`:""}${(()=>{const rr=rootById(F.root);const gg=rr&&(rr.groups||[]).find(x=>x.key===F.group);return rr&&gg?progHtmlRow(rr,gg):""})()}</div>
+      return `<span class="rtag ${st}">${stIcon(st)}${STL[st]||""}</span>${gg?flagChips(gg):""}`})()}<span>${files.length} ファイル</span><span>${fmtSize(size)}</span>${latest?`<span>最終更新 ${dtm(latest)}</span>`:""}${F.track&&F.track.recv?`<span>受付 ${dtm(F.track.recv)}</span>`:""}${F.track&&F.track.n?`<span class="tag t-repl">差し替え ${F.track.n}回（最終 ${dtm(F.track.last)}）</span>`:""}${pend?`<span class="copying">● コピー中/確定待ち ${pend}</span>`:""}${(()=>{const rr=rootById(F.root);const gg=rr&&(rr.groups||[]).find(x=>x.key===F.group);return rr&&gg?progHtmlRow(rr,gg):""})()}</div>
     <div class="acts">${S.local&&S.ui.os_open?`<button id="bOpen" title="NAS上のフォルダを${osName}で開く">${IC.ext}${osName}で開く</button>`:""}<button id="bCopy">${IC.copy}パスをコピー</button>
       ${Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<span class="chip c-${esc(c)}">${esc(c)} ${n}</span>`).join("")}</div>
     <div class="pathline">${esc(nfc(F.path))}</div></div>`;
@@ -4551,15 +4675,16 @@ function renderFolder(){
       return `<div class="evc ${e.u?"u":""}"><div class="top">${kindPill(e.kind)}${e.repl?`<span class="kind k-repl">差し替え ${e.repl}回目</span>`:""}<span class="t">${dtm(e.ts)} (${ago(e.ts)})</span>${e.while_stopped?`<span class="ws">停止中の変更</span>`:""}<span style="font-size:12px">${esc(e.summary)}</span></div>${items||more?`<ul>${items}${more}</ul>`:""}</div>`}).join("")+`</div></div>`;
   }
   const rows=F.items.map(i=>Object.assign({k:sortKey(i.p,i.d)},i)).sort((a,b)=>cmpKeys(a.k,b.k));
-  h+=`<div class="sec"><h3>ファイル<small>${files.length}件</small></h3>`;
+  const nmk=F.items.filter(i=>i.mk).length;
+  h+=`<div class="sec"><h3>ファイル<small>${files.length}件${nmk?`（ほかに目印 ${nmk}）`:""}</small></h3>`;
   if(!rows.length){h+=`<div class="tcard"><div class="empty" style="padding:28px">空のフォルダです</div></div></div>`}
   else{
     h+=`<div class="tcard"><table class="files"><thead><tr><th>名前</th><th>種類</th><th style="text-align:right">サイズ</th><th>更新日時</th><th>状態</th>${fd.length?"<th>コピー</th>":""}</tr></thead><tbody>`;
     const now=Date.now()/1000;
     h+=rows.map(i=>{const dep=i.p.split("/").length-1;const nm=i.p.split("/").pop();
       const s=i.st?ST[i.st]:null;const fresh=i.ct&&now-i.ct<1800;
-      const cls=(i.d?"dir ":"")+(i.st==="pending"?"pend":(s&&fresh?"hl-"+i.st:""));
-      return `<tr class="${cls}"><td class="nm" style="padding-left:${8+dep*16}px">${i.d?"▸ ":""}${esc(nfc(nm))}${i.mk?` <span class="tag ${i.mk==="got"?"t-got":"t-ok"}" title="ファイル名から判断した目印（データとしては数えません）">目印：${i.mk==="got"?"会場取得済":"受付済"}</span>`:""}</td><td>${i.d?"":`<span class="chip c-${esc(i.c)}">${esc(i.c)}</span>`}</td><td class="num">${i.d?"":fmtSize(i.s)}</td><td class="tm">${i.m?dtm(i.m):""}</td><td>${s?`<span class="stl o-${s[1]} ${i.st==="pending"?"copying":""}">${s[0]}${i.ct?" "+hms(i.ct):""}</span>`:""}</td>${fd.length?`<td style="white-space:nowrap">${i.d?"":fd.map(d=>i.cp&&i.cp[d.id]?cpPill(d.label,i.cp[d.id][0],i.cp[d.id][1]):"").join(" ")}</td>`:""}</tr>`}).join("");
+      const cls=(i.d?"dir ":"")+(i.mk?"mkrow ":"")+(i.st==="pending"?"pend":(s&&fresh?"hl-"+i.st:""));
+      return `<tr class="${cls}"><td class="nm" style="padding-left:${8+dep*16}px">${i.d?"▸ ":""}${esc(nfc(nm))}${i.mk?` <span class="tag ${MKC[i.mk]||"t-dim"}" title="ファイル名から判断した目印（${MKR[i.mk]||""}）。データとしては数えません">目印：${esc(nfc(i.ml||""))}</span>`:""}</td><td>${i.d?"":i.mk?`<span class="chip">目印</span>`:`<span class="chip c-${esc(i.c)}">${esc(i.c)}</span>`}</td><td class="num">${i.d?"":fmtSize(i.s)}</td><td class="tm">${i.m?dtm(i.m):""}</td><td>${s?`<span class="stl o-${s[1]} ${i.st==="pending"?"copying":""}">${s[0]}${i.ct?" "+hms(i.ct):""}</span>`:""}</td>${fd.length?`<td style="white-space:nowrap">${i.d?"":fd.map(d=>i.cp&&i.cp[d.id]?cpPill(d.label,i.cp[d.id][0],i.cp[d.id][1]):"").join(" ")}</td>`:""}</tr>`}).join("");
     h+=`</tbody></table></div></div><div style="height:32px"></div>`;
   }
   foldEl().innerHTML=h;
@@ -4642,11 +4767,10 @@ function renderCfg(){
   <p class="hint" style="margin-top:10px">COIとみなす文字（1行1つ・大文字小文字/全角半角は区別しない）</p>
   <textarea id="coi" spellcheck="false">${esc((c.coi_keywords||[]).join("\n"))}</textarea>
   <p class="hint"><button class="ghost" id="bCoiDef">初期値に戻す</button></p>
-  <h3>「受付済」「取得済」の目印ファイル</h3>
-  <p class="hint" style="margin:0 0 8px">演者フォルダに、ファイル名にこの文字を含む画像（またはテキスト）ファイルがあれば、データではなく目印として扱います（1行1つ・全角半角は区別しない）。<br>「取得済」系 → <b>会場取得済</b>（会場側が受け取った）、「受付済」系 → <b>受付済み</b>。</p>
-  <div class="grid2" style="align-items:start"><span>受付済</span><textarea id="mkr" spellcheck="false" style="height:70px;font:12.5px var(--mono)">${esc((c.mark_recv||[]).join("\n"))}</textarea>
-  <span>会場取得済</span><textarea id="mkg" spellcheck="false" style="height:90px;font:12.5px var(--mono)">${esc((c.mark_got||[]).join("\n"))}</textarea></div>
-  <p class="hint"><button class="ghost" id="bMkDef">初期値に戻す</button></p>
+  <h3>目印のファイル（00_受付済.jpg・17_会場取得.jpg など）</h3>
+  <p class="hint" style="margin:0 0 8px">演者フォルダの画像（またはテキスト）ファイルの名前にこの文字が入っていれば、データではなく<b>目印</b>として扱います。全角半角・大文字小文字・空白や「_」は区別せず、先頭の番号（00_ など）があってもかまいません。2つ以上に当てはまるときは長い文字のほうを使います。</p>
+  <table class="mkt" id="mkt"><tbody>${(c.marks||[]).map(mkRow).join("")}</tbody></table>
+  <p class="hint"><button class="ghost" id="bMkAdd">${IC.plus}行を追加</button> <button class="ghost" id="bMkDef">初期値に戻す</button></p>
   <h3>通知する変化</h3>
   <div class="checks">${nk.map(([k,l])=>`<label><input type="checkbox" data-n="${k}" ${c.notify[k]!==false?"checked":""}>${l}</label>`).join("")}</div>
   <h3>通知の動作</h3>
@@ -4674,7 +4798,9 @@ function renderCfg(){
     keepForm();CFG.roots.push({path:p,label:$("#nLabel").value.trim(),depth:+$("#nDepth").value,enabled:true});renderCfg()};
   $("#bIgDef").onclick=()=>{$("#ig").value=DEF.ignore.join("\n")};
   $("#bCoiDef").onclick=()=>{$("#coi").value=DEF.coi.join("\n")};
-  $("#bMkDef").onclick=()=>{$("#mkr").value=(DEF.mark_recv||[]).join("\n");$("#mkg").value=(DEF.mark_got||[]).join("\n")};
+  $("#bMkDef").onclick=()=>{$("#mkt tbody").innerHTML=(DEF.marks||[]).map(mkRow).join("")};
+  $("#bMkAdd").onclick=()=>{const tb=$("#mkt tbody");tb.insertAdjacentHTML("beforeend",mkRow({w:"",role:"info"}));const ins=tb.querySelectorAll(".mkw");ins[ins.length-1].focus()};
+  $("#mkt").onclick=e=>{const b=e.target.closest("[data-mkdel]");if(b)b.closest("tr").remove()};
   $("#osOpen").onchange=()=>{const b=document.querySelector("input[name=clk][value=both]");b.disabled=!$("#osOpen").checked;if(b.disabled&&b.checked)document.querySelector("input[name=clk][value=app]").checked=true};
   $("#bCancel").onclick=closeCfg;
   $("#bSave").onclick=saveCfg;
@@ -4690,6 +4816,8 @@ function renderCfg(){
     orr.onchange=()=>{CFG.op.root=orr.value;CFG.op.venue="";loadVenues()};
     $("#opVenue").onchange=()=>{CFG.op.venue=$("#opVenue").value};loadVenues()}
 }
+const MKROLES=[["recv","受付済にする"],["got","会場取得済にする"],["done","発表終了にする"],["drop","取り下げ（数に入れない）"],["direct","会場直（未受付にしない）"],["warn","注意（黄色のチップ）"],["info","チップで表示するだけ"]];
+function mkRow(m){return `<tr><td><input type="text" class="mkw" value="${esc(m.w||"")}" maxlength="40" spellcheck="false" placeholder="ファイル名に入る文字（例: 動画有）"></td><td style="width:240px"><select class="mkr">${MKROLES.map(([k,l])=>`<option value="${k}" ${m.role===k?"selected":""}>${l}</option>`).join("")}</select></td><td><button class="ghost x" data-mkdel title="この行を削除">${IC.x}</button></td></tr>`}
 async function loadVenues(){
   const sel=$("#opVenue");if(!sel||!CFG.op.root)return;
   const cur=CFG.op.venue;let vs=[],err="";
@@ -4706,8 +4834,8 @@ function keepForm(){
   CFG.ui={sound:$("#snd").checked,sticky:$("#stk").checked,os_open:$("#osOpen").checked,click:(document.querySelector("input[name=clk]:checked")||{}).value||"app"};
   CFG.ignore=$("#ig").value.split("\n").map(s=>s.trim()).filter(Boolean);
   CFG.coi_keywords=$("#coi").value.split("\n").map(s=>s.trim()).filter(Boolean);
-  CFG.mark_recv=$("#mkr").value.split("\n").map(s=>s.trim()).filter(Boolean);
-  CFG.mark_got=$("#mkg").value.split("\n").map(s=>s.trim()).filter(Boolean);
+  if($("#mkt"))CFG.marks=[...document.querySelectorAll("#mkt tbody tr")].map(tr=>({w:tr.querySelector(".mkw").value.trim(),role:tr.querySelector(".mkr").value})).filter(m=>m.w);
+  delete CFG.mark_recv;delete CFG.mark_got;
   CFG.op.enabled=$("#opOn").checked;
   if($("#opMbps"))CFG.op.max_mbps=Math.max(0,+$("#opMbps").value||0);
   if($("#opRoot"))CFG.op.root=$("#opRoot").value;
