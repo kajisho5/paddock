@@ -1971,6 +1971,27 @@ def _hide(path):
         pass
 
 
+def _unhide(path):
+    """隠し属性を外す。Windowsでは名前を変えても属性はそのまま残るので、隠しにした一時ファイルを
+    本来の名前に置き換える直前と直後に必ず呼ぶ（呼ばないと、置いたファイルが隠しファイルになってしまう）。"""
+    if not IS_WIN:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetFileAttributesW.argtypes = [wintypes.LPCWSTR]
+        k32.GetFileAttributesW.restype = wintypes.DWORD
+        k32.SetFileAttributesW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD]
+        k32.SetFileAttributesW.restype = wintypes.BOOL
+        p = long_path(path)
+        a = k32.GetFileAttributesW(p)
+        if a != 0xFFFFFFFF and a & 0x2:
+            k32.SetFileAttributesW(p, (a & ~0x2) or 0x80)   # 0x80 = FILE_ATTRIBUTE_NORMAL
+    except Exception:
+        pass
+
+
 class Copier(threading.Thread):
     """会場オペレーターモード：受信が完了した演者フォルダを、コピー先（メインPC・バックアップPCなど）へコピーする。
     ・NASは読むだけ。Windowsでは他の人の読み取り・上書き・削除・名前変更を妨げない開き方で読む。NASには何も書かない。
@@ -2444,7 +2465,9 @@ class Copier(threading.Thread):
             os.makedirs(long_path(os.path.dirname(backup)), exist_ok=True)
             self._plain_copy(dp, backup)
         try:
+            _unhide(t["tmp"])
             os.replace(long_path(t["tmp"]), long_path(dp))
+            _unhide(dp)
         except OSError:
             if backup:
                 try:
