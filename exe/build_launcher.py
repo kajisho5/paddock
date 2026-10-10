@@ -15,7 +15,12 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def build(out, version):
+# 別アプリ（受付アプリなど）のときに差し替える名前。既定（variant=None）は SW NAS WATCH のまま
+WATCH = {"title": "SW NAS WATCH", "exe": "SW_NAS_WATCH.exe", "pyc": "sw_nas_watch.pyc",
+         "home_env": "SW_NAS_WATCH_HOME", "internal": "SW_NAS_WATCH", "ident": "SEVENTHWELL.SWNASWATCH"}
+
+
+def build(out, version, variant=None):
     m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
     if not m:
         raise SystemExit("バージョンは x.y.z 形式で指定してください: %r" % version)
@@ -25,8 +30,18 @@ def build(out, version):
         rc = open(os.path.join(HERE, "launcher.rc"), encoding="ascii").read()
         rc = (rc.replace("@V1@", m.group(1)).replace("@V2@", m.group(2)).replace("@V3@", m.group(3))
                 .replace("@VER@", version))
+        v = variant or WATCH
+        for k in v:
+            if not re.fullmatch(r"[A-Za-z0-9 ._-]+", v[k]):
+                raise SystemExit("名前に使えない文字があります: %r" % v[k])
+        if variant:
+            rc = (rc.replace('"SW_NAS_WATCH.exe"', '"%s"' % v["exe"]).replace('"SW_NAS_WATCH"', '"%s"' % v["internal"])
+                    .replace('"SW NAS WATCH"', '"%s"' % v["title"]))
         man = open(os.path.join(td, "app.manifest"), encoding="utf-8").read()
         man, k = re.subn(r'(<assemblyIdentity\b[^>]*?\bversion=")[\d.]+(")', r"\g<1>%s.0\g<2>" % version, man, count=1)
+        if variant:
+            man = man.replace('name="SEVENTHWELL.SWNASWATCH"', 'name="%s"' % v["ident"]).replace(
+                "<description>SW NAS WATCH</description>", "<description>%s</description>" % v["title"])
         if k != 1 or not man.startswith('<?xml version="1.0"'):
             raise SystemExit("manifest のバージョン置換に失敗しました")
         import xml.dom.minidom
@@ -34,8 +49,11 @@ def build(out, version):
         open(os.path.join(td, "app.manifest"), "w", encoding="utf-8").write(man)
         open(os.path.join(td, "launcher.rc"), "w", encoding="ascii").write(rc)
         tmp_out = os.path.join(td, "SW_NAS_WATCH.exe")
+        defs = [] if not variant else [
+            '-DAPP_TITLE=L"%s"' % v["title"], '-DAPP_PYC=L"%s"' % v["pyc"],
+            '-DAPP_EXE=L"%s"' % v["exe"], '-DHOME_ENV=L"%s"' % v["home_env"]]
         cmd = [sys.executable, "-m", "ziglang", "cc", "-target", "x86_64-windows-gnu",
-               "-O2", "-s", "-Wall", "-Wextra", "-Werror",
+               "-O2", "-s", "-Wall", "-Wextra", "-Werror"] + defs + [
                "-Wl,--subsystem,console",
                "launcher.c", "launcher.rc", "-o", tmp_out, "-lkernel32", "-luser32"]
         subprocess.run(cmd, cwd=td, check=True)

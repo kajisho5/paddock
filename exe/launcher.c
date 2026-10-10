@@ -22,6 +22,20 @@
 
 #define BUF 32768
 
+/* アプリごとの名前（受付アプリなどは -D で上書きしてビルドする。既定は SW NAS WATCH） */
+#ifndef APP_TITLE
+#define APP_TITLE L"SW NAS WATCH"
+#endif
+#ifndef APP_PYC
+#define APP_PYC L"sw_nas_watch.pyc"
+#endif
+#ifndef APP_EXE
+#define APP_EXE L"SW_NAS_WATCH.exe"
+#endif
+#ifndef HOME_ENV
+#define HOME_ENV L"SW_NAS_WATCH_HOME"
+#endif
+
 static wchar_t g_dir[BUF];
 
 static void out(const wchar_t *s)
@@ -48,10 +62,10 @@ static void wait_key(void)
 
 static void fatal(const wchar_t *msg)
 {
-    out(L"\r\n  [SW NAS WATCH] ");
+    out(L"\r\n  [" APP_TITLE L"] ");
     out(msg);
     out(L"\r\n");
-    MessageBoxW(NULL, msg, L"SW NAS WATCH", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    MessageBoxW(NULL, msg, APP_TITLE, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
 }
 
 static BOOL WINAPI on_ctrl(DWORD type)
@@ -115,15 +129,15 @@ int main(void)
     slash = wcsrchr(g_dir, L'\\');
     if (slash) *slash = 0;
 
-    SetConsoleTitleW(L"SW NAS WATCH");
+    SetConsoleTitleW(APP_TITLE);
 
     _snwprintf(py, BUF, L"%ls\\runtime\\python\\python.exe", g_dir);
-    _snwprintf(app, BUF, L"%ls\\runtime\\app\\sw_nas_watch.pyc", g_dir);
+    _snwprintf(app, BUF, L"%ls\\runtime\\app\\%ls", g_dir, APP_PYC);
     py[BUF - 1] = app[BUF - 1] = 0;
     if (!exists_file(py) || !exists_file(app)) {   /* ZIPの中から直接起動した／runtime が無い */
         fatal(L"runtime フォルダが見つかりません。\r\n\r\n"
               L"ZIPファイルを「すべて展開」してから、"
-              L"展開したフォルダの SW_NAS_WATCH.exe を起動してください。");
+              L"展開したフォルダの " APP_EXE L" を起動してください。");
         wait_key();
         return 1;
     }
@@ -136,7 +150,7 @@ int main(void)
     }
     cmd[BUF * 2 - 1] = 0;
 
-    SetEnvironmentVariableW(L"SW_NAS_WATCH_HOME", g_dir);
+    SetEnvironmentVariableW(HOME_ENV, g_dir);
     SetConsoleCtrlHandler(on_ctrl, TRUE);
 
     /* If this launcher is killed, the app goes with it. Processes the app starts
