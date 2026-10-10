@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.6.2  —  SEVENTHWELL
+SW NAS WATCH  v1.7.1  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
 PowerPoint は 動画 / ハイパーリンク / COI / 自動送り / クリック無効 を自動で解析する。
+「会場ボード」表示では、全会場を横に並べて受付状況を一覧できる。
 会場オペレーターモードでは、自分の会場だけを監視し、受信が完了した演者フォルダを
 指定したコピー先（メインPC・バックアップPCなど）へコピーする（NASには書き込まない）。
 
@@ -46,7 +47,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.6.2"
+VERSION = "1.7.1"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -3089,6 +3090,87 @@ textarea#coi{height:100px}
 .drow input[type=text]{width:100%}
 .drow label{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted-fg);white-space:nowrap}
 #opBox select{min-width:240px}
+/* 表示切替（リスト / 会場ボード） */
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;flex:none;box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg button{height:30px;border:0;border-radius:0;box-shadow:none;background:transparent;color:var(--muted-fg);padding:0 12px;font-size:12.5px}
+.seg button+button{border-left:1px solid var(--border)}
+.seg button:hover{background:var(--muted);color:var(--foreground)}
+.seg button[aria-selected=true]{background:var(--accent);color:var(--foreground)}
+.seg button svg{width:15px;height:15px}
+@media (max-width:1280px){.seg button .lb{display:none}.seg button{padding:0 10px}}
+/* 会場ボード */
+#boardpane{display:none}
+#dhead{display:none}
+main.vboard{grid-template-columns:minmax(0,1fr)}
+main.vboard #left,main.vboard #logpane{display:none}
+main.vboard #boardpane{display:flex}
+main.vboard.showlog #logpane{display:flex;position:fixed;right:0;top:0;bottom:0;width:360px;z-index:35;background:var(--background);border-left:1px solid var(--border);box-shadow:-20px 0 40px rgba(0,0,0,.6)}
+main.vboard #center{position:fixed;top:0;right:0;bottom:0;width:min(820px,94vw);z-index:30;background:var(--background);border-left:1px solid var(--border);box-shadow:-24px 0 48px rgba(0,0,0,.65);transform:translateX(104%);transition:transform .18s ease-out;visibility:hidden}
+main.vboard.drawer #center{transform:none;visibility:visible}
+main.vboard #dhead{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);flex:none;font-size:12.5px;color:var(--muted-fg)}
+#dhead .t{flex:1;min-width:0}
+body.vboard #bLog{display:inline-flex}
+.bbar{display:flex;align-items:center;gap:8px 16px;padding:10px 16px;border-bottom:1px solid var(--border);font-size:13px;color:var(--muted-fg);flex:none;flex-wrap:wrap}
+.bbar b{color:var(--foreground);font-weight:600}
+.bbar .prog .bar{width:72px}
+.bbar .st{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.bbar .st.scp b{color:var(--amber)}.bbar .st.sun b{color:var(--sky)}
+.bbar .flt{display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;margin-left:auto}
+.bbar .flt label{display:flex;gap:7px;align-items:center;cursor:pointer;white-space:nowrap}
+.bbar .search{flex:none;width:210px}
+.bbar .search input{height:30px;font-size:12.5px}
+.bbar .search svg{top:7px}
+.bbar select{height:30px;font-size:12.5px;max-width:220px}
+.bleg{display:flex;gap:14px;align-items:center;padding:7px 16px 0;font-size:12px;color:var(--muted-fg);flex:none;flex-wrap:wrap}
+.bleg span{display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
+.bleg .sw{width:10px;height:10px;border-radius:3px;display:inline-block}
+.board{flex:1;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(270px,460px);gap:12px;padding:10px 16px 16px;overflow-x:auto;overflow-y:hidden;min-height:0;align-items:stretch}
+.board>.empty{grid-column:1/-1}
+main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
+.col{display:flex;flex-direction:column;min-height:0;border:1px solid var(--border);border-radius:12px;background:#0c0c0e;overflow:hidden}
+.col .vh{padding:11px 14px 10px;border-top:3px solid var(--vc);background:color-mix(in srgb,var(--vc) 8%,transparent);border-bottom:1px solid var(--border);flex:none}
+.col .vh .n{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700;letter-spacing:-.01em;min-width:0}
+.col .vh .n .vn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col .vh .n svg{width:16px;height:16px;color:var(--vc);flex:none}
+.col .vh .rl{font-size:11px;color:var(--dim);font-weight:500;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col .vh .s{display:flex;gap:10px;align-items:center;margin-top:6px;font-size:12px;color:var(--muted-fg);flex-wrap:wrap}
+.col .vh .s .prog .bar{width:64px}
+.col .vh .s .cpg{color:var(--amber);display:inline-flex;align-items:center;gap:5px}
+.col .vh .s .cpg svg{width:13px;height:13px;animation:spin 1.1s linear infinite}
+.col .vh .s .uc{color:var(--sky);font-weight:500}
+.col .list{overflow:auto;padding:4px 8px 10px;flex:1;min-height:0}
+.col .list .empty{padding:24px 12px;font-size:12.5px}
+.col .ses{display:flex;align-items:center;gap:8px;margin:14px 0 5px;padding:8px 10px;font-size:14.5px;font-weight:700;letter-spacing:-.01em;color:var(--foreground);min-width:0;position:sticky;top:-4px;z-index:1;background:color-mix(in srgb,var(--vc) 17%,#0c0c0e);border:1px solid color-mix(in srgb,var(--vc) 45%,#0c0c0e);border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.45)}
+.col .list>.ses:first-child{margin-top:6px}
+.col .ses .sn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col .ses .sep{color:var(--muted-fg);font-weight:500}
+.col .ses .prog{font-size:12px;color:#d4d4d8}
+.col .ses .prog.done{color:var(--emerald)}
+.col .ses .prog .bar{width:44px;background:rgba(0,0,0,.35)}
+.col .list .bp{margin-left:6px}
+.bp{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:7px 9px;border-radius:8px;margin:2px 0;font-size:13px;cursor:pointer;position:relative;transition:background .12s;scroll-margin:40px 0}
+.bp:hover{background:var(--muted)}
+.bp .sti{display:inline-grid;place-items:center;flex:none}
+.bp .sti svg{width:16px;height:16px}
+.bp .nm{flex:1 1 7.5em;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.bp .tg{display:flex;flex-wrap:wrap;gap:4px;flex:0 1 auto;min-width:0}
+.bp .tg .tag{height:19px;font-size:10.5px;padding:0 6px;font-weight:600}
+.bp .tg .cp{height:19px}
+.bp.st-recv{background:rgba(16,185,129,.09);box-shadow:inset 3px 0 0 var(--emerald)}
+.bp.st-recv:hover{background:rgba(16,185,129,.14)}
+.bp.st-recv .sti{color:var(--emerald)}
+.bp.st-none{color:var(--muted-fg)}
+.bp.st-none .nm{font-weight:400}
+.bp.st-none .sti{color:#52525b}
+.bp.st-copying{background:rgba(245,158,11,.09);box-shadow:inset 3px 0 0 var(--amber)}
+.bp.st-copying .sti{color:var(--amber)}
+.bp.st-copying .sti svg{animation:spin 1.1s linear infinite}
+.bp.unread{outline:1px solid rgba(56,189,248,.6);outline-offset:-1px}
+.bp.unread .nm{font-weight:600}
+.bp.sel{outline:2px solid #e4e4e7;outline-offset:-2px}
+.bp.flash{animation:flashbg 2.5s ease-out}
+.bp:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
+@media (max-width:1180px){.bbar .flt{margin-left:0}}
 @media (max-width:760px){.rrow{grid-template-columns:1fr 1fr}.rrow .pth{grid-column:1/-1}.addrow2{grid-template-columns:1fr}.drow{grid-template-columns:1fr 1fr}.drow .pth{grid-column:1/-1}}
 </style>
 </head>
@@ -3097,6 +3179,7 @@ textarea#coi{height:100px}
   <div class="logo"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/></svg></span><span>SW NAS WATCH<small>SEVENTHWELL · READ ONLY</small></span></div>
   <div id="roots"></div>
   <span id="conn">再接続中…</span>
+  <div class="seg" role="tablist" aria-label="表示の切り替え"><button type="button" role="tab" id="vList" data-view="list" title="会場・セッション・演者の一覧と、フォルダの中身"></button><button type="button" role="tab" id="vBoard" data-view="board" title="全会場を横に並べて受付状況を一覧"></button></div>
   <div class="hbtns">
     <label class="switch" title="更新があったフォルダを自動で表示（操作中の15秒間は切り替えない）"><input type="checkbox" id="swFollow"><span class="track"><span class="thumb"></span></span>自動表示</label>
     <span class="vsep"></span>
@@ -3120,7 +3203,22 @@ textarea#coi{height:100px}
     </div>
     <div class="scroll" id="groups"></div>
   </section>
-  <section id="center"><div class="scroll" id="fold"></div></section>
+  <section id="boardpane">
+    <div class="bbar">
+      <span class="st" id="bTot"></span>
+      <span class="st scp" id="bCp"></span>
+      <span class="st sun" id="bUn"></span>
+      <div class="flt">
+        <div class="search"><span id="bqi"></span><input id="bq" type="text" placeholder="演者・セッションを検索" autocomplete="off"></div>
+        <select id="bvenue" title="この会場だけ表示・通知"></select>
+        <label><input type="checkbox" id="bOnlyU">未確認のみ</label>
+        <label><input type="checkbox" id="bOnlyN">未受付のみ</label>
+      </div>
+    </div>
+    <div class="bleg"><span><i class="sw" style="background:var(--emerald)"></i>受付済み</span><span><i class="sw" style="background:var(--amber)"></i>コピー中</span><span><i class="sw" style="border:1.5px dashed #52525b"></i>未受付</span><span><i class="sw" style="outline:1px solid var(--sky);outline-offset:-1px"></i>未確認（新着）</span><span style="color:var(--dim)">演者をクリックすると中身と解析結果を表示</span></div>
+    <div class="board" id="board"></div>
+  </section>
+  <section id="center"><div id="dhead"><span class="t">フォルダの中身</span><button class="ghost" id="bDClose" title="閉じる（Esc）"></button></div><div class="scroll" id="fold"></div></section>
   <section id="logpane">
     <div class="ph" style="border-bottom:1px solid var(--border)"><h2>変更ログ</h2><button class="ghost" id="bLogClose" style="display:none">閉じる</button></div>
     <div class="scroll" id="log"></div>
@@ -3137,6 +3235,7 @@ const IC={
  bell:SV('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
  check2:SV('<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>'),
  cog:SV('<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>'),
+ cols:SV('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/>'),
  list:SV('<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>'),
  folder:SV('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'),
  ext:SV('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
@@ -3233,6 +3332,8 @@ function onEvent(ev){
 function wantNotify(ev){const ks=ev.kinds&&ev.kinds.length?ev.kinds:[ev.kind];return ks.some(k=>S.notify[k]!==false)}
 function maybeFollow(x){
   if(!FOLLOW||x.group==null||Date.now()-lastInteract<15000)return;
+  /* 会場ボード：中身の表示（右パネル）を開いていなければ、その演者までスクロールするだけ */
+  if(VIEW==="board"){followKey=x.root+"|"+x.group;if(!drawerOpen())return}
   if(SEL&&SEL.root===x.root&&SEL.group===x.group)return;
   selectGroup(x.root,x.group,true);
 }
@@ -3290,7 +3391,7 @@ function setTitle(ret){const u=S?S.unread_total:0;const t=(u?"("+u+") ":"")+"SW 
 window.addEventListener("focus",()=>{liveUnread=0;setTitle();if(SEL&&S&&S.local)api("/api/seen",SEL).then(refresh).catch(()=>{})});
 
 /* ---------- render ---------- */
-function renderAll(){renderRoots();renderOpBar();renderBanner();renderVenue();renderGroups();renderLog();setTitle();renderFollow()}
+function renderAll(){renderRoots();renderOpBar();renderBanner();renderVenue();renderGroups();renderBoard();renderLog();setTitle();renderFollow()}
 function renderFollow(){$("#swFollow").checked=!!FOLLOW}
 $("#swFollow").onchange=()=>{FOLLOW=$("#swFollow").checked;ls.set("follow",FOLLOW)};
 $("#bLog").innerHTML=IC.list+"ログ";$("#bTest").innerHTML=IC.bell+"テスト通知";$("#bAll").innerHTML=IC.check2+"すべて既読";$("#bCfg").innerHTML=IC.cog+"設定";
@@ -3330,19 +3431,23 @@ function renderBanner(){
 async function askPerm(){try{await Notification.requestPermission()}catch(e){}unlockAudio();renderBanner()}
 
 function renderVenue(){
-  const sel=$("#venue");const opts=[];
-  if(OPON()){const r=rootById(S.op.root);const h=`<option value="">${esc(nfc(S.op.venue||(r?r.label:"")))}（会場オペレーター）</option>`;
-    sel.disabled=true;sel.style.display="";if(sel.dataset.h!==h){sel.innerHTML=h;sel.dataset.h=h}return}
-  sel.disabled=false;
-  for(const r of S.roots){if(r.depth<2)continue;
-    const segs=[...new Set((r.groups||[]).filter(g=>g.key).map(g=>g.key.split("/")[0]))].sort(cmpName);
-    segs.forEach(s=>opts.push([r.id+"|"+s,(S.roots.length>1?nfc(r.label)+" / ":"")+nfc(s)]));}
-  if(VENUE&&!opts.some(o=>o[0]===VENUE))opts.push([VENUE,VENUE.slice(VENUE.indexOf("|")+1)+"（現在なし）"]);
-  sel.style.display=opts.length?"":"none";
-  const h=`<option value="">すべての会場</option>`+opts.map(o=>`<option value="${esc(o[0])}" ${o[0]===VENUE?"selected":""}>${esc(o[1])}</option>`).join("");
-  if(sel.dataset.h!==h){sel.innerHTML=h;sel.dataset.h=h}
+  const opts=[];let h,dis=false,show=true;
+  if(OPON()){const r=rootById(S.op.root);h=`<option value="">${esc(nfc(S.op.venue||(r?r.label:"")))}（会場オペレーター）</option>`;dis=true}
+  else{
+    for(const r of S.roots){if(r.depth<2)continue;
+      const segs=[...new Set((r.groups||[]).filter(g=>g.key).map(g=>g.key.split("/")[0]))].sort(cmpName);
+      segs.forEach(s=>opts.push([r.id+"|"+s,(S.roots.length>1?nfc(r.label)+" / ":"")+nfc(s)]));}
+    if(VENUE&&!opts.some(o=>o[0]===VENUE))opts.push([VENUE,VENUE.slice(VENUE.indexOf("|")+1)+"（現在なし）"]);
+    show=opts.length>0;
+    h=`<option value="">すべての会場</option>`+opts.map(o=>`<option value="${esc(o[0])}" ${o[0]===VENUE?"selected":""}>${esc(o[1])}</option>`).join("");
+  }
+  for(const sel of [$("#venue"),$("#bvenue")]){sel.disabled=dis;sel.style.display=show?"":"none";
+    if(sel.dataset.h!==h){sel.innerHTML=h;sel.dataset.h=h}
+    if(!dis&&sel.value!==VENUE)sel.value=VENUE}
 }
-$("#venue").addEventListener("change",()=>{VENUE=$("#venue").value;ls.set("venue",VENUE);renderGroups();renderLog()});
+function setVenue(v){VENUE=v;ls.set("venue",VENUE);renderVenue();renderGroups();renderBoard();renderLog()}
+$("#venue").addEventListener("change",()=>setVenue($("#venue").value));
+$("#bvenue").addEventListener("change",()=>setVenue($("#bvenue").value));
 
 function anaChips(a){
   if(!a||!a.n)return"";let h="";
@@ -3457,10 +3562,14 @@ $("#groups").addEventListener("click",e=>{
   const d=e.target.closest(".grp");if(d)selectGroup(d.dataset.r,d.dataset.g)});
 $("#groups").addEventListener("keydown",e=>{const f=e.target.closest("[data-fold]");if(f&&(e.key==="Enter"||e.key===" ")){e.preventDefault();setFold(f.dataset.fold,!isFold(f.dataset.fold));renderGroups();const n=[...document.querySelectorAll("[data-fold]")].find(x=>x.dataset.fold===f.dataset.fold);if(n)n.focus()}});
 $("#q").addEventListener("input",renderGroups);
-$("#onlyU").addEventListener("change",()=>{ls.set("onlyU",$("#onlyU").checked);renderGroups()});
+/* 「未確認のみ」「未受付のみ」はリストと会場ボードで共通 */
+function syncFilter(src,dst,key){$(dst).checked=$(src).checked;ls.set(key,$(src).checked);renderGroups();renderBoard()}
+$("#onlyU").addEventListener("change",()=>syncFilter("#onlyU","#bOnlyU","onlyU"));
+$("#bOnlyU").addEventListener("change",()=>syncFilter("#bOnlyU","#onlyU","onlyU"));
 $("#sort").addEventListener("change",()=>{ls.set("sort",$("#sort").value);renderGroups()});
-$("#onlyN").addEventListener("change",()=>{ls.set("onlyN",$("#onlyN").checked);renderGroups()});
-$("#onlyU").checked=ls.get("onlyU",false);$("#onlyN").checked=ls.get("onlyN",false);$("#sort").value=ls.get("sort","name");
+$("#onlyN").addEventListener("change",()=>syncFilter("#onlyN","#bOnlyN","onlyN"));
+$("#bOnlyN").addEventListener("change",()=>syncFilter("#bOnlyN","#onlyN","onlyN"));
+$("#onlyU").checked=$("#bOnlyU").checked=ls.get("onlyU",false);$("#onlyN").checked=$("#bOnlyN").checked=ls.get("onlyN",false);$("#sort").value=ls.get("sort","name");
 
 function renderLog(){
   const el=$("#log");const evs=S.events.filter(e=>inVenue(e.root,e.group)).reverse();
@@ -3473,18 +3582,115 @@ function renderLog(){
     ${(e.ana||[]).map(a=>`<div class="an ${a.warn?"w":""}">▸ ${esc(nfc(a.file))}: ${esc(a.text||a.na||"解析待ち")}</div>`).join("")}
     ${multi?`<div class="rl">${esc(nfc(e.root_label))}</div>`:""}</div>`).join("");
 }
-$("#log").addEventListener("click",e=>{const d=e.target.closest(".ev");if(!d)return;const ev=S.events.find(x=>x.id==d.dataset.id);if(ev&&ev.group!=null){selectGroup(ev.root,ev.group);if(innerWidth<=1180)$("#main").classList.remove("showlog")}});
-function showLog(){if(innerWidth<=1180)$("#main").classList.add("showlog");$("#log").scrollTop=0}
+$("#log").addEventListener("click",e=>{const d=e.target.closest(".ev");if(!d)return;const ev=S.events.find(x=>x.id==d.dataset.id);if(ev&&ev.group!=null){selectGroup(ev.root,ev.group);if(innerWidth<=1180||VIEW==="board")$("#main").classList.remove("showlog")}});
+function showLog(){if(innerWidth<=1180||VIEW==="board")$("#main").classList.add("showlog");$("#log").scrollTop=0}
 $("#bLog").onclick=()=>$("#main").classList.toggle("showlog");
 $("#bLogClose").onclick=()=>$("#main").classList.remove("showlog");
 if(innerWidth<=1180)$("#bLogClose").style.display="inline-block";
+
+/* ---------- 会場ボード（全会場を横に並べて受付状況を一覧） ---------- */
+let VIEW=ls.get("view","list")==="board"?"board":"list",followKey=null,boardHtml="";
+const drawerOpen=()=>VIEW==="board"&&$("#main").classList.contains("drawer");
+function openDrawer(){if(VIEW==="board")$("#main").classList.add("drawer")}
+/* 右パネルに隠れないよう、演者の列を左側へスクロールして見せる */
+function revealInBoard(row){
+  row.scrollIntoView({block:"nearest",inline:"nearest"});
+  if(!drawerOpen())return;const bd=$("#board");const c=row.closest(".col")||row;
+  const lim=innerWidth-$("#center").offsetWidth-12,r=c.getBoundingClientRect();if(r.right>lim)bd.scrollLeft+=Math.ceil(r.right-lim);
+}
+function closeDrawer(){$("#main").classList.remove("drawer");document.querySelectorAll(".bp.sel").forEach(x=>x.classList.remove("sel"))}
+function setView(v,save){
+  VIEW=v==="board"?"board":"list";if(save!==false)ls.set("view",VIEW);
+  const m=$("#main");const b=VIEW==="board";
+  m.classList.toggle("vboard",b);document.body.classList.toggle("vboard",b);m.classList.remove("showlog");if(!b)m.classList.remove("drawer");
+  $("#vList").setAttribute("aria-selected",String(!b));$("#vBoard").setAttribute("aria-selected",String(b));
+  $("#bLogClose").style.display=(b||innerWidth<=1180)?"inline-flex":"none";
+  if(!S)return;
+  boardHtml="";renderBoard();
+  if(!b){renderGroups();const row=SEL&&[...document.querySelectorAll(".grp")].find(x=>x.dataset.r===SEL.root&&x.dataset.g===SEL.group);if(row)row.scrollIntoView({block:"nearest"})}
+}
+$("#vList").innerHTML=IC.list+`<span class="lb">リスト</span>`;$("#vBoard").innerHTML=IC.cols+`<span class="lb">会場ボード</span>`;
+$("#vList").onclick=()=>setView("list");$("#vBoard").onclick=()=>setView("board");
+$("#bDClose").innerHTML=IC.x+"閉じる";$("#bDClose").onclick=closeDrawer;
+$("#bqi").outerHTML=IC.search;
+$("#bq").addEventListener("input",renderBoard);
+function bpRow(r,g){
+  const name=g.key.split("/").pop();const st=recvState(g);
+  const isSel=drawerOpen()&&SEL&&SEL.root===r.id&&SEL.group===g.key;
+  const sti=st==="recv"?IC.ok:st==="copying"?IC.spin:IC.todo;
+  const cps=OPON()&&g.cp?opDests().map(d=>g.cp[d.id]?cpPill(d.label,g.cp[d.id]):"").join(""):"";
+  const cats=Object.entries(g.cats||{}).filter(([c])=>!(g.ana&&c==="PPT")).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([c,n])=>`<span class="chip c-${esc(c)}">${esc(c)}${n>1?" "+n:""}</span>`).join("");
+  const tags=st==="none"?`<span class="tag t-dim">未受付</span>`:(st==="copying"?`<span class="tag t-warn copying">コピー中</span>`:"")+cps+anaChips(g.ana)+cats;
+  const stl=st==="recv"?"受付済み":st==="copying"?"コピー中":"未受付";
+  const tip=nfc(name)+"\n"+stl+(g.files?` · ${g.files}ファイル · ${fmtSize(g.size)}`:"")+(g.last_ts?` · 最終変更 ${ago(g.last_ts)}`:"")+(g.unread?` · 未確認 ${g.unread}`:"");
+  return `<div class="bp st-${st} ${g.unread?"unread":""} ${isSel?"sel":""} ${flashKeys.has(r.id+"|"+g.key)?"flash":""}" data-r="${esc(r.id)}" data-g="${esc(g.key)}" tabindex="0" role="button" title="${esc(tip)}"><span class="sti">${sti}</span><span class="nm">${esc(nfc(name))}</span>${g.unread?`<span class="badge">${g.unread}</span>`:""}${tags?`<span class="tg">${tags}</span>`:""}</div>`;
+}
+function renderBoard(){
+  if(VIEW!=="board"||!S)return;
+  const el=$("#board");
+  const q=nfc($("#bq").value).toLowerCase().trim();const onlyU=$("#bOnlyU").checked,onlyN=$("#bOnlyN").checked;
+  computeVenueColors();
+  const EV=effVenue();let scope=[],h="";
+  S.roots.forEach((r,ri)=>{
+    if(EV&&EV.slice(0,EV.indexOf("|"))!==r.id)return;
+    const base=(r.groups||[]).filter(g=>g.key!==""&&inVenue(r.id,g.key));scope=scope.concat(base);
+    const byV=new Map();
+    for(const g of base){const v=r.depth>=3?g.key.split("/")[0]:"";if(!byV.has(v))byV.set(v,[]);byV.get(v).push(g)}
+    if(!byV.size){
+      if(q)return;
+      h+=`<section class="col" data-col="${esc(r.id)}|" style="--vc:${VPAL[ri%VPAL.length]}"><div class="vh"><div class="n">${IC.building}<span class="vn">${esc(nfc(r.label))}</span></div></div><div class="list"><div class="empty">${r.online===false?"接続できません":r.online==null?"確認中…":"演者フォルダがありません"}</div></div></section>`;return}
+    for(const v of [...byV.keys()].sort(cmpName)){
+      const full=byV.get(v);
+      let gs=full;
+      if(q)gs=gs.filter(g=>nfc(g.key).toLowerCase().includes(q));
+      if(onlyU)gs=gs.filter(g=>g.unread);
+      if(onlyN)gs=gs.filter(g=>!isRecv(g));
+      if(q&&!gs.length)continue;
+      const vc=r.depth>=3?vColor(r.id,v):VPAL[ri%VPAL.length];
+      const vname=r.depth>=3?v:r.label;
+      const sub=r.depth>=3&&S.roots.length>1?r.label:"";
+      const vun=full.filter(g=>g.unread).length,vcp=full.filter(g=>g.pending).length;
+      h+=`<section class="col" data-col="${esc(r.id+"|"+v)}" style="--vc:${vc}"><div class="vh"><div class="n">${IC.building}<span class="vn" title="${esc(nfc(vname))}">${esc(nfc(vname))}</span>${vun?`<span class="badge" title="未確認の演者">${vun}</span>`:""}</div>${sub?`<div class="rl">${esc(nfc(sub))}</div>`:""}<div class="s"><span>受付</span>${progHtml(full)}${vcp?`<span class="cpg">${IC.spin}コピー中 ${vcp}</span>`:""}</div></div><div class="list">`;
+      if(!gs.length){h+=`<div class="empty">${onlyN&&!onlyU?"全員受付済み":onlyU&&!onlyN?"未確認はありません":"該当なし"}</div></div></section>`;continue}
+      // セッションごとにまとめる（並びは会場・セッション順）
+      const sesOf=g=>{const segs=g.key.split("/");return (r.depth>=3?segs.slice(1,-1):segs.slice(0,-1)).join("/")};
+      const sessions=new Map();
+      for(const g of full){const k=sesOf(g);if(!sessions.has(k))sessions.set(k,{all:[],vis:[]});sessions.get(k).all.push(g)}
+      for(const g of gs)sessions.get(sesOf(g)).vis.push(g);
+      for(const k of [...sessions.keys()].sort(cmpPath)){
+        const x=sessions.get(k);if(!x.vis.length)continue;
+        x.vis.sort((a,b)=>cmpPath(a.key,b.key));
+        if(k)h+=`<div class="ses" title="${esc(nfc(k))}"><span class="sn">${k.split("/").map(t=>esc(nfc(t))).join('<span class="sep"> › </span>')}</span>${x.all.some(g=>g.pending)?`<span class="pdot" title="コピー中"></span>`:""}${progHtml(x.all)}</div>`;
+        h+=x.vis.map(g=>bpRow(r,g)).join("");
+      }
+      h+=`</div></section>`;
+    }
+  });
+  if(!S.roots.length)h=`<div class="empty"><div class="ico">${IC.folder}</div><b>監視フォルダがありません</b>［設定］から学会名フォルダを追加してください。</div>`;
+  else if(!h)h=`<div class="empty"><div class="ico">${IC.search}</div><b>該当なし</b>検索の文字や絞り込みを変えてください。</div>`;
+  if(h!==boardHtml){
+    const sv={};el.querySelectorAll(".col").forEach(c=>{const l=c.querySelector(".list");if(l)sv[c.dataset.col]=l.scrollTop});
+    const sx=el.scrollLeft;el.innerHTML=h;boardHtml=h;
+    el.querySelectorAll(".col").forEach(c=>{const l=c.querySelector(".list");if(l&&sv[c.dataset.col])l.scrollTop=sv[c.dataset.col]});
+    el.scrollLeft=sx;
+  }
+  if(followKey){const k=followKey;followKey=null;const row=[...el.querySelectorAll(".bp")].find(x=>x.dataset.r+"|"+x.dataset.g===k);if(row)revealInBoard(row)}
+  const scp=scope.filter(g=>g.key!=="");const n=scp.filter(isRecv).length,t=scp.length,pct=t?Math.round(n*100/t):0;
+  $("#bTot").innerHTML=`全体 <b>受付 ${n}/${t}</b><span class="prog ${t&&n===t?"done":n?"":"zero"}"><span class="bar"><i style="width:${pct}%"></i></span>${pct}%</span>`;
+  const cpn=scp.filter(g=>g.pending).length,unn=scp.filter(g=>g.unread).length;
+  $("#bCp").innerHTML=`コピー中 <b>${cpn}</b>`;$("#bUn").innerHTML=`未確認 <b>${unn}</b>`;
+}
+$("#board").addEventListener("click",e=>{const d=e.target.closest(".bp");if(d)selectGroup(d.dataset.r,d.dataset.g)});
+$("#board").addEventListener("keydown",e=>{const d=e.target.closest(".bp");if(d&&(e.key==="Enter"||e.key===" ")){e.preventDefault();selectGroup(d.dataset.r,d.dataset.g)}});
+setView(VIEW,false);
 
 /* ---------- folder ---------- */
 function selectGroup(root,group,auto){
   SEL={root,group};ls.set("sel",SEL);
   if(unfold(root,group))renderGroups();
-  document.querySelectorAll(".grp.sel").forEach(x=>x.classList.remove("sel"));
-  const row=[...document.querySelectorAll(".grp")].find(x=>x.dataset.r===root&&x.dataset.g===group);if(row){row.classList.add("sel");row.scrollIntoView({block:"nearest"})}
+  document.querySelectorAll(".grp.sel,.bp.sel").forEach(x=>x.classList.remove("sel"));
+  const row=[...document.querySelectorAll(".grp")].find(x=>x.dataset.r===root&&x.dataset.g===group);if(row){row.classList.add("sel");if(VIEW==="list")row.scrollIntoView({block:"nearest"})}
+  if(VIEW==="board"){openDrawer();const b=[...document.querySelectorAll(".bp")].find(x=>x.dataset.r===root&&x.dataset.g===group);if(b){b.classList.add("sel");revealInBoard(b)}}
   loadFolder(true);
   if(S.local&&(!auto||document.hasFocus()))api("/api/seen",{root,group}).then(refresh).catch(()=>{});
 }
@@ -3721,8 +3927,11 @@ async function saveCfg(){
   catch(e){$("#cerr").textContent=e.message}
 }
 $("#modal").addEventListener("mousedown",e=>{if(e.target.id==="modal")closeCfg()});
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeCfg();$("#main").classList.remove("showlog")}});
-setInterval(()=>{if(S){renderGroups()}},30000);
+document.addEventListener("keydown",e=>{if(e.key!=="Escape")return;
+  if($("#modal").classList.contains("open")){closeCfg();return}
+  if($("#main").classList.contains("showlog")){$("#main").classList.remove("showlog");return}
+  closeDrawer()});
+setInterval(()=>{if(S){renderGroups();renderBoard()}},30000);
 
 /* 画面の中身を簡単に覗けないように（右クリックメニュー・開発者ツールのショートカットを封じる。入力欄の右クリックは可） */
 document.addEventListener("contextmenu",e=>{if(!e.target.closest("input,textarea"))e.preventDefault()},true);
