@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.8.1  —  SEVENTHWELL
+SW NAS WATCH  v1.8.2  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.8.1"
+VERSION = "1.8.2"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -3525,11 +3525,41 @@ main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
 .col .list .empty{padding:24px 12px;font-size:12.5px}
 .col .ses{display:flex;align-items:center;gap:8px;margin:14px 0 5px;padding:8px 10px;font-size:14.5px;font-weight:700;letter-spacing:-.01em;color:var(--foreground);min-width:0;position:sticky;top:-4px;z-index:1;background:color-mix(in srgb,var(--vc) 17%,#0c0c0e);border:1px solid color-mix(in srgb,var(--vc) 45%,#0c0c0e);border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.45)}
 .col .list>.ses:first-child{margin-top:6px}
-.col .ses .sn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col .ses{cursor:pointer;user-select:none}
+.col .ses:hover{background:color-mix(in srgb,var(--vc) 24%,#0c0c0e)}
+.col .ses:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
+.col .ses .chev{color:var(--muted-fg);margin-left:-2px}
+.col .ses .chev svg{width:16px;height:16px}
+.col .ses.fold{margin-bottom:2px;opacity:.92}
+.col .ses.fold .sn{color:#d4d4d8}
+.col .ses .badge{font-size:10.5px}
+.col .vh .n .cf{width:26px;height:26px;padding:0;color:var(--muted-fg);flex:none;margin-left:2px}
+.col .vh .n .cf:hover{color:var(--foreground)}
+.col .vh .n .cf svg{width:15px;height:15px;color:inherit}
+/* 会場ナビ（会場が画面に入りきらないときだけ出す） */
+.bnav{display:none;align-items:center;gap:6px;padding:8px 16px 0;flex:none;min-width:0}
+.bnav.on{display:flex}
+.bnav .nv{width:30px;height:30px;padding:0;flex:none}
+.bnav .nv svg{width:16px;height:16px}
+.bnav .chips{display:flex;gap:6px;overflow-x:auto;min-width:0;flex:1;scrollbar-width:none}
+.bnav .chips::-webkit-scrollbar{display:none}
+.vchip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:999px;border:1px solid var(--border);background:transparent;box-shadow:none;font-size:12.5px;font-weight:600;color:var(--muted-fg);flex:none;white-space:nowrap}
+.vchip i{width:8px;height:8px;border-radius:3px;background:var(--vc);flex:none}
+.vchip .c{font:500 11px var(--mono);color:var(--dim)}
+.vchip .c.done{color:var(--emerald)}
+.vchip .badge{height:16px;min-width:16px;font-size:10px;padding:0 5px}
+.vchip.vis{color:var(--foreground);border-color:color-mix(in srgb,var(--vc) 55%,var(--border));background:color-mix(in srgb,var(--vc) 12%,transparent)}
+.board::-webkit-scrollbar{height:14px}
+.board::-webkit-scrollbar-thumb{background:#3f3f46;border:3px solid var(--background);border-radius:999px}
+.board::-webkit-scrollbar-thumb:hover{background:#52525b}
+.bbar .fb{height:30px;padding:0 10px;font-size:12.5px;color:var(--muted-fg)}
+.bbar .fb:hover{color:var(--foreground)}
+.col .ses .sn{flex:1;min-width:0;overflow:hidden;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3;word-break:break-all}
 .col .ses .sep{color:var(--muted-fg);font-weight:500}
 .col .ses .prog{font-size:12px;color:#d4d4d8}
 .col .ses .prog.done{color:var(--emerald)}
-.col .ses .prog .bar{width:44px;background:rgba(0,0,0,.35)}
+.col .ses .prog .bar{width:28px;background:rgba(0,0,0,.35)}
+.col .ses .prog{gap:4px}
 .col .list .bp{margin-left:6px}
 .bp{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:7px 9px;border-radius:8px;margin:2px 0;font-size:13px;cursor:pointer;position:relative;transition:background .12s;scroll-margin:40px 0}
 .bp:hover{background:var(--muted)}
@@ -3592,6 +3622,7 @@ main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
       <span class="st scp" id="bCp"></span>
       <span class="st sun" id="bUn"></span>
       <div class="flt">
+        <span style="display:inline-flex;gap:2px"><button class="ghost fb" id="bOpenAll" title="すべてのセッションを開く"></button><button class="ghost fb" id="bCloseAll" title="すべてのセッションを閉じる（演者を隠してコンパクトに）"></button></span>
         <div class="search"><span id="bqi"></span><input id="bq" type="text" placeholder="演者・セッションを検索" autocomplete="off"></div>
         <select id="bvenue" title="この会場だけ表示・通知"></select>
         <label><input type="checkbox" id="bOnlyU">未確認のみ</label>
@@ -3599,6 +3630,7 @@ main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
       </div>
     </div>
     <div class="bleg"><span><i class="sw" style="background:var(--emerald)"></i>受付済み</span><span><i class="sw" style="background:var(--amber)"></i>コピー中</span><span><i class="sw" style="border:1.5px dashed #52525b"></i>未受付</span><span><i class="sw" style="outline:1px solid var(--sky);outline-offset:-1px"></i>未確認（新着）</span><span style="color:var(--dim)">演者をクリックすると中身と解析結果を表示</span></div>
+    <div class="bnav" id="bnav"><button class="ghost nv" id="bPrev" title="前の会場へ（←キー）"></button><div class="chips" id="bchips"></div><button class="ghost nv" id="bNext" title="次の会場へ（→キー）"></button></div>
     <div class="board" id="board"></div>
   </section>
   <section id="center"><div id="dhead"><span class="t">フォルダの中身</span><button class="ghost" id="bDClose" title="閉じる（Esc）"></button></div><div class="scroll" id="fold"></div></section>
@@ -3624,6 +3656,7 @@ const IC={
  ext:SV('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
  copy:SV('<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
  chev:SV('<path d="m9 18 6-6-6-6"/>'),
+ chevL:SV('<path d="m15 18-6-6 6-6"/>'),
  alert:SV('<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>'),
  info:SV('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
  inbox:SV('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'),
@@ -4015,14 +4048,16 @@ if(innerWidth<=1180)$("#bLogClose").style.display="inline-block";
 /* ---------- 会場ボード（全会場を横に並べて受付状況を一覧） ---------- */
 let VIEW=ls.get("view","list")==="board"?"board":"list",followKey=null,boardHtml="";
 const drawerOpen=()=>VIEW==="board"&&$("#main").classList.contains("drawer");
-function openDrawer(){if(VIEW==="board")$("#main").classList.add("drawer")}
+function openDrawer(){if(VIEW==="board"){$("#main").classList.add("drawer");setTimeout(updNav,0)}}
 /* 右パネルに隠れないよう、演者の列を左側へスクロールして見せる */
 function revealInBoard(row){
   row.scrollIntoView({block:"nearest",inline:"nearest"});
-  if(!drawerOpen())return;const bd=$("#board");const c=row.closest(".col")||row;
-  const lim=innerWidth-$("#center").offsetWidth-12,r=c.getBoundingClientRect();if(r.right>lim)bd.scrollLeft+=Math.ceil(r.right-lim);
+  const bd=$("#board");const c=row.closest(".col")||row;const br=bd.getBoundingClientRect();
+  const lim=drawerOpen()?innerWidth-$("#center").offsetWidth-12:br.right-12,r=c.getBoundingClientRect();
+  if(r.right>lim)bd.scrollLeft+=Math.ceil(r.right-lim);           // 列全体が見えるように
+  else if(r.left<br.left+12)bd.scrollLeft-=Math.ceil(br.left+12-r.left);
 }
-function closeDrawer(){$("#main").classList.remove("drawer");document.querySelectorAll(".bp.sel").forEach(x=>x.classList.remove("sel"))}
+function closeDrawer(){$("#main").classList.remove("drawer");document.querySelectorAll(".bp.sel").forEach(x=>x.classList.remove("sel"));setTimeout(updNav,0)}
 function setView(v,save){
   VIEW=v==="board"?"board":"list";if(save!==false)ls.set("view",VIEW);
   const m=$("#main");const b=VIEW==="board";
@@ -4053,7 +4088,9 @@ function renderBoard(){
   if(VIEW!=="board"||!S)return;
   const el=$("#board");
   const q=nfc($("#bq").value).toLowerCase().trim();const onlyU=$("#bOnlyU").checked,onlyN=$("#bOnlyN").checked;
+  const filtering=!!(q||onlyU||onlyN);
   computeVenueColors();
+  COLSES={};const nav=[];
   const EV=effVenue();let scope=[],h="";
   S.roots.forEach((r,ri)=>{
     if(EV&&EV.slice(0,EV.indexOf("|"))!==r.id)return;
@@ -4074,19 +4111,31 @@ function renderBoard(){
       const vname=r.depth>=3?v:r.label;
       const sub=r.depth>=3&&S.roots.length>1?r.label:"";
       const vun=full.filter(g=>g.unread).length,vcp=full.filter(g=>g.pending).length;
-      h+=`<section class="col" data-col="${esc(r.id+"|"+v)}" style="--vc:${vc}"><div class="vh"><div class="n">${IC.building}<span class="vn" title="${esc(nfc(vname))}">${esc(nfc(vname))}</span>${vun?`<span class="badge" title="未確認の演者">${vun}</span>`:""}</div>${sub?`<div class="rl">${esc(nfc(sub))}</div>`:""}<div class="s"><span>受付</span>${progHtml(full)}${vcp?`<span class="cpg">${IC.spin}コピー中 ${vcp}</span>`:""}</div></div><div class="list">`;
-      if(!gs.length){h+=`<div class="empty">${onlyN&&!onlyU?"全員受付済み":onlyU&&!onlyN?"未確認はありません":"該当なし"}</div></div></section>`;continue}
+      {const n=full.filter(isRecv).length;nav.push([r.id+"|"+v,vname,vc,n,full.length,vun])}
+      h+=`<section class="col" data-col="${esc(r.id+"|"+v)}" style="--vc:${vc}"><div class="vh"><div class="n">${IC.building}<span class="vn" title="${esc(nfc(vname))}">${esc(nfc(vname))}</span>${vun?`<span class="badge" title="未確認の演者">${vun}</span>`:""}${COLSES_MARK}</div>${sub?`<div class="rl">${esc(nfc(sub))}</div>`:""}<div class="s"><span>受付</span>${progHtml(full)}${vcp?`<span class="cpg">${IC.spin}コピー中 ${vcp}</span>`:""}</div></div><div class="list">`;
+      if(!gs.length){h=h.replace(COLSES_MARK,"");h+=`<div class="empty">${onlyN&&!onlyU?"全員受付済み":onlyU&&!onlyN?"未確認はありません":"該当なし"}</div></div></section>`;continue}
       // セッションごとにまとめる（並びは会場・セッション順）
       const sesOf=g=>{const segs=g.key.split("/");return (r.depth>=3?segs.slice(1,-1):segs.slice(0,-1)).join("/")};
       const sessions=new Map();
       for(const g of full){const k=sesOf(g);if(!sessions.has(k))sessions.set(k,{all:[],vis:[]});sessions.get(k).all.push(g)}
       for(const g of gs)sessions.get(sesOf(g)).vis.push(g);
+      const colKey=r.id+"|"+v,fks=[];
       for(const k of [...sessions.keys()].sort(cmpPath)){
         const x=sessions.get(k);if(!x.vis.length)continue;
         x.vis.sort((a,b)=>cmpPath(a.key,b.key));
-        if(k)h+=`<div class="ses" title="${esc(nfc(k))}"><span class="sn">${k.split("/").map(t=>esc(nfc(t))).join('<span class="sep"> › </span>')}</span>${x.all.some(g=>g.pending)?`<span class="pdot" title="コピー中"></span>`:""}${progHtml(x.all)}</div>`;
+        if(k){
+          const fk=r.id+"|"+(v?v+"/":"")+k;fks.push(fk);
+          const sf=!filtering&&isFold(fk);const sun=x.all.filter(g=>g.unread).length;
+          const sflash=sf&&x.all.some(g=>flashKeys.has(r.id+"|"+g.key));
+          h+=`<div class="ses ${sf?"fold":""} ${sflash?"flashh":""}" data-fold="${esc(fk)}" tabindex="0" role="button" aria-expanded="${!sf}" title="${esc(nfc(k))}（クリックで${sf?"開く":"閉じる"}）"><span class="chev">${IC.down}</span><span class="sn">${k.split("/").map(t=>esc(nfc(t))).join('<span class="sep"> › </span>')}</span>${x.all.some(g=>g.pending)?`<span class="pdot" title="コピー中"></span>`:""}${sun?`<span class="badge" title="未確認の演者">${sun}</span>`:""}${progHtml(x.all)}</div>`;
+          if(sf)continue;
+        }
         h+=x.vis.map(g=>bpRow(r,g)).join("");
       }
+      COLSES[colKey]=fks;
+      if(fks.length&&!filtering){const allF=fks.every(isFold);
+        const btn=`<button class="ghost cf" data-colfold="${esc(colKey)}" title="この会場のセッションを${allF?"すべて開く":"すべて閉じる"}">${allF?IC.expand:IC.collapse}</button>`;h=h.replace(COLSES_MARK,()=>btn)}
+      h=h.replace(COLSES_MARK,"");
       h+=`</div></section>`;
     }
   });
@@ -4098,14 +4147,64 @@ function renderBoard(){
     el.querySelectorAll(".col").forEach(c=>{const l=c.querySelector(".list");if(l&&sv[c.dataset.col])l.scrollTop=sv[c.dataset.col]});
     el.scrollLeft=sx;
   }
-  if(followKey){const k=followKey;followKey=null;const row=[...el.querySelectorAll(".bp")].find(x=>x.dataset.r+"|"+x.dataset.g===k);if(row)revealInBoard(row)}
+  renderNav(nav);
+  if(followKey){const k=followKey;followKey=null;const row=[...el.querySelectorAll(".bp")].find(x=>x.dataset.r+"|"+x.dataset.g===k);
+    if(row)revealInBoard(row);
+    else{const i=k.indexOf("|"),fk=foldKeysOf(k.slice(0,i),k.slice(i+1)).slice(-1)[0];   // 閉じたセッションなら、その見出しまで
+      const sh=fk&&[...el.querySelectorAll(".ses[data-fold]")].find(x=>x.dataset.fold===fk);if(sh)revealInBoard(sh)}}
   const scp=scope.filter(g=>g.key!=="");const n=scp.filter(isRecv).length,t=scp.length,pct=t?Math.round(n*100/t):0;
   $("#bTot").innerHTML=`全体 <b>受付 ${n}/${t}</b><span class="prog ${t&&n===t?"done":n?"":"zero"}"><span class="bar"><i style="width:${pct}%"></i></span>${pct}%</span>`;
   const cpn=scp.filter(g=>g.pending).length,unn=scp.filter(g=>g.unread).length;
   $("#bCp").innerHTML=`コピー中 <b>${cpn}</b>`;$("#bUn").innerHTML=`未確認 <b>${unn}</b>`;
 }
-$("#board").addEventListener("click",e=>{const d=e.target.closest(".bp");if(d)selectGroup(d.dataset.r,d.dataset.g)});
-$("#board").addEventListener("keydown",e=>{const d=e.target.closest(".bp");if(d&&(e.key==="Enter"||e.key===" ")){e.preventDefault();selectGroup(d.dataset.r,d.dataset.g)}});
+let COLSES={};const COLSES_MARK="<!--cf-->";
+/* セッションの開閉（このPCに保存。リスト表示の開閉と共通） */
+function toggleSes(fk){setFold(fk,!isFold(fk));renderBoard();renderGroups();
+  const n=[...document.querySelectorAll("#board .ses[data-fold]")].find(x=>x.dataset.fold===fk);if(n)n.focus({preventScroll:true})}
+function setFoldMany(keys,v){keys.forEach(k=>{if(v)FOLD[k]=1;else delete FOLD[k]});ls.set("fold",FOLD);renderBoard();renderGroups()}
+function boardSesKeys(){const out=[];Object.values(COLSES).forEach(a=>out.push(...a));return out}
+$("#board").addEventListener("click",e=>{
+  const cf=e.target.closest("[data-colfold]");if(cf){const ks=COLSES[cf.dataset.colfold]||[];setFoldMany(ks,!ks.every(isFold));return}
+  const f=e.target.closest(".ses[data-fold]");if(f){toggleSes(f.dataset.fold);return}
+  const d=e.target.closest(".bp");if(d)selectGroup(d.dataset.r,d.dataset.g)});
+$("#board").addEventListener("keydown",e=>{if(e.key!=="Enter"&&e.key!==" ")return;
+  const f=e.target.closest(".ses[data-fold]");if(f){e.preventDefault();toggleSes(f.dataset.fold);return}
+  const d=e.target.closest(".bp");if(d){e.preventDefault();selectGroup(d.dataset.r,d.dataset.g)}});
+$("#bOpenAll").innerHTML=IC.expand+"開く";$("#bCloseAll").innerHTML=IC.collapse+"閉じる";
+$("#bOpenAll").onclick=()=>setFoldMany(boardSesKeys(),false);
+$("#bCloseAll").onclick=()=>setFoldMany(boardSesKeys(),true);
+/* ---------- 横スクロール：会場ナビ・ホイール・←→キー ---------- */
+let navHtml="";
+function renderNav(nav){
+  const h=nav.length>1?nav.map(([k,name,vc,n,t,un])=>`<button class="vchip" data-goto="${esc(k)}" style="--vc:${vc}" title="${esc(nfc(name))} へ移動"><i></i>${esc(nfc(name))}<span class="c ${t&&n===t?"done":""}">${n}/${t}</span>${un?`<span class="badge">${un}</span>`:""}</button>`).join(""):"";
+  if(h!==navHtml){$("#bchips").innerHTML=h;navHtml=h}
+  updNav();
+}
+function colStep(){const c=$("#board .col");return c?c.getBoundingClientRect().width+12:300}
+function updNav(){
+  const bd=$("#board"),nv=$("#bnav");if(!bd||!nv)return;
+  const over=VIEW==="board"&&bd.scrollWidth>bd.clientWidth+4&&navHtml!=="";
+  nv.classList.toggle("on",over);if(!over)return;
+  const br=bd.getBoundingClientRect(),lim=drawerOpen()?Math.min(br.right,innerWidth-$("#center").offsetWidth):br.right;
+  const vis=new Set();bd.querySelectorAll(".col").forEach(c=>{const r=c.getBoundingClientRect();if(r.right>br.left+40&&r.left<lim-40)vis.add(c.dataset.col)});
+  let first=null;document.querySelectorAll("#bchips .vchip").forEach(b=>{const on=vis.has(b.dataset.goto);b.classList.toggle("vis",on);if(on&&!first)first=b});
+  $("#bPrev").disabled=bd.scrollLeft<=2;$("#bNext").disabled=bd.scrollLeft+bd.clientWidth>=bd.scrollWidth-2;
+}
+function scrollCols(dir){const bd=$("#board");bd.scrollBy({left:dir*colStep(),behavior:"smooth"})}
+$("#bPrev").innerHTML=IC.chevL;$("#bNext").innerHTML=IC.chev;
+$("#bPrev").onclick=()=>scrollCols(-1);$("#bNext").onclick=()=>scrollCols(1);
+$("#bchips").addEventListener("click",e=>{const b=e.target.closest("[data-goto]");if(!b)return;
+  const c=[...document.querySelectorAll("#board .col")].find(x=>x.dataset.col===b.dataset.goto);
+  if(c){const bd=$("#board");bd.scrollTo({left:Math.max(0,c.offsetLeft-bd.offsetLeft-16),behavior:"smooth"})}});
+let navRaf=0;$("#board").addEventListener("scroll",()=>{if(navRaf)return;navRaf=requestAnimationFrame(()=>{navRaf=0;updNav()})},{passive:true});
+window.addEventListener("resize",()=>updNav());
+/* 列の中（演者の一覧）以外でホイールを回すと横に動く。列の中は今まで通り縦スクロール */
+$("#board").addEventListener("wheel",e=>{if(e.ctrlKey||e.target.closest(".list"))return;
+  if(Math.abs(e.deltaY)>Math.abs(e.deltaX)){const bd=$("#board");if(bd.scrollWidth>bd.clientWidth){bd.scrollLeft+=e.deltaY;e.preventDefault()}}},{passive:false});
+document.addEventListener("keydown",e=>{
+  if(VIEW!=="board"||e.ctrlKey||e.altKey||e.metaKey||(e.key!=="ArrowLeft"&&e.key!=="ArrowRight"))return;
+  if(e.target.closest("input,textarea,select,#center")||$("#modal").classList.contains("open"))return;
+  e.preventDefault();scrollCols(e.key==="ArrowLeft"?-1:1)});
 setView(VIEW,false);
 
 /* ---------- folder ---------- */
