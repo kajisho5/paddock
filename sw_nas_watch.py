@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.7.1  —  SEVENTHWELL
+SW NAS WATCH  v1.8.0  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
@@ -33,6 +33,7 @@ import re
 import secrets
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -47,7 +48,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.7.1"
+VERSION = "1.8.0"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -56,7 +57,7 @@ DIR = "D"                 # スナップショット上のフォルダ印
 MAX_GROUP_WAIT = 180.0    # 書き込みが続いていても、この秒数で途中経過を確定させる
 RECENT_KEEP = 6 * 3600    # フォルダ表示で「最近の変更」印を残す時間
 EVENT_KEEP = 3000
-ANA_VERSION = 2   # 解析内容を変えたら上げる（保存済みの解析結果を作り直す）
+ANA_VERSION = 3   # 解析内容を変えたら上げる（保存済みの解析結果を作り直す）  3: 動画の形式チェック
 SYNC_ANALYSIS_BUDGET = 12.0  # 通知に解析結果を載せるため、確定直後に待つ最大秒数
 
 DEFAULT_IGNORE = [
@@ -349,10 +350,284 @@ def _link_status(tgt, pptx_dir):
     rel = t.replace("\\", "/")
     p = os.path.normpath(os.path.join(pptx_dir, *[x for x in rel.split("/") if x]))
     try:
-        ok = os.path.exists(p)
+        ok = os.path.isfile(p)
     except OSError:
         ok = False
-    return ("here" if ok else "missing"), t
+    return ("here" if ok else "missing"), t, (p if ok else None)
+
+
+# ---------------------------------------------------------------- 動画の形式（コーデック）判定
+# 動画ファイルの「箱の見出し」と、形式情報（moov）だけを読む。映像データ本体は読まない。
+# 判定の根拠：PowerPoint(Windows)の推奨は H.264 + AAC の MP4。Windows標準の H.264 デコーダは
+# Baseline / Main / High（8bit・4:2:0）・レベル5.1まで。HEVC は別途「HEVC拡張」が必要。ProRes は非対応。
+PROBE_MOOV_MAX = 48 * 1024 * 1024     # moov（形式情報）の上限
+PROBE_SEQ_MAX = 64 * 1024 * 1024      # 圧縮されたZIPメンバーを前から読むときの上限
+PRORES = {"apcn", "apch", "apcs", "apco", "ap4h", "ap4x", "aprn", "aprh"}
+H264_OK = {66: "Baseline", 77: "Main", 88: "Extended", 100: "High"}
+H264_NG = {110: "High 10（10bit）", 122: "High 4:2:2", 244: "High 4:4:4", 44: "CAVLC 4:4:4"}
+
+
+class _ProbeStop(Exception):
+    pass
+
+
+class _DirectReader:
+    """ファイル（またはZIP内の無圧縮メンバー）を、必要な位置だけシークして読む。"""
+    def __init__(self, f, base, size):
+        self.f, self.base, self.size, self.used = f, base, size, 0
+
+    def read_at(self, off, n):
+        if off >= self.size:
+            return b""
+        n = min(n, self.size - off)
+        self.used += n
+        if self.used > PROBE_MOOV_MAX + (1 << 20):
+            raise _ProbeStop("読み取り量の上限")
+        self.f.seek(self.base + off)
+        return self.f.read(n)
+
+
+class _SeqReader:
+    """ZIP内の圧縮メンバー：前から順に読むしかないので、上限までで打ち切る（直前に読んだ分だけ手元に残す）。"""
+    def __init__(self, fp, size):
+        self.fp, self.size = fp, size
+        self.buf, self.boff = b"", 0        # 手元にある範囲 [boff, boff+len(buf))
+
+    def read_at(self, off, n):
+        if off < self.boff:
+            raise _ProbeStop("後戻りできません")
+        if off + n > PROBE_SEQ_MAX:
+            raise _ProbeStop("形式情報がファイルの後ろにあり、確認できません")
+        end = self.boff + len(self.buf)
+        if off >= end:
+            skip = off - end
+            while skip > 0:
+                b = self.fp.read(min(skip, 1 << 20))
+                if not b:
+                    return b""
+                skip -= len(b)
+            self.buf, self.boff = b"", off
+        else:
+            self.buf, self.boff = self.buf[off - self.boff:], off
+        while len(self.buf) < n:
+            b = self.fp.read(n - len(self.buf))
+            if not b:
+                break
+            self.buf += b
+        return self.buf[:n]
+
+
+def _boxes(buf, start, end):
+    """メモリ上のMP4ボックスを列挙（type, payload_start, box_end）。"""
+    off = start
+    while off + 8 <= end:
+        size, typ = struct.unpack(">I4s", buf[off:off + 8])
+        hdr = 8
+        if size == 1:
+            if off + 16 > end:
+                return
+            size = struct.unpack(">Q", buf[off + 8:off + 16])[0]
+            hdr = 16
+        elif size == 0:
+            size = end - off
+        if size < hdr or off + size > end:
+            return
+        yield typ.decode("latin-1"), off + hdr, off + size
+        off += size
+
+
+def _child(buf, start, end, name):
+    for t, a, b in _boxes(buf, start, end):
+        if t == name:
+            return a, b
+    return None
+
+
+def _video_entry(buf, a, b, fmt):
+    """VisualSampleEntry（a=中身の先頭, b=終わり）から、形式名と判定を返す。"""
+    out = {"vc": fmt}
+    if a + 78 <= b:
+        w, h = struct.unpack(">HH", buf[a + 24:a + 28])
+        out["w"], out["h"] = w, h
+    kids = (a + 78, b)
+    if fmt in ("avc1", "avc3"):
+        c = _child(buf, kids[0], kids[1], "avcC")
+        prof = lvl = None
+        if c and c[1] - c[0] >= 4:
+            prof, lvl = buf[c[0] + 1], buf[c[0] + 3]
+        out["name"] = "H.264" + (" %s" % (H264_OK.get(prof) or H264_NG.get(prof) or "profile %s" % prof) if prof else "")
+        if lvl:
+            out["name"] += " L%d.%d" % (lvl // 10, lvl % 10)
+        if prof in H264_NG:
+            out["v"], out["why"] = "bad", "Windows標準のH.264再生は8bit・4:2:0（High以下）まで。この形式は再生できない可能性が高い"
+        elif lvl and lvl > 51:
+            out["v"], out["why"] = "warn", "Windows標準のH.264再生の対応はレベル5.1まで。試写で確認を"
+    elif fmt in ("hvc1", "hev1", "dvh1", "dvhe"):
+        out["name"] = "HEVC（H.265）" + (" Dolby Vision" if fmt.startswith("dvh") else "")
+        out["v"], out["why"] = "bad", "Windowsは「HEVC拡張」が入っていないと再生できない（iPhone撮影の動画に多い）"
+    elif fmt in PRORES:
+        out["name"] = "Apple ProRes"
+        out["v"], out["why"] = "bad", "Windowsでは再生できない（Macで書き出した動画に多い）"
+    elif fmt == "av01":
+        out["name"] = "AV1"
+        out["v"], out["why"] = "warn", "Windowsに「AV1拡張」がないと再生できない場合がある"
+    elif fmt in ("vp08", "vp09"):
+        out["name"] = "VP8" if fmt == "vp08" else "VP9"
+        out["v"], out["why"] = "warn", "MP4/MOV内のVPx。会場PCで試写を"
+    elif fmt == "mp4v":
+        out["name"] = "MPEG-4 Part 2"
+    elif fmt in ("jpeg", "mjpa", "mjpb"):
+        out["name"] = "Motion JPEG"
+    elif fmt in ("h263", "s263"):
+        out["name"] = "H.263"
+    elif fmt in ("AVdn", "AVdh"):
+        out["name"] = "Avid DNxHD/HR"
+        out["v"], out["why"] = "bad", "Windows標準では再生できない"
+    else:
+        out["name"] = fmt.strip() or "不明"
+        out["v"], out["why"] = "warn", "一般的でない形式（%s）。会場PCで試写を" % fmt.strip()
+    if out.get("w") and out.get("h") and (out["w"] > 4096 or out["h"] > 2304) and not out.get("v"):
+        out["v"], out["why"] = "warn", "解像度が大きい（%d×%d）。会場PCで試写を" % (out["w"], out["h"])
+    return out
+
+
+def _audio_entry(buf, a, b, fmt):
+    if fmt == "mp4a":
+        name = "AAC"
+        c = _child(buf, a + 28, b, "esds")
+        if c:
+            body = buf[c[0] + 4:c[1]]
+            i = body.find(b"\x04")
+            while 0 <= i < len(body) - 2:
+                j = i + 1
+                while j < len(body) and body[j] & 0x80 and j - i < 4:
+                    j += 1
+                if j + 1 < len(body):
+                    oti = body[j + 1]
+                    if oti in (0x69, 0x6B):
+                        name = "MP3"
+                    break
+                i = body.find(b"\x04", i + 1)
+        return {"name": name}
+    if fmt in ("lpcm", "sowt", "twos", "in24", "in32", "fl32", "fl64", "raw ", "ulaw", "alaw"):
+        return {"name": "PCM"}
+    if fmt == "alac":
+        return {"name": "ALAC"}
+    if fmt == ".mp3":
+        return {"name": "MP3"}
+    if fmt in ("ac-3", "ec-3"):
+        return {"name": "Dolby Digital" + (" Plus" if fmt == "ec-3" else ""), "v": "warn",
+                "why": "音声がDolby形式。音が出ない場合があるので試写を"}
+    return {"name": fmt.strip() or "不明", "v": "warn", "why": "一般的でない音声形式（%s）。試写を" % fmt.strip()}
+
+
+def _parse_moov(buf):
+    vids, auds = [], []
+    mv = _child(buf, 0, len(buf), "moov")
+    if not mv:
+        return vids, auds
+    for t, a, b in _boxes(buf, mv[0], mv[1]):
+        if t != "trak":
+            continue
+        md = _child(buf, a, b, "mdia")
+        if not md:
+            continue
+        hd = _child(buf, md[0], md[1], "hdlr")
+        handler = buf[hd[0] + 8:hd[0] + 12].decode("latin-1") if hd and hd[1] - hd[0] >= 12 else ""
+        mi = _child(buf, md[0], md[1], "minf")
+        st = mi and _child(buf, mi[0], mi[1], "stbl")
+        sd = st and _child(buf, st[0], st[1], "stsd")
+        if not sd or sd[1] - sd[0] < 16:
+            continue
+        e0 = sd[0] + 8
+        esize, efmt = struct.unpack(">I4s", buf[e0:e0 + 8])
+        efmt = efmt.decode("latin-1")
+        ea, eb = e0 + 8, min(e0 + esize, sd[1])
+        if handler == "vide":
+            vids.append(_video_entry(buf, ea, eb, efmt))
+        elif handler == "soun":
+            auds.append(_audio_entry(buf, ea, eb, efmt))
+    return vids, auds
+
+
+def probe_video(reader, name):
+    """動画の形式を判定して {container, video, audio, v(ok/warn/bad), why} を返す。"""
+    head = reader.read_at(0, 16)
+    if len(head) < 12:
+        return {"container": "不明", "v": "warn", "why": "ファイルが短すぎます"}
+    if head[:4] == b"RIFF" and head[8:12] == b"AVI ":
+        return {"container": "AVI", "v": "warn", "why": "旧形式（AVI）。PowerPoint 2505以降は対応が限定的で、再生時に変換が入る。試写を"}
+    if head[:16] == bytes.fromhex("3026b2758e66cf11a6d900aa0062ce6c"):
+        return {"container": "WMV/ASF", "v": "warn", "why": "旧形式（WMV）。PowerPoint 2505以降は対応が限定的で、再生時に変換が入る。試写を"}
+    if head[:4] in (b"\x00\x00\x01\xba", b"\x00\x00\x01\xb3"):
+        return {"container": "MPEG-1/2", "v": "warn", "why": "旧形式（MPEG-2）。PowerPoint 2505以降は対応が限定的。試写を"}
+    if head[:4] == b"\x1a\x45\xdf\xa3":
+        return {"container": "WebM/MKV", "v": "warn", "why": "WebM/MKV。音声がVorbisなどだと拡張が必要。試写を"}
+    typ = head[4:8]
+    if typ not in (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip", b"pnot", b"uuid"):
+        return {"container": "不明", "v": "warn", "why": "動画の形式を判別できません。試写を"}
+    container = "MOV" if (typ == b"ftyp" and head[8:12] == b"qt  ") or typ in (b"wide", b"pnot", b"mdat") \
+        else ("MP4" if typ == b"ftyp" else "MP4/MOV")
+    off, n = 0, 0
+    while n < 10000:
+        n += 1
+        h = reader.read_at(off, 16)
+        if len(h) < 8:
+            break
+        size, t = struct.unpack(">I4s", h[:8])
+        if size == 1 and len(h) >= 16:
+            size = struct.unpack(">Q", h[8:16])[0]
+        elif size == 0:
+            size = reader.size - off
+        if size < 8:
+            break
+        if t == b"moov":
+            if size > PROBE_MOOV_MAX:
+                raise _ProbeStop("形式情報が大きすぎます")
+            vids, auds = _parse_moov(reader.read_at(off, size))
+            if not vids:
+                return {"container": container, "v": "warn", "why": "映像トラックが見つかりません"}
+            v = vids[0]
+            out = {"container": container, "video": v["name"], "audio": auds[0]["name"] if auds else "なし"}
+            if v.get("w"):
+                out["res"] = "%d×%d" % (v["w"], v["h"])
+            worst = [x for x in [v] + auds if x.get("v") == "bad"] or [x for x in [v] + auds if x.get("v") == "warn"]
+            if worst:
+                out["v"], out["why"] = worst[0]["v"], worst[0]["why"]
+            else:
+                out["v"] = "ok"
+            return out
+        off += size
+    return {"container": container, "v": "warn", "why": "形式情報（moov）が見つかりません。試写を"}
+
+
+def probe_zip_member(f, z, name):
+    info = z.getinfo(name)
+    if info.flag_bits & 0x1:
+        return {"container": "不明", "v": "warn", "why": "暗号化されています"}
+    if info.compress_type == zipfile.ZIP_STORED:
+        f.seek(info.header_offset)
+        lh = f.read(30)
+        if len(lh) < 30 or lh[:4] != b"PK\x03\x04":
+            raise _ProbeStop("ZIPの構造が読めません")
+        nlen, elen = struct.unpack("<HH", lh[26:30])
+        return probe_video(_DirectReader(f, info.header_offset + 30 + nlen + elen, info.file_size), name)
+    with z.open(name) as fp:
+        return probe_video(_SeqReader(fp, info.file_size), name)
+
+
+def probe_file(path):
+    """リンク動画（同じフォルダにある実ファイル）の形式。開き方は解析と同じ安全な読み取り専用。"""
+    f = open_ro(path)
+    try:
+        st0 = os.fstat(f.fileno())
+        r = probe_video(_DirectReader(f, 0, st0.st_size), path)
+        st1 = os.fstat(f.fileno())
+        if (st0.st_size, st0.st_mtime_ns) != (st1.st_size, st1.st_mtime_ns):
+            raise _ProbeStop("読み取り中に変更されました")
+        return r
+    finally:
+        f.close()
 
 
 def analyze_pptx(path, coi):
@@ -375,7 +650,7 @@ def analyze_pptx(path, coi):
                 return fail("パスワード付き（暗号化）のため解析できません")
             return fail("PowerPointとして読めません（破損・コピー途中の可能性）", retry=True)
         with z:
-            res = _parse_pptx(z, path, coi)
+            res = _parse_pptx(z, path, coi, f)
         st1 = os.fstat(f.fileno())
         if (st0.st_size, st0.st_mtime_ns) != (st1.st_size, st1.st_mtime_ns):
             return fail("読み取り中にファイルが変更されました", retry=True)
@@ -389,7 +664,7 @@ def analyze_pptx(path, coi):
         f.close()
 
 
-def _parse_pptx(z, path, coi):
+def _parse_pptx(z, path, coi, f=None):
     names = set(z.namelist())
     budget = [200 * 1024 * 1024]
 
@@ -486,10 +761,12 @@ def _parse_pptx(z, path, coi):
                     av = t if t in ("video", "audio") else ("audio" if ext_of(fname) in AUDIO_EXTS else "video")
                     m = {"s": [], "name": fname, "av": av}
                     if ext:
-                        st, disp = _link_status(tgt, pptx_dir)
+                        st, disp, lp = _link_status(tgt, pptx_dir)
                         m.update(kind="online" if st == "online" else "link", st=st, target=disp)
+                        if lp:
+                            m["_lp"] = lp
                     else:
-                        m.update(kind="embed", size=z.getinfo(key[0]).file_size if key[0] in names else None)
+                        m.update(kind="embed", size=z.getinfo(key[0]).file_size if key[0] in names else None, _part=key[0])
                     media[key] = m
                 elif t in ("video", "audio"):
                     m["av"] = t
@@ -513,6 +790,22 @@ def _parse_pptx(z, path, coi):
 
     vids = [m for m in media.values() if m["av"] == "video"]
     auds = [m for m in media.values() if m["av"] == "audio"]
+    # 動画の形式（会場PCで再生できるか）。見出しと形式情報だけを読む。失敗しても解析全体は止めない
+    for m in vids[:12]:
+        lp = m.pop("_lp", None)
+        try:
+            if m["kind"] == "embed" and f is not None:
+                key = _resolve("", m.get("_part", "")) if m.get("_part") else None
+                if key and key in names:
+                    m["fmt"] = probe_zip_member(f, z, key)
+            elif lp and ext_of(lp) in VIDEO_EXTS:
+                m["fmt"] = probe_file(lp)
+        except (_ProbeStop, OSError, UnsafeOpen, ValueError, struct.error, zipfile.BadZipFile,
+                RuntimeError, EOFError, NotImplementedError, IndexError, KeyError) as e:
+            m["fmt"] = {"container": "不明", "v": "unk", "why": "形式を確認できません（%s）" % (str(e) or type(e).__name__)}
+    for m in list(media.values()):
+        m.pop("_lp", None)
+        m.pop("_part", None)
     return {"v": ANA_VERSION, "ok": True, "slides": len(order), "hidden": hidden[:1000],
             "video": vids[:60], "audio": auds[:60], "links": list(links.values())[:80],
             "other": list(other.values())[:40], "coi": coi_hits[:10], "auto": auto[:2000],
@@ -527,6 +820,8 @@ def ana_sum(r):
     return {"slides": r["slides"], "video": len(v),
             "vlink": sum(1 for x in v if x["kind"] != "embed"),
             "vbad": sum(1 for x in v if x.get("st") in ("missing", "abs")),
+            "vfbad": sum(1 for x in v if (x.get("fmt") or {}).get("v") == "bad"),
+            "vfwarn": sum(1 for x in v if (x.get("fmt") or {}).get("v") == "warn"),
             "links": r.get("n_links", len(r["links"])), "other": r.get("n_other", len(r["other"])),
             "coi": bool(r["coi"]),
             "auto": len(r["auto"]) if r["use_timings"] else 0,
@@ -538,7 +833,8 @@ def ana_text(s):
     if s.get("err"):
         return "解析不可（%s）" % s["err"]
     parts = [
-        "動画なし" if not s["video"] else "動画あり(%d%s)" % (s["video"], "・外部%d" % s["vlink"] if s["vlink"] else ""),
+        "動画なし" if not s["video"] else "動画あり(%d%s)" % (s["video"], "・外部%d" % s["vlink"] if s["vlink"] else "")
+        + ("・再生できない形式%d" % s["vfbad"] if s.get("vfbad") else "") + ("・形式要確認%d" % s["vfwarn"] if s.get("vfwarn") else ""),
         "リンクなし" if not s["links"] else "リンクあり(%d)" % s["links"],
         "COIあり" if s["coi"] else "COIなし",
         "自動送りなし" if not s["auto"] else "自動送りあり(%d枚)" % s["auto"],
@@ -548,7 +844,8 @@ def ana_text(s):
 
 
 def ana_warn(s):
-    return bool(s.get("err") or s.get("vlink") or not s.get("coi") or s.get("noclick") or s.get("kiosk"))
+    return bool(s.get("err") or s.get("vlink") or not s.get("coi") or s.get("noclick") or s.get("kiosk")
+                or s.get("vfbad") or s.get("vfwarn"))
 
 
 # ---------------------------------------------------------------- local storage
@@ -1380,7 +1677,13 @@ class Watcher(threading.Thread):
                 names = [show(x) for x in sorted(dadd + ddel)]
             detail = "、".join(names[:3]) + (" ほか%d件" % (len(names) - 3) if len(names) > 3 else "")
         title = base(g) if g else self.root_title()
-        return self._ev(kinds[0], kinds, g, title, " / ".join(parts), detail, items, flag)
+        extra = None
+        if g and (adds or mods or renames or dels):
+            # 差し替え判定用：この変化の前後で演者フォルダにあったファイル数
+            pre = g + "/"
+            fa = sum(1 for k, v in self.committed.items() if v != DIR and k.startswith(pre))
+            extra = {"fchg": True, "fa": fa, "fb": fa - len(adds) + len(dels)}
+        return self._ev(kinds[0], kinds, g, title, " / ".join(parts), detail, items, flag, extra)
 
     def _ev(self, kind, kinds, g, title, summary, detail, items, flag, extra=None):
         ev = {"kind": kind, "kinds": kinds, "root": self.id, "root_label": self.label, "group": g,
@@ -1418,7 +1721,11 @@ class Watcher(threading.Thread):
         for k, (sig, _t, _f) in self.pending.items():
             key = group_of(k, sig if sig is not None else (self.committed or {}).get(k), self.depth)
             if key in g:
-                g[key]["pending"] += 1
+                s = g[key]
+                s["pending"] += 1
+                if sig is not None and sig != DIR:
+                    s["pbytes"] = s.get("pbytes", 0) + sig[0]   # 受信中のファイルの今のサイズ（進み具合の表示用）
+                s["pstart"] = min(s.get("pstart", _f), _f)
         out = []
         for key, s in g.items():
             if key == "" and s["files"] == 0 and s["pending"] == 0:
@@ -2088,6 +2395,9 @@ class Manager:
         self.seen = {k: int(v) for k, v in (st.get("seen") or {}).items()}
         self.seen_lock = threading.Lock()
         self.seen_floor = int(st.get("seen_floor", 0))
+        # 演者フォルダごとの受付時刻と、受付後の変更（差し替え）回数。"root|group" -> {"recv","n","last","sum"}
+        tr = store.read_json("track.json", {}) or {}
+        self.track = {k: v for k, v in tr.items() if isinstance(v, dict)} if isinstance(tr, dict) else {}
         self.next_id = 1
         self._load_events()
         store.roots = [r["path"] for r in cfg["roots"]]
@@ -2171,11 +2481,48 @@ class Manager:
     def total_ver(self):
         return self.ver + self.copier.ver + sum(w.ver for w in list(self.watchers.values()))
 
+    def _track(self, ev):
+        """受付（初めてファイルが入った）と、その後の変更（差し替え）を数える。cond を持った状態で呼ぶ。"""
+        g = ev.get("group")
+        if not g or ev.get("sys"):
+            return False
+        key = "%s|%s" % (ev.get("root"), g)
+        kinds = ev.get("kinds") or [ev.get("kind")]
+        if ev.get("kind") == "folder_rename" and ev.get("from_group"):
+            old = self.track.pop("%s|%s" % (ev.get("root"), ev["from_group"]), None)
+            if old is not None:
+                self.track[key] = old
+                return True
+            return False
+        if "folder_del" in kinds:
+            return self.track.pop(key, None) is not None
+        if not ev.get("fchg"):
+            return False
+        rec = self.track.get(key)
+        if (rec and rec.get("recv")) or ev.get("fb", 0) > 0:
+            rec = rec or {"recv": None, "n": 0}
+            rec["n"] = int(rec.get("n", 0)) + 1
+            rec["last"] = ev["ts"]
+            rec["sum"] = ev.get("summary", "")[:80]
+            self.track[key] = rec
+            ev["repl"] = rec["n"]
+            return True
+        if ev.get("fa", 0) > 0:
+            self.track[key] = {"recv": ev["ts"], "n": 0}
+            ev["recv"] = True
+            return True
+        return False
+
     def emit(self, ev):
         with self.cond:
             ev["id"] = self.next_id
             self.next_id += 1
             ev["ts"] = time.time()
+            if self._track(ev):
+                try:
+                    self.store.write_json("track.json", self.track)
+                except Exception as e:
+                    self.log("track save failed: %s" % e)
             self.events.append(ev)
             self.cond.notify_all()
         try:
@@ -2183,7 +2530,8 @@ class Manager:
         except Exception as e:
             self.log("event log write failed: %s" % e)
         g = "" if ev.get("group") is None else ev["group"]
-        self.log("%s  %s / %s  %s %s" % (ev["kind"].upper(), ev.get("root_label", ""), g, ev.get("summary", ""), ev.get("detail", "")))
+        self.log("%s  %s / %s  %s %s%s" % (ev["kind"].upper(), ev.get("root_label", ""), g, ev.get("summary", ""),
+                                           ev.get("detail", ""), "  [差し替え %d回目]" % ev["repl"] if ev.get("repl") else ""))
         for a in ev.get("ana") or []:
             self.log("      %s: %s" % (a["file"], a.get("text") or a.get("na") or "解析待ち"))
         return ev["id"]
@@ -2278,7 +2626,8 @@ class Manager:
         return {"ver": self.total_ver(), "boot": self.boot, "now": time.time(), "roots": roots}
 
     def group_ana(self, w, px):
-        a = {"n": 0, "done": 0, "video": 0, "vwarn": 0, "links": 0, "coi": 0, "auto": 0, "noclick": 0, "err": 0, "na": 0}
+        a = {"n": 0, "done": 0, "video": 0, "vwarn": 0, "vfbad": 0, "vfwarn": 0, "links": 0, "coi": 0, "auto": 0,
+             "noclick": 0, "err": 0, "na": 0}
         for rel, sig in px:
             if ana_kind(rel) != "pptx":
                 a["na"] += 1
@@ -2294,6 +2643,8 @@ class Manager:
                 continue
             a["video"] += s["video"]
             a["vwarn"] += s["vlink"]
+            a["vfbad"] += s.get("vfbad", 0)
+            a["vfwarn"] += s.get("vfwarn", 0)
             a["links"] += s["links"]
             a["coi"] += 1 if s["coi"] else 0
             a["auto"] += s["auto"]
@@ -2336,6 +2687,12 @@ class Manager:
                     if le:
                         gsum["last_ts"] = le["ts"]
                         gsum["last_kind"] = le["kind"]
+                    tr = self.track.get(k)
+                    if tr:
+                        if tr.get("recv"):
+                            gsum["recv_ts"] = tr["recv"]
+                        if tr.get("n"):
+                            gsum["repl"], gsum["repl_ts"], gsum["repl_sum"] = tr["n"], tr.get("last"), tr.get("sum", "")
                 d["groups"] = groups
             else:
                 d.update({"online": None, "error": "", "groups": [], "count": 0, "pending": 0, "warns": []})
@@ -2363,7 +2720,8 @@ class Manager:
             e["u"] = self.is_unread(e)
         full = os.path.join(w.path, *group.split("/")) if group else w.path
         out = {"root": rid, "group": group, "label": w.label, "path": full, "items": items,
-               "events": evs, "exists": group == "" or group in w.current, "now": time.time()}
+               "events": evs, "exists": group == "" or group in w.current, "now": time.time(),
+               "track": self.track.get("%s|%s" % (rid, group))}
         op = self.cfg["op"]
         if op["enabled"] and op["root"] == rid:
             prefix = (op["venue"] + "/") if op["venue"] else ""
@@ -3090,6 +3448,18 @@ textarea#coi{height:100px}
 .drow input[type=text]{width:100%}
 .drow label{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted-fg);white-space:nowrap}
 #opBox select{min-width:240px}
+/* 差し替え・受信の進み具合 */
+.t-repl,.k-repl{background:rgba(139,92,246,.15);color:#c4b5fd;border-color:rgba(139,92,246,.4)}
+.rx{flex:1 1 100%;display:flex;align-items:center;gap:8px;min-width:0;font:500 11.5px var(--mono);color:var(--amber)}
+.rx .rbar{flex:1 1 auto;max-width:180px;min-width:60px;height:6px;border-radius:999px;background:rgba(245,158,11,.15);overflow:hidden}
+.rx .rbar i{display:block;height:100%;border-radius:999px;background:var(--amber)}
+.rx .rbar.ind i{width:100%;background:repeating-linear-gradient(-45deg,rgba(251,191,36,.95) 0 7px,rgba(251,191,36,.35) 7px 14px);background-size:20px 20px;animation:stripe .8s linear infinite}
+.rx .rt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.bp .rx .rbar{flex:0 0 56px;min-width:0}
+.rx.op{color:#c4b5fd}.rx.op .rbar{background:rgba(139,92,246,.18)}.rx.op .rbar i{background:var(--violet)}
+@keyframes stripe{to{background-position:20px 0}}
+.vfmt{display:block;margin-top:3px;font-size:12px;color:var(--muted-fg)}
+.vfmt b{font-weight:600}
 /* 表示切替（リスト / 会場ボード） */
 .seg{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;flex:none;box-shadow:0 1px 2px rgba(0,0,0,.25)}
 .seg button{height:30px;border:0;border-radius:0;box-shadow:none;background:transparent;color:var(--muted-fg);padding:0 12px;font-size:12.5px}
@@ -3296,7 +3666,7 @@ function effVenue(){return OPON()&&S.op.venue?S.op.root+"|"+S.op.venue:VENUE}
 function inVenue(root,group){const V=effVenue();if(!V)return true;const i=V.indexOf("|");if(root!==V.slice(0,i))return false;if(group==null||group==="")return true;return group.split("/")[0]===V.slice(i+1)}
 
 async function loadState(){
-  S=await api("/api/state");
+  S=await api("/api/state");updateRates();
   if(!ready){ready=true;lastId=S.last_event_id;boot=S.boot;connect();}
   renderAll();
   if(SEL&&!rootById(SEL.root)){SEL=null;ls.set("sel",null);renderFolderEmpty();return}
@@ -3369,7 +3739,7 @@ function flushN(){
     n.onclick=e=>{e.preventDefault();window.focus();showLog();n.close()};return;
   }
   items.forEach(i=>{const x=i.x;
-    const n=new Notification((x.while_stopped?"[停止中の変更] ":"")+(i.kind==="inc"?"受信中: ":"")+nfc(x.title),{body:bodyOf(x),tag:i.tag,renotify:i.re,requireInteraction:!!S.ui.sticky,silent:!!S.ui.sound||!i.sound});
+    const n=new Notification((x.while_stopped?"[停止中の変更] ":"")+(i.kind==="inc"?"受信中: ":"")+(x.repl?"【差し替え"+x.repl+"回目】":"")+nfc(x.title),{body:bodyOf(x),tag:i.tag,renotify:i.re,requireInteraction:!!S.ui.sticky,silent:!!S.ui.sound||!i.sound});
     n.onclick=e=>{e.preventDefault();window.focus();if(x.group!=null){selectGroup(x.root,x.group);if(S.ui.click==="both"&&S.ui.os_open)openOS(x.root,x.group)}else showLog();n.close()};
   });
 }
@@ -3449,11 +3819,43 @@ function setVenue(v){VENUE=v;ls.set("venue",VENUE);renderVenue();renderGroups();
 $("#venue").addEventListener("change",()=>setVenue($("#venue").value));
 $("#bvenue").addEventListener("change",()=>setVenue($("#bvenue").value));
 
+/* 差し替え（受付後の変更）回数 */
+function replTag(g){if(!g||!g.repl)return"";
+  return `<span class="tag t-repl" title="受付後に${g.repl}回変更されています${g.repl_ts?"（最終 "+dtm(g.repl_ts)+(g.repl_sum?"："+esc(g.repl_sum):"")+"）":""}">差替 ${g.repl}</span>`}
+/* 受信中（NASへ書き込み中）の進み具合。全体のサイズはNASの一覧からは分からないので、受信済みサイズ・速度・経過時間を出す */
+const RATE={};let SKEW=0;
+function updateRates(){
+  if(!S)return;SKEW=S.now-Date.now()/1000;const live=new Set();
+  for(const r of S.roots)for(const g of (r.groups||[])){if(!g.pending)continue;const k=r.id+"|"+g.key;live.add(k);
+    const b=g.pbytes||0,x=RATE[k];
+    if(!x){RATE[k]={b,t:S.now,v:null};continue}
+    const dt=S.now-x.t;if(dt<1.5)continue;
+    const dv=(b-x.b)/dt;x.v=dv>0?(x.v?x.v*.5+dv*.5:dv):(dt>6?0:x.v);x.b=b;x.t=S.now}
+  Object.keys(RATE).forEach(k=>{if(!live.has(k))delete RATE[k]});
+}
+function mss(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s2=sec%60;return (h?h+":"+p2(m):m)+":"+p2(s2)}
+function rxText(rid,g){const x=RATE[rid+"|"+g.key];const sp=x&&x.v>0?" · "+fmtSize(x.v)+"/s":"";
+  return `受信中${g.pending>1?" "+g.pending+"件":""}${g.pbytes?" "+fmtSize(g.pbytes):""}${sp} · <span data-ps="${g.pstart||""}">${g.pstart?mss(S.now-g.pstart):""}</span>`}
+function opActiveFor(rid,g){if(!OPON()||rid!==S.op.root||!S.op.active)return null;const a=S.op.active;return a.rel.startsWith(g.key+"/")?a:null}
+function progHtmlRow(r,g){
+  let h="";
+  if(g.pending)h+=`<div class="rx" title="NASへの書き込み中（全体のサイズはNASの一覧からは分からないため、受信済みサイズと速度を表示）"><span class="rbar ind"><i></i></span><span class="rt">${rxText(r.id,g)}</span></div>`;
+  const a=opActiveFor(r.id,g);
+  if(a){const pct=a.total?Math.floor(a.done*100/a.total):0;const lb=(S.op.dests||[]).filter(d=>(a.dests||[]).includes(d.id)).map(d=>d.label).join("・");
+    h+=`<div class="rx op" title="${esc(nfc(a.rel))}"><span class="rbar"><i style="width:${pct}%"></i></span><span class="rt">${esc(lb)}へコピー ${pct}% · ${esc(nfc(a.rel.split("/").pop()))}</span></div>`}
+  return h;
+}
+setInterval(()=>{if(!S)return;const now=Date.now()/1000+SKEW;document.querySelectorAll("[data-ps]").forEach(e=>{const ps=+e.dataset.ps;if(ps)e.textContent=mss(now-ps)})},1000);
 function anaChips(a){
   if(!a||!a.n)return"";let h="";
   if(a.done<a.n)h+=`<span class="tag t-dim">解析中</span>`;
   if(a.err)h+=`<span class="tag t-bad">解析不可</span>`;
-  if(a.video)h+=a.vwarn?`<span class="tag t-bad">外部動画⚠</span>`:`<span class="tag t-info">動画あり</span>`;
+  if(a.video){
+    if(a.vwarn)h+=`<span class="tag t-bad">外部動画⚠</span>`;
+    if(a.vfbad)h+=`<span class="tag t-bad" title="会場のWindows PCで再生できない可能性が高い形式の動画があります">動画形式NG</span>`;
+    else if(a.vfwarn)h+=`<span class="tag t-warn" title="形式の確認が必要な動画があります（試写推奨）">動画要試写</span>`;
+    if(!a.vwarn&&!a.vfbad&&!a.vfwarn)h+=`<span class="tag t-info">動画あり</span>`;
+  }
   if(a.links)h+=`<span class="tag t-info">リンクあり</span>`;
   if(a.done===a.n&&a.done>a.err)h+=a.coi?`<span class="tag t-ok">COI</span>`:`<span class="tag t-warn">COIなし</span>`;
   if(a.auto)h+=`<span class="tag t-warn">自動送り</span>`;
@@ -3548,7 +3950,7 @@ function rowHtml(r,g,hier){
   const st=g.key===""?"":recvState(g);
   const sti=st==="recv"?`<span class="sti" title="受付済み">${IC.ok}</span>`:st==="copying"?`<span class="sti" title="コピー中">${IC.spin}</span>`:st==="none"?`<span class="sti" title="未受付">${IC.todo}</span>`:"";
   const cps=OPON()&&g.cp?opDests().map(d=>g.cp[d.id]?cpPill(d.label,g.cp[d.id]):"").join(""):"";
-  const meta=st==="none"?`<span class="tag t-dim">未受付</span>`:`${cps}${g.pending?`<span class="copying">● コピー中 ${g.pending}</span>`:""}<span>${g.files}ファイル</span><span>${fmtSize(g.size)}</span>${anaChips(g.ana)}${cats}${g.last_kind?kindPill(g.last_kind):""}`;
+  const meta=st==="none"?`<span class="tag t-dim">未受付</span>${progHtmlRow(r,g)}`:`${cps}${replTag(g)}<span>${g.files}ファイル</span><span>${fmtSize(g.size)}</span>${anaChips(g.ana)}${cats}${g.last_kind?kindPill(g.last_kind):""}${progHtmlRow(r,g)}`;
   return `<div class="grp ${hier?"hier":""} ${st?"st-"+st:""} ${g.unread?"unread":""} ${isSel?"sel":""} ${flashKeys.has(r.id+"|"+g.key)?"flash":""}" data-r="${esc(r.id)}" data-g="${esc(g.key)}">
     <div class="n">${sti}<span class="nm">${pre}${esc(nfc(name))}</span>${g.unread?`<span class="badge">${g.unread}</span>`:""}<span class="ago">${g.last_ts?ago(g.last_ts):""}</span></div>
     <div class="meta">${meta}</div></div>`;
@@ -3576,7 +3978,7 @@ function renderLog(){
   if(!evs.length){el.innerHTML=`<div class="empty"><div class="ico">${IC.inbox}</div><b>まだ変更はありません</b>NAS上のフォルダに変化があるとここに出ます。</div>`;return}
   const multi=S.roots.length>1;
   el.innerHTML=evs.map(e=>`<div class="ev ${e.u?"u":""}" data-id="${e.id}">
-    <div class="top"><span class="t">${dtm(e.ts)}</span>${kindPill(e.kind)}<span class="ti">${esc(nfc(e.title))}</span>${e.while_stopped?`<span class="ws" title="アプリ停止中に起きた変更">停止中</span>`:""}</div>
+    <div class="top"><span class="t">${dtm(e.ts)}</span>${kindPill(e.kind)}${e.repl?`<span class="kind k-repl">差替${e.repl}</span>`:""}<span class="ti">${esc(nfc(e.title))}</span>${e.while_stopped?`<span class="ws" title="アプリ停止中に起きた変更">停止中</span>`:""}</div>
     ${e.where?`<div class="wh">${venueOf(e.root,e.group)?`<span class="vdot" style="--vc:${vColor(e.root,venueOf(e.root,e.group))}"></span>`:""}${esc(whereText(e.where))}</div>`:""}
     <div class="sm">${esc(e.summary)}</div>${e.detail?`<div class="dt">${esc(nfc(e.detail))}</div>`:""}
     ${(e.ana||[]).map(a=>`<div class="an ${a.warn?"w":""}">▸ ${esc(nfc(a.file))}: ${esc(a.text||a.na||"解析待ち")}</div>`).join("")}
@@ -3620,10 +4022,10 @@ function bpRow(r,g){
   const sti=st==="recv"?IC.ok:st==="copying"?IC.spin:IC.todo;
   const cps=OPON()&&g.cp?opDests().map(d=>g.cp[d.id]?cpPill(d.label,g.cp[d.id]):"").join(""):"";
   const cats=Object.entries(g.cats||{}).filter(([c])=>!(g.ana&&c==="PPT")).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([c,n])=>`<span class="chip c-${esc(c)}">${esc(c)}${n>1?" "+n:""}</span>`).join("");
-  const tags=st==="none"?`<span class="tag t-dim">未受付</span>`:(st==="copying"?`<span class="tag t-warn copying">コピー中</span>`:"")+cps+anaChips(g.ana)+cats;
+  const tags=st==="none"?`<span class="tag t-dim">未受付</span>`:replTag(g)+cps+anaChips(g.ana)+cats;
   const stl=st==="recv"?"受付済み":st==="copying"?"コピー中":"未受付";
-  const tip=nfc(name)+"\n"+stl+(g.files?` · ${g.files}ファイル · ${fmtSize(g.size)}`:"")+(g.last_ts?` · 最終変更 ${ago(g.last_ts)}`:"")+(g.unread?` · 未確認 ${g.unread}`:"");
-  return `<div class="bp st-${st} ${g.unread?"unread":""} ${isSel?"sel":""} ${flashKeys.has(r.id+"|"+g.key)?"flash":""}" data-r="${esc(r.id)}" data-g="${esc(g.key)}" tabindex="0" role="button" title="${esc(tip)}"><span class="sti">${sti}</span><span class="nm">${esc(nfc(name))}</span>${g.unread?`<span class="badge">${g.unread}</span>`:""}${tags?`<span class="tg">${tags}</span>`:""}</div>`;
+  const tip=nfc(name)+"\n"+stl+(g.files?` · ${g.files}ファイル · ${fmtSize(g.size)}`:"")+(g.recv_ts?` · 受付 ${dtm(g.recv_ts)}`:"")+(g.repl?` · 差し替え ${g.repl}回`:"")+(g.last_ts?` · 最終変更 ${ago(g.last_ts)}`:"")+(g.unread?` · 未確認 ${g.unread}`:"");
+  return `<div class="bp st-${st} ${g.unread?"unread":""} ${isSel?"sel":""} ${flashKeys.has(r.id+"|"+g.key)?"flash":""}" data-r="${esc(r.id)}" data-g="${esc(g.key)}" tabindex="0" role="button" title="${esc(tip)}"><span class="sti">${sti}</span><span class="nm">${esc(nfc(name))}</span>${g.unread?`<span class="badge">${g.unread}</span>`:""}${tags?`<span class="tg">${tags}</span>`:""}${progHtmlRow(r,g)}</div>`;
 }
 function renderBoard(){
   if(VIEW!=="board"||!S)return;
@@ -3704,11 +4106,16 @@ function renderFolderEmpty(){$("#fold").innerHTML=`<div class="empty" style="pad
 function sortKey(p,isDir){const s=p.split("/");return s.map((x,i)=>((i<s.length-1||isDir)?"0":"1")+x)}
 function cmpKeys(a,b){for(let i=0;i<Math.min(a.length,b.length);i++){if(a[i]!==b[i]){if(a[i][0]!==b[i][0])return a[i][0]<b[i][0]?-1:1;return cmpName(a[i].slice(1),b[i].slice(1))}}return a.length-b.length}
 
+function vfmtLine(v){const f=v.fmt;if(!f)return"";
+  const parts=[f.container,f.video,f.audio&&("音声 "+f.audio),f.res].filter(Boolean).map(x=>esc(x)).join(" · ");
+  const cls=f.v==="bad"?"o-del":f.v==="warn"?"o-mod":f.v==="unk"?"":"o-add";
+  const lab=f.v==="bad"?"再生できない可能性大":f.v==="warn"?"要試写":f.v==="unk"?"形式不明":"再生OK（H.264等）";
+  return `<span class="vfmt">形式：${parts||"—"}　<b class="${cls}">${lab}</b>${f.why?`<br><span class="${cls}">${esc(f.why)}</span>`:""}</span>`}
 function vline(v){
   const st={here:["同じフォルダにあり","o-add"],missing:["見つかりません","o-del"],abs:["発表者PCのパス（会場PCでは再生できない可能性大）","o-del"],unc:["ネットワーク上のパス","o-mod"],online:["ネット接続が必要","o-mod"]};
-  if(v.kind==="embed")return `<span class="sub">${sl(v.s)}　埋め込み ${esc(v.name)}${v.size?" · "+fmtSize(v.size):""}</span>`;
+  if(v.kind==="embed")return `<span class="sub">${sl(v.s)}　埋め込み ${esc(v.name)}${v.size?" · "+fmtSize(v.size):""}${vfmtLine(v)}</span>`;
   const x=st[v.st]||["外部リンク","o-mod"];
-  return `<span class="sub">${sl(v.s)}　<b class="${x[1]}">${v.kind==="online"?"オンライン動画":"リンク動画"}</b> ${esc(nfc(v.target||v.name))} — <span class="${x[1]}">${x[0]}</span></span>`;
+  return `<span class="sub">${sl(v.s)}　<b class="${x[1]}">${v.kind==="online"?"オンライン動画":"リンク動画"}</b> ${esc(nfc(v.target||v.name))} — <span class="${x[1]}">${x[0]}</span>${vfmtLine(v)}</span>`;
 }
 function autoText(auto){const m=new Map();auto.forEach(([s,sec])=>{if(!m.has(sec))m.set(sec,[]);m.get(sec).push(s)});return [...m].map(([sec,ss])=>`${sl(ss)}：${sec}秒`).join("　")}
 function anaCard(it){
@@ -3718,7 +4125,8 @@ function anaCard(it){
   if(!a.ok)return `<div class="ana"><div class="hd">${chip}<span class="fn">${nm}</span><span class="tag t-bad">解析できません</span></div><div class="msg">${esc(a.error||"")}</div></div>`;
   const rows=[];
   if(!a.video.length)rows.push(["動画","t-dim","なし",""]);
-  else{const bad=a.video.some(v=>v.kind!=="embed");rows.push(["動画",bad?"t-bad":"t-info",`あり ${a.video.length}`,a.video.map(vline).join("")])}
+  else{const fbad=a.video.some(v=>v.fmt&&v.fmt.v==="bad"),fw=a.video.some(v=>v.fmt&&v.fmt.v==="warn");const bad=fbad||a.video.some(v=>v.kind!=="embed");
+    rows.push(["動画",bad?"t-bad":fw?"t-warn":"t-info",`あり ${a.video.length}${fbad?"（再生できない形式あり）":fw?"（要試写）":""}`,a.video.map(vline).join("")])}
   const nl=a.n_links!=null?a.n_links:a.links.length;
   let ls2=a.links.slice(0,8).map(l=>`<span class="sub">${sl(l.s)}　${esc(l.url)}</span>`).join("")+(nl>8?`<span class="sub">ほか ${nl-8} 件</span>`:"");
   if(a.other&&a.other.length)ls2+=a.other.slice(0,5).map(o=>`<span class="sub">${sl(o.s)}　<b class="o-mod">外部リンク(${esc(o.type)})</b> ${esc(o.target)}</span>`).join("");
@@ -3745,7 +4153,7 @@ function renderFolder(){
   const fv=venueOf(F.root,F.group);
   let h=`<div class="fh"><div class="crumb"><span>${esc(nfc(F.label))}</span>${segs.length>1?segs.slice(0,-1).map((s,i)=>i===0&&fv?`${IC.chev}<span class="vbadge" style="--vc:${vColor(F.root,fv)}">${IC.building}${esc(nfc(s))}</span>`:`${IC.chev}<b>${esc(nfc(s))}</b>`).join(""):""}</div>
     <h1>${esc(nfc(name))}</h1>
-    <div class="facts">${F.group===""?"":pend?`<span class="rtag copying">${IC.spin}コピー中</span>`:files.length?`<span class="rtag recv">${IC.ok}受付済み</span>`:`<span class="rtag none">${IC.todo}未受付</span>`}<span>${files.length} ファイル</span><span>${fmtSize(size)}</span>${latest?`<span>最終更新 ${dtm(latest)}</span>`:""}${pend?`<span class="copying">● コピー中/確定待ち ${pend}</span>`:""}</div>
+    <div class="facts">${F.group===""?"":pend?`<span class="rtag copying">${IC.spin}コピー中</span>`:files.length?`<span class="rtag recv">${IC.ok}受付済み</span>`:`<span class="rtag none">${IC.todo}未受付</span>`}<span>${files.length} ファイル</span><span>${fmtSize(size)}</span>${latest?`<span>最終更新 ${dtm(latest)}</span>`:""}${F.track&&F.track.recv?`<span>受付 ${dtm(F.track.recv)}</span>`:""}${F.track&&F.track.n?`<span class="tag t-repl">差し替え ${F.track.n}回（最終 ${dtm(F.track.last)}）</span>`:""}${pend?`<span class="copying">● コピー中/確定待ち ${pend}</span>`:""}${(()=>{const rr=rootById(F.root);const gg=rr&&(rr.groups||[]).find(x=>x.key===F.group);return rr&&gg?progHtmlRow(rr,gg):""})()}</div>
     <div class="acts">${S.local&&S.ui.os_open?`<button id="bOpen" title="NAS上のフォルダを${osName}で開く">${IC.ext}${osName}で開く</button>`:""}<button id="bCopy">${IC.copy}パスをコピー</button>
       ${Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<span class="chip c-${esc(c)}">${esc(c)} ${n}</span>`).join("")}</div>
     <div class="pathline">${esc(nfc(F.path))}</div></div>`;
@@ -3765,7 +4173,7 @@ function renderFolder(){
         const sz=it.op==="mod"&&it.old_size!=null?`${fmtSize(it.old_size)} → ${fmtSize(it.size)}`:it.size!=null?fmtSize(it.size):"";
         return `<li><span class="op o-${o[1]}" title="${o[2]}">${o[0]}</span><span class="fn">${nm}</span><span class="x">${sz}</span></li>`}).join("");
       const more=(e.n_items||0)>30?`<li><span class="op"></span><span class="x">ほか ${e.n_items-30} 件</span></li>`:"";
-      return `<div class="evc ${e.u?"u":""}"><div class="top">${kindPill(e.kind)}<span class="t">${dtm(e.ts)} (${ago(e.ts)})</span>${e.while_stopped?`<span class="ws">停止中の変更</span>`:""}<span style="font-size:12px">${esc(e.summary)}</span></div>${items||more?`<ul>${items}${more}</ul>`:""}</div>`}).join("")+`</div></div>`;
+      return `<div class="evc ${e.u?"u":""}"><div class="top">${kindPill(e.kind)}${e.repl?`<span class="kind k-repl">差し替え ${e.repl}回目</span>`:""}<span class="t">${dtm(e.ts)} (${ago(e.ts)})</span>${e.while_stopped?`<span class="ws">停止中の変更</span>`:""}<span style="font-size:12px">${esc(e.summary)}</span></div>${items||more?`<ul>${items}${more}</ul>`:""}</div>`}).join("")+`</div></div>`;
   }
   const rows=F.items.map(i=>Object.assign({k:sortKey(i.p,i.d)},i)).sort((a,b)=>cmpKeys(a.k,b.k));
   h+=`<div class="sec"><h3>ファイル<small>${files.length}件</small></h3>`;
