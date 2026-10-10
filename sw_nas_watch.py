@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.10.0  —  SEVENTHWELL
+SW NAS WATCH  v1.10.1  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -312,7 +312,11 @@ def compile_coi(words):
         if not w:
             continue
         if re.fullmatch(r"[\x20-\x7e]+", w):
-            pat = r"\s+".join(re.escape(x) for x in w.split())
+            if re.fullmatch(r"[A-Za-z]{2,6}", w):
+                # COI などの短い略語は、字の間の空白・点・ハイフンも許す（「ＣＯ　Ｉ」「C.O.I」のように打たれていることがある）
+                pat = r"[\s.\-・]*".join(re.escape(c) for c in w)
+            else:
+                pat = r"\s+".join(re.escape(x) for x in w.split())
             if w[0].isalnum():
                 pat = r"(?<![A-Za-z])" + pat
             if len(w) <= 4 and w[-1].isalnum():   # COI など短い略語は語の一部に一致させない
