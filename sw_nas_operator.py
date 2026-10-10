@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS OPERATOR  v1.1.0  —  SEVENTHWELL
+SW NAS OPERATOR  v1.2.0  —  SEVENTHWELL
 
 学会の各会場の発表PC（オペレーターPC）用。自分の会場の演者フォルダをNASから読み、NASへの受信が完了したものを
 この発表PC・バックアップPCなどのコピー先へコピーする。NASには一切書き込まない（読むだけ）。
@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS OPERATOR"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 DEFAULT_PORT = 8797
 
 
@@ -547,6 +547,7 @@ class NetTools:
         self.data_dir = data_dir
         self.dir = os.path.join(data_dir, "share")
         self.creds_file = os.path.join(data_dir, "share_creds.json")
+        self.links_file = os.path.join(data_dir, "share_links.json")
         self.lock = threading.Lock()
         self.check_lock = threading.Lock()
         self.job = None
@@ -619,14 +620,19 @@ class NetTools:
                 peers.append(h)
         share = (rec or {}).get("share", {}).get("name") if isinstance((rec or {}).get("share"), dict) else ""
         user = (rec or {}).get("user", {}).get("name") if isinstance((rec or {}).get("user"), dict) else ""
+        # コピー先がすべてほかのPC（タイトルPCなどで動かしている）なら、このPCは共有しないのが既定
+        local = any(d.get("enabled") and d.get("path") and not _unc_parts(d["path"])[0] for d in op["dests"])
+        share_this = bool(rec) or local or not peers
         return {"folder": folder, "share": share or SHARE_DEFAULTS["share"], "user": user or SHARE_DEFAULTS["user"],
-                "password": SHARE_DEFAULTS["password"], "peers": ", ".join(peers), "nosleep": True, "wifi": False}
+                "password": SHARE_DEFAULTS["password"], "peers": ", ".join(peers), "nosleep": True, "wifi": False,
+                "share_this": share_this, "restrict": False}
 
     def info(self):
         rec = read_share_record()
         comp = computer_name()
         d = {"supported": SETUP_SUPPORTED, "computer": comp, "ips": local_ipv4s(), "record": None,
-             "job": self.job, "defaults": self.defaults(rec)}
+             "job": self.job, "defaults": self.defaults(rec), "creds": self._creds_load(),
+             "links": [os.path.splitext(os.path.basename(x["path"]))[0] for x in self._links_load()]}
         if rec:
             sh = rec.get("share") if isinstance(rec.get("share"), dict) else {}
             us = rec.get("user") if isinstance(rec.get("user"), dict) else {}
@@ -876,6 +882,7 @@ class NetTools:
         params = {"job_id": secrets.token_hex(8), "action": action,
                   "current_user": os.environ.get("USERNAME", "")}
         peers, user, password, share = [], "", "", ""
+        elevate = True
         if action == "setup":
             share = str(body.get("share") or "").strip()
             if not share or len(share) > 80 or _BAD_SHARE.search(share) or share.endswith("$"):
@@ -891,72 +898,96 @@ class NetTools:
                 if not _HOST_RE.match(h):
                     raise ValueError("相手のPCの名前（またはIPアドレス）が正しくありません: %s" % h)
                 if self.is_nas_host(h):
-                    raise ValueError("「%s」はNAS（監視フォルダ）のサーバーです。相手のPCには、メインPC・バックアップPCの名前を入れてください" % h)
+                    raise ValueError("「%s」はNAS（監視フォルダ）のサーバーです。相手のPCには、メインPC・バックアップPCなどの名前を入れてください" % h)
                 if h.lower() != me and h.lower() not in [x.lower() for x in peers]:
                     peers.append(h)
             peers = peers[:4]
+            elevate = body.get("share_this", True) is not False
+            if not elevate and not peers:
+                raise ValueError("このPCを共有しないときは、開く相手のPC（メインPC・バックアップPCなど）を入れてください")
             peer_ips = []
-            for h in peers:
-                try:
-                    for ip in _with_timeout(lambda h=h: _resolve(h), 6):
-                        if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip) and ip not in peer_ips:
-                            peer_ips.append(ip)
-                except Exception:
-                    pass
-            params.update(folder=self.valid_folder(body.get("folder")), share=share, user=user, password=password,
-                          nosleep=bool(body.get("nosleep")), set_password=bool(body.get("set_password")), wifi=bool(body.get("wifi")),
-                          peer_ips=peer_ips[:8])
-        elif action != "undo":
+            if elevate and body.get("restrict"):
+                for h in peers:
+                    try:
+                        for ip in _with_timeout(lambda h=h: _resolve(h), 6):
+                            if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip) and ip not in peer_ips:
+                                peer_ips.append(ip)
+                    except Exception:
+                        pass
+                if not peer_ips:
+                    raise ValueError("相手のPCのIPアドレスが分からないため、「相手のPCからだけ許可」にできません（相手のPCの電源・名前を確認するか、チェックを外してください）")
+            if elevate:
+                params.update(folder=self.valid_folder(body.get("folder")), share=share, user=user, password=password,
+                              nosleep=bool(body.get("nosleep")), set_password=bool(body.get("set_password")), wifi=bool(body.get("wifi")),
+                              peer_ips=peer_ips[:8])
+        elif action == "undo":
+            elevate = read_share_record() is not None
+            if not elevate and not self._creds_load() and not self._links_load():
+                raise ValueError("元に戻すものがありません")
+        else:
             raise ValueError("unknown action")
         with self.lock:
             j = self.job
             if j and j["state"] == "running" and time.time() - j["started"] < self.STALE_JOB:
                 raise ValueError("実行中です。管理者の確認の画面（タスクバーで点滅していることがあります）か、設定のウィンドウを確認してください")
-            os.makedirs(self.dir, exist_ok=True)
-            script = os.path.join(self.dir, "sw_share_setup.ps1")
-            sbytes = SHARE_PS.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8-sig")
-            with open(script, "wb") as f:
-                f.write(sbytes)
-            pf = os.path.join(self.dir, "params-%s.json" % secrets.token_hex(6))
-            pbytes = json.dumps(params, ensure_ascii=False).encode("utf-8")
-            with open(pf, "wb") as f:
-                f.write(pbytes)
-            job = {"id": params["job_id"], "action": action, "state": "running", "started": time.time(), "ok": None,
-                   "steps": [], "msg": "管理者の確認（ユーザーアカウント制御）の画面で［はい］を押してください（出ないときはタスクバーを確認）"}
+            script = pf = hs = hp = None
+            if elevate:
+                os.makedirs(self.dir, exist_ok=True)
+                script = os.path.join(self.dir, "sw_share_setup.ps1")
+                sbytes = SHARE_PS.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8-sig")
+                with open(script, "wb") as f:
+                    f.write(sbytes)
+                pf = os.path.join(self.dir, "params-%s.json" % secrets.token_hex(6))
+                pbytes = json.dumps(params, ensure_ascii=False).encode("utf-8")
+                with open(pf, "wb") as f:
+                    f.write(pbytes)
+                hs, hp = hashlib.sha256(sbytes).hexdigest(), hashlib.sha256(pbytes).hexdigest()
+            job = {"id": params["job_id"], "action": action, "elevate": elevate, "state": "running", "started": time.time(), "ok": None,
+                   "steps": [], "msg": "管理者の確認（ユーザーアカウント制御）の画面で［はい］を押してください（出ないときはタスクバーを確認）"
+                   if elevate else "実行しています…"}
             self.job = job
-        threading.Thread(target=self._run_job, args=(job, script, pf, hashlib.sha256(sbytes).hexdigest(), hashlib.sha256(pbytes).hexdigest(),
-                                                       peers, user, password, share),
+        threading.Thread(target=self._run_job, args=(job, script, pf, hs, hp, peers, user, password, share),
                          daemon=True, name="share-setup").start()
         return job
 
+    def _run_elevated(self, job, script, pf, hs, hp):
+        """管理者として設定・元に戻す。結果（dict）か、だめなら None（job に理由を入れる）。"""
+        st, code, msg = ELEVATE(script, pf, hs, hp)
+        if st == "canceled":
+            job.update(state="canceled", ok=False, msg="管理者の確認で［いいえ］が選ばれたため、何も変更していません")
+            return None
+        if st != "ok":
+            job.update(state="error", ok=False, msg=msg or "実行できませんでした")
+            return None
+        if code == 3:
+            job.update(state="error", ok=False, msg="設定用のファイルが途中で書き換えられたため、何も変更せずに中止しました。もう一度押してください")
+            return None
+        res = None
+        try:
+            with open(os.path.join(share_record_dir(), "result.json"), encoding="utf-8-sig") as f:
+                res = json.load(f)
+        except (OSError, ValueError):
+            pass
+        if not isinstance(res, dict) or res.get("id") != job["id"]:
+            job.update(state="error", ok=False, msg="結果を読み取れませんでした（途中で止まった可能性があります。もう一度お試しください）")
+            return None
+        return res
+
     def _run_job(self, job, script, pf, hs, hp, peers, user, password, share_name):
         try:
-            st, code, msg = ELEVATE(script, pf, hs, hp)
-            if st == "canceled":
-                job.update(state="canceled", ok=False, msg="管理者の確認で［いいえ］が選ばれたため、何も変更していません")
-                return
-            if st != "ok":
-                job.update(state="error", ok=False, msg=msg or "実行できませんでした")
-                return
-            if code == 3:
-                job.update(state="error", ok=False, msg="設定用のファイルが途中で書き換えられたため、何も変更せずに中止しました。もう一度押してください")
-                return
-            res = None
-            try:
-                with open(os.path.join(share_record_dir(), "result.json"), encoding="utf-8-sig") as f:
-                    res = json.load(f)
-            except (OSError, ValueError):
-                pass
-            if not isinstance(res, dict) or res.get("id") != job["id"]:
-                job.update(state="error", ok=False, msg="結果を読み取れませんでした（途中で止まった可能性があります。もう一度お試しください）")
-                return
+            if job["elevate"]:
+                res = self._run_elevated(job, script, pf, hs, hp)
+                if res is None:
+                    return
+            else:
+                res = {"ok": True, "steps": []}
             steps = [s for s in (res.get("steps") or []) if isinstance(s, dict)]
             ok = bool(res.get("ok"))
             if job["action"] == "setup":
                 if not ok:
                     if peers:
                         steps.append({"key": "cred", "label": "相手のPCの接続情報", "ok": None,
-                                      "msg": "うまくいかなかった項目があるため、相手のPCの接続情報は登録していません"})
+                                      "msg": "うまくいかなかった項目があるため、相手のPCの接続情報とショートカットは作っていません"})
                 else:
                     for h in peers:
                         try:
@@ -966,9 +997,14 @@ class NetTools:
                                 msg2 += "（%s はほかで登録した接続情報があるため、変えていません）" % "・".join(r["skipped"])
                             if r["errors"]:
                                 msg2 += "（%s は登録できませんでした）" % "・".join(r["errors"])
-                            steps.append({"key": "cred", "label": "相手のPCの接続情報", "ok": r["ok"] if r["targets"] else None, "msg": msg2.strip()})
+                            steps.append({"key": "cred", "label": "相手のPC（%s）の接続情報" % h, "ok": r["ok"] if r["targets"] else None, "msg": msg2.strip()})
                         except Exception as e:
-                            steps.append({"key": "cred", "label": "相手のPCの接続情報", "ok": False, "msg": "%s: %s" % (h, W._err(e))})
+                            steps.append({"key": "cred", "label": "相手のPC（%s）の接続情報" % h, "ok": False, "msg": W._err(e)})
+                    for r in self.make_links(peers, share_name):
+                        steps.append({"key": "link", "label": "デスクトップのショートカット", "ok": r["ok"] if r["ok"] else None,
+                                      "msg": ("「%s」→ %s を作りました" % (r["name"], r["target"])) if r["ok"] else
+                                      ("「%s」を作れませんでした: %s" % (r["name"], r.get("msg") or ""))})
+                    for h in peers:
                         pok, pst = self.check_peer(h, share_name)
                         steps.append({"key": "peer", "label": "相手のPC（%s）" % h, "ok": True if pok else None,
                                       "msg": ("「\\\\%s\\%s」につながります" % (h, share_name)) if pok else
@@ -978,15 +1014,126 @@ class NetTools:
                 removed = self.remove_creds()
                 if removed:
                     steps.append({"key": "cred", "label": "相手のPCの接続情報", "ok": True, "msg": "このPCに登録した接続情報を削除しました: " + "・".join(removed)})
+                gone, kept = self.remove_links()
+                if gone:
+                    steps.append({"key": "link", "label": "デスクトップのショートカット", "ok": True, "msg": "作ったショートカットを削除しました: " + "・".join(gone)})
+                if kept:
+                    steps.append({"key": "link", "label": "デスクトップのショートカット", "ok": None, "msg": "削除しなかったもの（作ったものと違う・消せない）: " + "・".join(kept)})
             job.update(state="done", ok=ok, steps=steps, msg="")
         except Exception as e:
             job.update(state="error", ok=False, msg=W._err(e))
         finally:
-            try:
-                os.remove(pf)
-            except OSError:
-                pass
+            if pf:
+                try:
+                    os.remove(pf)
+                except OSError:
+                    pass
             self.mgr.log("SHARE %s: %s" % (job["action"], job["state"]))
+
+    # ---- デスクトップのショートカット（このPCのユーザーのデスクトップに作る。目印つき）
+    def _links_load(self):
+        try:
+            with open(self.links_file, encoding="utf-8") as f:
+                v = json.load(f).get("links")
+            return [x for x in v if isinstance(x, dict) and isinstance(x.get("path"), str)] if isinstance(v, list) else []
+        except (OSError, ValueError, AttributeError):
+            return []
+
+    def _links_save(self, links):
+        self.mgr.store.write_json(os.path.basename(self.links_file), {"links": links})
+
+    def make_links(self, peers, share):
+        items = []
+        for h in peers:
+            name = "%s の%s" % (h, share)
+            name = re.sub(r'[\\/:*?"<>|]', "_", name)[:80]
+            items.append({"name": name, "target": "\\\\%s\\%s" % (h, share)})
+        if not items:
+            return []
+        try:
+            out = LINK_RUNNER({"action": "create", "items": items})
+        except Exception as e:
+            return [{"name": it["name"], "target": it["target"], "ok": False, "msg": W._err(e)} for it in items]
+        with self.lock:
+            links = self._links_load()
+            for r in out:
+                if r.get("ok") and r.get("path") and r["path"] not in [x["path"] for x in links]:
+                    links.append({"path": r["path"], "target": r.get("target", "")})
+            self._links_save(links)
+        return out
+
+    def remove_links(self):
+        with self.lock:
+            links = self._links_load()
+            if not links:
+                return [], []
+            try:
+                out = LINK_RUNNER({"action": "delete", "items": [{"path": x["path"], "target": x.get("target", "")} for x in links]})
+            except Exception as e:
+                return [], ["%s（%s）" % (os.path.basename(x["path"]), W._err(e)) for x in links]
+            gone = [r for r in out if r.get("ok")]
+            done_paths = {r["path"] for r in gone}
+            self._links_save([x for x in links if x["path"] not in done_paths and not any(r["path"] == x["path"] and r.get("missing") for r in out)])
+            kept = [os.path.basename(r["path"]) for r in out if not r.get("ok") and not r.get("missing")]
+            return [os.path.splitext(os.path.basename(r["path"]))[0] for r in gone], kept
+
+
+# デスクトップのショートカットを作る・消す（ふつうのユーザーの権限で動かす PowerShell。Windows の WScript.Shell を使う）
+LINK_PS = r"""
+$ErrorActionPreference = 'Stop'
+$e = [Text.Encoding]::UTF8
+$req = $e.GetString([Convert]::FromBase64String($env:SWNAS_LINKREQ)) | ConvertFrom-Json
+$mark = 'SW NAS OPERATOR'
+$w = New-Object -ComObject WScript.Shell
+$desk = [Environment]::GetFolderPath('Desktop')
+$out = New-Object System.Collections.ArrayList
+foreach ($it in @($req.items)) {
+    if ($req.action -eq 'create') {
+        $p = Join-Path $desk ([string]$it.name + '.lnk')
+        $r = [ordered]@{ name = [string]$it.name; target = [string]$it.target; path = $p; ok = $false; msg = '' }
+        try {
+            if (Test-Path -LiteralPath $p) {
+                if ([string]$w.CreateShortcut($p).Description -ne $mark) { $r.msg = '同じ名前のショートカットがすでにあります（そのままにしました）'; [void]$out.Add($r); continue }
+            }
+            $s = $w.CreateShortcut($p)
+            $s.TargetPath = [string]$it.target
+            $s.Description = $mark
+            $s.Save()
+            $r.ok = $true
+        } catch { $r.msg = $_.Exception.Message }
+        [void]$out.Add($r)
+    } else {
+        $p = [string]$it.path
+        $r = [ordered]@{ path = $p; ok = $false; missing = $false; msg = '' }
+        try {
+            if (-not (Test-Path -LiteralPath $p)) { $r.missing = $true }
+            elseif ([string]$w.CreateShortcut($p).Description -eq $mark) { Remove-Item -LiteralPath $p -Force; $r.ok = $true }
+            else { $r.msg = '作ったものと違うため、そのままにしました' }
+        } catch { $r.msg = $_.Exception.Message }
+        [void]$out.Add($r)
+    }
+}
+[Console]::OutputEncoding = $e
+[Console]::Out.Write((ConvertTo-Json -InputObject $out.ToArray() -Compress -Depth 4))
+"""
+
+
+def run_link_ps(req):
+    ps = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    env = dict(os.environ, SWNAS_LINKREQ=base64.b64encode(json.dumps(req, ensure_ascii=False).encode("utf-8")).decode("ascii"))
+    enc = base64.b64encode(LINK_PS.encode("utf-16-le")).decode("ascii")
+    r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
+                       capture_output=True, timeout=90, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    txt = r.stdout.decode("utf-8", "replace").lstrip("\ufeff").strip()
+    data = json.loads(txt[txt.index("["):] if "[" in txt else "[]") if txt else []
+    if isinstance(data, dict):
+        data = [data]
+    if r.returncode != 0 and not data:
+        raise OSError(r.stderr.decode("utf-8", "replace")[-300:] or "ショートカットを作れませんでした")
+    return [x for x in data if isinstance(x, dict)]
+
+
+LINK_RUNNER = run_link_ps            # テストでは差し替える
 
 
 def run_cmdkey(args):
@@ -1873,6 +2020,8 @@ OP_CSS = r'''
 .nsjob{margin-top:14px;border-top:1px solid var(--border);padding-top:12px}
 .netdlg h3 button.sm{height:26px;padding:0 10px;font-size:12px;margin-left:8px;vertical-align:middle}
 .netdlg .dim{color:var(--dim)}
+#nsForm .no{display:none}#nsForm.noshare .so{display:none}#nsForm.noshare span.no{display:inline}
+#nsForm.noshare ul.no{display:block}
 #bNet.has{position:relative}
 #bNet.has::after{content:"";position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--amber)}
 '''
@@ -1918,21 +2067,23 @@ function netOpen(){let ov=$("#netov");
   netLoad().then(()=>netCheck())}
 function netClose(){const ov=$("#netov");if(ov)ov.classList.remove("open")}
 document.addEventListener("keydown",e=>{const ov=$("#netov");if(e.key==="Escape"&&ov&&ov.classList.contains("open")){e.stopImmediatePropagation();e.preventDefault();netClose()}},true);
-function netBadge(){const b=$("#bNet");if(!b||!NET.info)return;const R=NET.info.record;b.classList.toggle("has",!!R);
-  b.title=R?`このPCには共有の設定が残っています（${R.unc||""}）。イベントが終わったら、ここから［元に戻す］を押してください`:"コピー先（バックアップPCなど）への接続を確認し、ファイル共有をまとめて設定します"}
+function netBadge(){const b=$("#bNet");if(!b||!NET.info)return;const I=NET.info,R=I.record,has=!!(R||(I.creds||[]).length||(I.links||[]).length);b.classList.toggle("has",has);
+  b.title=has?`このPCには共有の設定（${R&&R.unc?R.unc+"・":""}接続情報・ショートカット）が残っています。イベントが終わったら、ここから［元に戻す］を押してください`:"コピー先（バックアップPCなど）への接続を確認し、ファイル共有をまとめて設定します"}
 setTimeout(()=>{if(!NET.info)api("/api/op/net").then(j=>{if(!NET.info){NET.info=j;netBadge()}}).catch(()=>{})},4000);
 async function netLoad(){try{NET.info=await api("/api/op/net");netBadge();if(NET.info.job&&!NET.job)NET.job=NET.info.job;if(NET.job&&NET.job.state==="running")netPoll()}
   catch(e){NET.info={error:e.message}}netRender()}
 async function netCheck(){if(NET.busy)return;NET.busy=true;netRender();
   try{NET.chk=await api("/api/op/net/check",{})}catch(e){NET.chk={error:e.message}}NET.busy=false;netRender()}
 function netKeep(){const g=id=>{const e=$("#"+id);return e?(e.type==="checkbox"?e.checked:e.value):undefined};
-  if($("#nsFolder")&&$("#nsFolder").dataset.ready==="1")NET.form={folder:g("nsFolder"),share:g("nsShare"),user:g("nsUser"),password:g("nsPass"),peers:g("nsPeers"),nosleep:g("nsSleep"),set_password:g("nsSetPw"),wifi:g("nsWifi"),agree:g("nsAgree")};
+  if($("#nsFolder")&&$("#nsFolder").dataset.ready==="1")NET.form={folder:g("nsFolder"),share:g("nsShare"),user:g("nsUser"),password:g("nsPass"),peers:g("nsPeers"),nosleep:g("nsSleep"),set_password:g("nsSetPw"),wifi:g("nsWifi"),restrict:g("nsRestrict"),agree:g("nsAgree"),
+    share_this:(($("input[name=nsMode]:checked")||{}).value!=="0")};
   document.querySelectorAll("#netov [data-credhost]").forEach(e=>{NET.cred[e.dataset.credhost]={user:e.querySelector(".cu").value,password:e.querySelector(".cp2").value}})}
 function netStep(s){const k=s.ok===true?"ok":s.ok===false?"ng":"na";
   return `<div class="nst ${k}"><span class="ni">${k==="ok"?IC.chk:k==="ng"?IC.x:IC.info}</span><div><div>${s.label?`<b>${esc(s.label)}</b>　`:""}${esc(s.msg||"")}</div>${s.hint?`<div class="nh">→ ${esc(s.hint)}</div>`:""}${s.raw&&s.raw!==s.msg?`<div class="nr mono">${esc(s.raw)}</div>`:""}</div></div>`}
 function netRender(){const ov=$("#netov");if(!ov||!ov.classList.contains("open"))return;netKeep();
   const I=NET.info||{},D=I.defaults||{},F=NET.form||Object.assign({agree:false},D),R=I.record,job=NET.job,running=!!(job&&job.state==="running");
-  let h=`<div class="dlg netdlg"><div style="display:flex;gap:12px;align-items:flex-start"><div style="flex:1"><h2>ネットワーク共有（メインPC ↔ バックアップPC）</h2>
+  const hasUndo=!!(R||(I.creds||[]).length||(I.links||[]).length);
+  let h=`<div class="dlg netdlg"><div style="display:flex;gap:12px;align-items:flex-start"><div style="flex:1"><h2>ネットワーク共有（メインPC・バックアップPC・タイトルPC など）</h2>
     <p class="desc">コピー先（バックアップPCなど）につながるかを調べます。つながらないときは、ファイル共有に必要な設定をまとめて行えます。</p></div><button class="ghost" id="nsClose">${IC.x}閉じる</button></div>`;
   if(I.error)h+=`<p class="err">${esc(I.error)}</p>`;
   const ip0=(I.ips||[])[0];
@@ -1950,41 +2101,55 @@ function netRender(){const ov=$("#netov");if(!ov||!ov.classList.contains("open")
     if(need){const c=NET.cred[d.host]||{user:D.user||"share",password:D.password||"share"};
       h+=`<div class="nscred" data-credhost="${esc(d.host)}"><span>「${esc(d.host)}」のアカウント</span><input type="text" class="cu" value="${esc(c.user)}" placeholder="ユーザー名" spellcheck="false"><input type="text" class="cp2" value="${esc(c.password)}" placeholder="パスワード" spellcheck="false"><button class="pri" data-cred="${esc(d.host)}" ${I.supported?"":"disabled"}>このPCに登録して確認</button></div>`}
     h+=`</div>`}
-  h+=`<h3>② このPCを共有できるようにする（ワンボタン設定）</h3>`;
+  const shareOn=F.share_this!==false;
+  h+=`<h3>② ファイル共有の設定（ワンボタン）</h3>`;
   if(!I.supported)h+=`<p class="err" style="margin-top:0">この機能は Windows だけで使えます。</p>`;
-  h+=`<p class="hint" style="margin-top:0"><b>メインPCとバックアップPCの両方で、それぞれ1回</b>押してください（共有用アカウントとパスワードは両方のPCで同じにします）。どちらのPCからも、相手のPCの共有フォルダに読み書きできるようになります。</p>
-   <div class="grid2" style="margin-top:12px">
-    <span>共有するフォルダ</span><span class="nsrow"><input type="text" id="nsFolder" class="mono" value="${esc(F.folder||"")}" data-ready="${I.defaults?1:0}" spellcheck="false"><button class="ghost" id="nsPick">参照…</button></span>
-    <span>共有名</span><span class="nsrow"><input type="text" id="nsShare" value="${esc(F.share||"")}" style="max-width:220px" spellcheck="false"><span class="dim">→ ほかのPCからは <b class="mono" id="nsUnc"></b></span></span>
-    <span>共有用アカウント</span><span class="nsrow"><input type="text" id="nsUser" value="${esc(F.user||"")}" style="max-width:150px" spellcheck="false"><span>パスワード</span><input type="text" id="nsPass" value="${esc(F.password||"")}" style="max-width:150px" spellcheck="false"><span class="dim">両方のPCで同じにする</span></span>
-    <span>相手のPC</span><span class="nsrow"><input type="text" id="nsPeers" class="mono" value="${esc(F.peers||"")}" placeholder="例: BACKUP-PC または 192.168.0.12（複数はカンマ区切り・空でも可）" spellcheck="false"></span>
-    <span></span><span class="hint" style="margin:0">相手のPCの名前（またはIPアドレス）を入れると、ファイアウォールは<b>そのPCからだけ</b>許可し、上のアカウントでの接続情報をこのPCに登録して、相手のPCの「${esc(F.share||"共有名")}」につながるか確かめます（相手のPCのIPアドレスが変わったら、もう一度押してください）。空欄なら、同じネットワーク内のPCから許可します。</span>
+  h+=`<div id="nsForm" class="${shareOn?"":"noshare"}">
+   <div class="checks" style="flex-direction:column;gap:8px;margin:0 0 4px">
+    <label><input type="radio" name="nsMode" value="1" ${shareOn?"checked":""}><span><b>このPCのフォルダを共有する</b>（メインPC・バックアップPCなど、コピーされるPC。それぞれで1回）</span></label>
+    <label><input type="radio" name="nsMode" value="0" ${shareOn?"":"checked"}><span><b>このPCは共有しない</b>（タイトルPCなど、ほかのPCを開くだけ。管理者の確認は出ません）</span></label>
    </div>
-   <div class="checks" style="flex-direction:column;gap:8px;margin-top:12px">
+   <div class="grid2" style="margin-top:12px">
+    <span class="so">共有するフォルダ</span><span class="nsrow so"><input type="text" id="nsFolder" class="mono" value="${esc(F.folder||"")}" data-ready="${I.defaults?1:0}" spellcheck="false"><button class="ghost" id="nsPick">参照…</button></span>
+    <span><span class="so">共有名</span><span class="no">相手の共有名</span></span><span class="nsrow"><input type="text" id="nsShare" value="${esc(F.share||"")}" style="max-width:220px" spellcheck="false"><span class="dim so">→ ほかのPCからは <b class="mono" id="nsUnc"></b>（共有名はどのPCでも同じにします）</span></span>
+    <span>共有用アカウント</span><span class="nsrow"><input type="text" id="nsUser" value="${esc(F.user||"")}" style="max-width:150px" spellcheck="false"><span>パスワード</span><input type="text" id="nsPass" value="${esc(F.password||"")}" style="max-width:150px" spellcheck="false"><span class="dim">どのPCでも同じにする</span></span>
+    <span>開く相手のPC</span><span class="nsrow"><input type="text" id="nsPeers" class="mono" value="${esc(F.peers||"")}" placeholder="例: MAIN-PC, BACKUP-PC（名前かIPアドレス。複数はカンマ区切り）" spellcheck="false"></span>
+    <span></span><span class="hint" style="margin:0">入れたPCの接続情報をこのPCに登録し、<b>デスクトップにショートカット</b>「（PC名） の${esc(F.share||"共有名")}」を作ります。コピーしているPCが落ちたときなどに、手で開いてコピーできます。<span class="so">空欄でも共有の設定はできます。</span></span>
+   </div>
+   <div class="checks so" style="flex-direction:column;gap:8px;margin-top:12px">
     <label><input type="checkbox" id="nsSleep" ${F.nosleep!==false?"checked":""}>電源につないでいる間は、このPCをスリープさせない（スリープ中は相手のPCから使えないため）</label>
     <label><input type="checkbox" id="nsSetPw" ${F.set_password?"checked":""}>同じ名前のアカウントがすでにあるときは、パスワードを上の内容に変える（管理者・ログイン中のアカウントは使えません）</label>
+    <label><input type="checkbox" id="nsRestrict" ${F.restrict?"checked":""}>このPCに入れるのを、上の「開く相手のPC」からだけに限る（IPアドレスが変わるとつながらなくなります。タイトルPCなど、このPCを開くPCも全部入れてください）</label>
     <label><input type="checkbox" id="nsWifi" ${F.wifi?"checked":""}>Wi-Fi でも共有する（おすすめしません。ふつうは有線LANだけ。会場のWi-Fiにつないでいる人からも見えてしまうため）</label>
    </div>
-   <p class="hint" style="margin:8px 0 0">パスワードの既定（share）は、閉じた現場LAN向けです。ほかの人もつなぐネットワークでは、両方のPCで別のパスワードにしてください。</p>
-   <details class="nschg" open><summary>このPCで変更する内容</summary><ul>
-    <li>Windowsファイアウォールに、<b>有線LANの、相手のPC（入れたとき。空欄なら同じネットワーク内のPC）からだけ</b>、ファイル共有（SMB）・PC名の検索・ping を許可する規則を追加する（グループ名「SW NAS OPERATOR」。ネットワークの種類「パブリック／プライベート」は変えません）</li>
+   <p class="hint so" style="margin:8px 0 0">パスワードの既定（share）は、閉じた現場LAN向けです。ほかの人もつなぐネットワークでは、すべてのPCで別のパスワードにしてください。</p>
+   <details class="nschg" open><summary>このPCで変更する内容</summary><ul class="so">
+    <li>Windowsファイアウォールに、<b>有線LANの、同じネットワーク内のPCからだけ</b>（「相手のPCからだけ」にチェックしたときは、そのPCからだけ）、ファイル共有（SMB）・PC名の検索・ping を許可する規則を追加する（グループ名「SW NAS OPERATOR」。ネットワークの種類「パブリック／プライベート」は変えません）</li>
     <li>ファイル共有のサービス（Server・Workstation など）を自動で起動するようにする</li>
     <li>共有用アカウントを作る（管理者ではない普通のアカウント。30日で使えなくなります（もう一度押すと延びる）。すでにあればそのまま使う。ログイン画面にも表示されます）</li>
     <li>上のフォルダを作って共有し、そのアカウントに読み書き（変更）の権限を付ける</li>
     <li>スリープさせない（チェックしたとき。電源接続時だけ）</li>
-    <li>相手のPCへの接続情報を、このPCのWindowsの資格情報に登録する（相手のPCを入れて、上の設定がすべてうまくいったとき。NASのサーバーには登録しません）</li>
-   </ul><p class="hint" style="margin:6px 0 0">変更前の状態を変更のたびに記録し、［元に戻す］で戻せます（フォルダとデータは消しません。レンタルPCは返す前に押してください）。SMB1・パスワードなしの共有（ゲスト）は使いません。経過は、管理者の確認のあとに開くウィンドウにも表示されます。</p></details>
+    <li>開く相手のPCの接続情報を、このPCのWindowsの資格情報に登録し、デスクトップにショートカットを作る（上の設定がすべてうまくいったとき。NASのサーバーには登録しません）</li>
+   </ul><ul class="no">
+    <li>開く相手のPCの接続情報を、このPCのWindowsの資格情報に登録する（NASのサーバーには登録しません）</li>
+    <li>デスクトップに、相手のPCの共有フォルダへのショートカットを作る</li>
+    <li>このPCの共有・ファイアウォール・アカウントなどは変えません</li>
+   </ul><p class="hint" style="margin:6px 0 0">［元に戻す］で戻せます（作ったショートカット・登録した接続情報も消します。フォルダとデータは消しません。レンタルPCは返す前に押してください）。<span class="so">変更前の状態は変更のたびに記録します。SMB1・パスワードなしの共有（ゲスト）は使いません。経過は、管理者の確認のあとに開くウィンドウにも表示されます。</span></p></details>
    <label class="lbl nsagree"><input type="checkbox" id="nsAgree" ${F.agree?"checked":""}>上の内容で、このPCの設定を変更する</label>
-   <div class="nsbtns"><button class="pri" id="nsRun">${running&&job.action==="setup"?"実行中…":"このPCを設定する（管理者の確認が出ます）"}</button>
-   ${R?`<button class="ghost danger" id="nsUndo">${running&&job.action==="undo"?"元に戻しています…":NET.undoArm>Date.now()?"もう一度押すと元に戻します":"元に戻す"}</button>`:""}
-   ${R&&R.updated?`<span class="dim">前回の設定: ${esc(String(R.updated).replace("T"," "))}</span>`:""}</div>`;
+   <div class="nsbtns"><button class="pri" id="nsRun"></button>
+   ${hasUndo?`<button class="ghost danger" id="nsUndo">${running&&job.action==="undo"?"元に戻しています…":NET.undoArm>Date.now()?"もう一度押すと元に戻します":"元に戻す"}</button>`:""}
+   ${R&&R.updated?`<span class="dim">前回の設定: ${esc(String(R.updated).replace("T"," "))}</span>`:""}</div></div>`;
   if(job){const fin=job.state==="done";
     h+=`<div class="nsjob">${job.msg?`<p class="${job.state==="error"||job.state==="canceled"?"err":"hint"}" style="margin-top:0">${esc(job.msg)}</p>`:""}${(job.steps||[]).map(netStep).join("")}
-      ${fin?`<p class="hint">${job.ok?"✓ 終わりました。":"一部うまくいきませんでした（✕の項目を確認してください）。"}${job.action==="setup"?"相手のPCでも同じように［このPCを設定する］を押してから、① の［もう一度確認］でつながるか確かめてください。":""}</p>`:""}</div>`}
+      ${fin?`<p class="hint">${job.ok?"✓ 終わりました。":"一部うまくいきませんでした（✕の項目を確認してください）。"}${job.action==="setup"&&job.elevate?"ほかのPCでも同じように押してから、① の［もう一度確認］でつながるか確かめてください。":""}</p>`:""}</div>`}
   h+=`</div>`;
   ov.innerHTML=h;
   const unc=()=>{const e=$("#nsUnc");if(e)e.textContent="\\\\"+(I.computer||"このPC")+"\\"+($("#nsShare").value.trim()||"共有名")};unc();
-  const runBtn=$("#nsRun"),agr=$("#nsAgree");const upd=()=>{runBtn.disabled=!I.supported||running||!agr.checked;const u=$("#nsUndo");if(u)u.disabled=!I.supported||running};upd();
+  const runBtn=$("#nsRun"),agr=$("#nsAgree"),form=$("#nsForm");
+  const mode=()=>{const on=($("input[name=nsMode]:checked")||{}).value!=="0";form.classList.toggle("noshare",!on);
+    runBtn.textContent=running&&job.action==="setup"?"実行中…":on?"このPCを設定する（管理者の確認が出ます）":"接続情報とショートカットを作る"};mode();
+  const upd=()=>{runBtn.disabled=!I.supported||running||!agr.checked;const u=$("#nsUndo");if(u)u.disabled=!I.supported||running};upd();
+  ov.querySelectorAll("input[name=nsMode]").forEach(r=>r.onchange=mode);
   agr.onchange=upd;$("#nsShare").oninput=unc;
   $("#nsClose").onclick=netClose;$("#nsRe").onclick=netCheck;
   $("#nsPick").onclick=async()=>{try{const j=await api("/api/pick",{dest:true});if(j.path)$("#nsFolder").value=j.path}catch(e){toast(e.message,5000)}};
@@ -1993,7 +2158,8 @@ function netRender(){const ov=$("#netov");if(!ov||!ov.classList.contains("open")
       toast((j.targets.length?"接続情報を登録しました: "+j.targets.join("・"):"")+(j.errors.length?"　登録できませんでした: "+j.errors.join("・"):"")+(j.skipped&&j.skipped.length?"　"+j.skipped.join("・")+" はほかで登録した接続情報があるため変えていません（Windowsの資格情報マネージャーで確認してください）":""),9000)}
     catch(e){toast(e.message,6000)}NET.busy=false;netCheck()});
   runBtn.onclick=async()=>{netKeep();const f=NET.form;
-    try{const j=await api("/api/op/net/setup",{folder:f.folder,share:f.share,user:f.user,password:f.password,peers:f.peers,nosleep:f.nosleep,set_password:f.set_password,wifi:f.wifi});
+    try{const j=await api("/api/op/net/setup",{share_this:f.share_this,folder:f.folder,share:f.share,user:f.user,password:f.password,peers:f.peers,
+        nosleep:f.nosleep,set_password:f.set_password,wifi:f.wifi,restrict:f.restrict});
       NET.job=j.job;agr.checked=false;netRender();netPoll()}catch(e){toast(e.message,7000)}};
   const ub=$("#nsUndo");if(ub)ub.onclick=async()=>{if(NET.undoArm<Date.now()){NET.undoArm=Date.now()+5000;netRender();setTimeout(netRender,5100);return}
     NET.undoArm=0;try{const j=await api("/api/op/net/undo",{});NET.job=j.job;netRender();netPoll()}catch(e){toast(e.message,7000)}};
