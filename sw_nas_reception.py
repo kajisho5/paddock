@@ -480,20 +480,36 @@ class Rx:
         w = []
         if not res["coi"]:
             w.append(("warn", "%s：COIの記載が見つかりません（画像で貼られている場合は検出できません）" % name))
+        # 動画は100本以上あることもあるので、同じ種類の注意は1行にまとめる
+        groups = {}
+
+        def add(lv, key, msg, label):
+            g = groups.setdefault(key, {"lv": lv, "msg": msg, "names": []})
+            if label not in g["names"]:
+                g["names"].append(label)
         for v in res["video"]:
             fmt = v.get("fmt") or {}
-            label = v.get("target") or v.get("name")
+            label = v.get("target") or v.get("name") or ""
             if v.get("kind") == "link" and v.get("st") == "missing":
-                w.append(("bad", "%s：リンク動画「%s」が受け取ったデータの中にありません（動画ファイルも受け取ってください）" % (name, label)))
+                add("bad", "missing", "リンク動画が受け取ったデータの中にありません（動画ファイルも受け取ってください）", label)
             elif v.get("st") == "abs":
-                w.append(("bad", "%s：リンク動画が発表者PCの場所（%s）を指しているため、会場PCでは再生できません" % (name, label)))
+                add("bad", "abs", "リンク動画が発表者PCの場所を指しているため、会場PCでは再生できません", label)
             elif v.get("st") == "unc":
-                w.append(("warn", "%s：リンク動画がネットワーク上の場所（%s）を指しています" % (name, label)))
+                add("warn", "unc", "リンク動画がネットワーク上の場所を指しています", label)
             elif v.get("kind") == "online":
-                w.append(("info", "%s：ネット接続が必要な動画があります（%s）" % (name, label)))
-            if fmt.get("v") in ("bad", "warn"):
+                add("info", "online", "ネット接続が必要な動画があります", label)
+            if fmt.get("v") in ("bad", "warn", "unk"):
                 desc = " / ".join(x for x in (fmt.get("video"), fmt.get("audio") and "音声 " + fmt["audio"]) if x)
-                w.append((fmt["v"], "%s：動画「%s」%s — %s" % (name, v.get("name"), "（%s）" % desc if desc else "", fmt.get("why", ""))))
+                lv = fmt["v"] if fmt["v"] != "unk" else "warn"
+                why = fmt.get("why", "")
+                key = ("fmt", fmt["v"], desc if fmt["v"] != "unk" else "", why if fmt["v"] != "unk" else "")
+                head = ("動画の形式が%s" % desc) if desc and fmt["v"] != "unk" else ("形式を確認できない動画があります" if fmt["v"] == "unk" else "動画の形式")
+                add(lv, key, "%s — %s" % (head, why) if fmt["v"] != "unk" else head + "（試写で確認を）", v.get("name") or label)
+        order = {"bad": 0, "warn": 1, "info": 2}
+        for g in sorted(groups.values(), key=lambda g: order.get(g["lv"], 3)):
+            ns = g["names"]
+            shown = "、".join(ns[:4]) + ("ほか" if len(ns) > 4 else "")
+            w.append((g["lv"], "%s：%s（%d本：%s）" % (name, g["msg"], len(ns), shown)))
         if res.get("kiosk"):
             w.append(("bad", "%s：「自動プレゼンテーション（キオスク）」設定のため、クリックで進めません" % name))
         elif res["noclick"]:

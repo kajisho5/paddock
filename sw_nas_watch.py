@@ -426,8 +426,8 @@ def _link_status(tgt, pptx_dir):
 # Baseline / Main / High（8bit・4:2:0）・レベル5.1まで。HEVC は別途「HEVC拡張」が必要。ProRes は非対応。
 PROBE_MOOV_MAX = 48 * 1024 * 1024     # moov（形式情報）の上限
 PROBE_SEQ_MAX = 64 * 1024 * 1024      # 圧縮されたZIPメンバーを前から読むときの上限
-PROBE_TOTAL_MAX = 192 * 1024 * 1024   # 1つのPowerPointで、動画の形式確認のために読む量の合計の上限
-PROBE_VIDEOS_MAX = 60                 # 1つのPowerPointで形式を確認する動画の数の上限（画面に出す数と同じ）
+PROBE_TOTAL_MAX = 320 * 1024 * 1024   # 1つのPowerPointで、動画の形式確認のために読む量の合計の上限
+VIDEO_LIST_MAX = 2000                 # 1つのPowerPointで記録する動画・音声の数の上限（本数に制限はかけない前提の安全弁）
 PRORES = {"apcn", "apch", "apcs", "apco", "ap4h", "ap4x", "aprn", "aprh"}
 H264_OK = {66: "Baseline", 77: "Main", 88: "Extended", 100: "High"}
 H264_NG = {110: "High 10（10bit）", 122: "High 4:2:2", 244: "High 4:4:4", 44: "CAVLC 4:4:4"}
@@ -876,9 +876,17 @@ def _parse_pptx(z, path, coi, f=None):
     vids = [m for m in media.values() if m["av"] == "video"]
     auds = [m for m in media.values() if m["av"] == "audio"]
     # 動画の形式（会場PCで再生できるか）。見出しと形式情報だけを読む。失敗しても解析全体は止めない
-    # 動画がいくつあっても全部確認する（読む量の合計に上限。超えた分は「省略」と明示する）
+    # 動画が何本あっても全部確認する。読む量の合計には上限があり、超えた分は「省略」と明示する。
+    # 安く確認できるもの（無圧縮で埋め込まれた動画・リンク動画＝見出しと形式情報だけ読めばよい）を先に、
+    # 圧縮されて埋め込まれた動画（前から順に読むしかない）を後にする
+    def cost(m):
+        if m["kind"] == "embed" and m.get("_part"):
+            key = _resolve("", m["_part"])
+            if key in names and z.getinfo(key).compress_type != zipfile.ZIP_STORED:
+                return 1
+        return 0
     meter = _Meter(PROBE_TOTAL_MAX)
-    for m in vids[:PROBE_VIDEOS_MAX]:
+    for m in sorted(vids[:VIDEO_LIST_MAX], key=cost):
         lp = m.pop("_lp", None)
         try:
             if m["kind"] == "embed" and f is not None:
@@ -894,7 +902,8 @@ def _parse_pptx(z, path, coi, f=None):
         m.pop("_lp", None)
         m.pop("_part", None)
     return {"v": ANA_VERSION, "ok": True, "slides": len(order), "hidden": hidden[:1000],
-            "video": vids[:60], "audio": auds[:60], "links": list(links.values())[:80],
+            "video": vids[:VIDEO_LIST_MAX], "audio": auds[:VIDEO_LIST_MAX], "n_video": len(vids), "n_audio": len(auds),
+            "links": list(links.values())[:80],
             "other": list(other.values())[:40], "coi": coi_hits[:10], "auto": auto[:2000],
             "noclick": noclick[:2000], "use_timings": use_timings, "loop": loop, "kiosk": kiosk,
             "n_links": len(links), "n_other": len(other)}
@@ -904,7 +913,7 @@ def ana_sum(r):
     if not r.get("ok"):
         return {"err": r.get("error") or "解析できません"}
     v = r["video"]
-    return {"slides": r["slides"], "video": len(v),
+    return {"slides": r["slides"], "video": r.get("n_video", len(v)),
             "vlink": sum(1 for x in v if x["kind"] != "embed"),
             "vbad": sum(1 for x in v if x.get("st") in ("missing", "abs")),
             "vfbad": sum(1 for x in v if (x.get("fmt") or {}).get("v") == "bad"),
@@ -3754,6 +3763,9 @@ main.vboard.drawer .board{padding-right:calc(min(820px,94vw) + 16px)}
 .grp.st-got .sti{color:var(--sky)}
 .rtag.got{background:rgba(56,189,248,.12);color:var(--sky);border:1px solid rgba(56,189,248,.3)}
 /* 現場の目印（発表終了・取り下げ・会場直・動画有 など） */
+.ana details.vok{margin-top:4px}
+.ana details.vok summary{cursor:pointer;color:var(--muted-fg);font-size:12.5px;padding:3px 0;user-select:none}
+.ana details.vok summary:hover{color:var(--foreground)}
 .rtag.done{background:var(--muted);color:#d4d4d8;border:1px solid var(--border)}
 .rtag.drop{background:rgba(239,68,68,.1);color:#fca5a5;border:1px solid rgba(239,68,68,.3)}
 .rtag.direct{background:rgba(139,92,246,.12);color:var(--violet);border:1px solid rgba(139,92,246,.35)}
@@ -4661,6 +4673,21 @@ function vline(v){
   const x=st[v.st]||["外部リンク","o-mod"];
   return `<span class="sub">${sl(v.s)}　<b class="${x[1]}">${v.kind==="online"?"オンライン動画":"リンク動画"}</b> ${esc(nfc(v.target||v.name))} — <span class="${x[1]}">${x[0]}</span>${vfmtLine(v)}</span>`;
 }
+/* 動画：問題のあるもの（再生NG・要試写・形式不明・リンク切れなど）を先に。本数が多いときは再生OKの分を折りたたむ */
+const vProb=v=>!!((v.fmt&&v.fmt.v!=="ok")||(v.kind==="embed"&&!v.fmt)||(v.kind!=="embed"&&v.st!=="here"));
+function videoRow(a){const vs=a.video||[],nv=a.n_video!=null?a.n_video:vs.length;
+  if(!nv)return["動画","t-dim","なし",""];
+  const cnt=k=>vs.filter(v=>v.fmt&&v.fmt.v===k).length;const nb=cnt("bad"),nw=cnt("warn"),nu=cnt("unk");
+  const nl=vs.filter(v=>v.kind!=="embed").length,nlb=vs.filter(v=>v.kind!=="embed"&&(v.st==="missing"||v.st==="abs")).length;
+  const sum=[nb&&`再生できない形式 ${nb}`,nw&&`要試写 ${nw}`,nu&&`形式不明 ${nu}`,nlb&&`リンク切れ ${nlb}`].filter(Boolean).join("・");
+  const cls=nb||nlb?"t-bad":nw||nu||nl?"t-warn":"t-info";
+  const prob=vs.filter(vProb),ok=vs.filter(v=>!vProb(v));
+  let body;
+  if(vs.length<=10)body=vs.map(vline).join("");
+  else{body=prob.map(vline).join("");
+    if(ok.length)body+=`<details class="vok"${prob.length?"":" open"}><summary>${prob.length?`問題のない動画 ${ok.length}本（再生OK）を表示`:`すべて再生OK（${ok.length}本）`}</summary>${ok.map(vline).join("")}</details>`}
+  if(nv>vs.length)body+=`<span class="sub">ほか ${nv-vs.length}本（表示を省略）</span>`;
+  return["動画",cls,`あり ${nv}${sum?"（"+sum+"）":""}`,body]}
 function autoText(auto){const m=new Map();auto.forEach(([s,sec])=>{if(!m.has(sec))m.set(sec,[]);m.get(sec).push(s)});return [...m].map(([sec,ss])=>`${sl(ss)}：${sec}秒`).join("　")}
 function anaCard(it){
   const a=it.a;const nm=esc(nfc(it.p));const chip=`<span class="chip c-${esc(it.c)}">${esc(it.c)}</span>`;
@@ -4668,9 +4695,7 @@ function anaCard(it){
   if(a.pending)return `<div class="ana"><div class="hd">${chip}<span class="fn">${nm}</span><span class="tag t-dim ${a.inuse?"":"copying"}">${a.copying?"コピー完了後に解析":a.inuse?"PowerPointで開かれているため解析待ち（閉じたら自動で解析）":"解析中…"}</span></div></div>`;
   if(!a.ok)return `<div class="ana"><div class="hd">${chip}<span class="fn">${nm}</span><span class="tag t-bad">解析できません</span></div><div class="msg">${esc(a.error||"")}</div></div>`;
   const rows=[];
-  if(!a.video.length)rows.push(["動画","t-dim","なし",""]);
-  else{const fbad=a.video.some(v=>v.fmt&&v.fmt.v==="bad"),fw=a.video.some(v=>v.fmt&&v.fmt.v==="warn");const bad=fbad||a.video.some(v=>v.kind!=="embed");
-    rows.push(["動画",bad?"t-bad":fw?"t-warn":"t-info",`あり ${a.video.length}${fbad?"（再生できない形式あり）":fw?"（要試写）":""}`,a.video.map(vline).join("")])}
+  rows.push(videoRow(a));
   const nl=a.n_links!=null?a.n_links:a.links.length;
   let ls2=a.links.slice(0,8).map(l=>`<span class="sub">${sl(l.s)}　${esc(l.url)}</span>`).join("")+(nl>8?`<span class="sub">ほか ${nl-8} 件</span>`:"");
   if(a.other&&a.other.length)ls2+=a.other.slice(0,5).map(o=>`<span class="sub">${sl(o.s)}　<b class="o-mod">外部リンク(${esc(o.type)})</b> ${esc(o.target)}</span>`).join("");
