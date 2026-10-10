@@ -39,7 +39,7 @@ APPS = {
                     "ident": "SEVENTHWELL.SWNASRECEPTION"},
     },
     "operator": {
-        "src": "sw_nas_operator.py", "mod": "sw_nas_operator", "blocks": ("OP_CSS", "OP_JS"),
+        "src": "sw_nas_operator.py", "mod": "sw_nas_operator", "blocks": ("OP_CSS", "OP_JS", "SHARE_PS"),
         "readme": "README_OPERATOR.md",
         "variant": {"title": "SW NAS OPERATOR", "exe": "SW_NAS_OPERATOR.exe", "pyc": "sw_nas_operator.pyc",
                     "home_env": "SW_NAS_OPERATOR_HOME", "internal": "SW_NAS_OPERATOR",
