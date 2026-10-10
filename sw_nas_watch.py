@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.11.1  —  SEVENTHWELL
+SW NAS WATCH  v1.11.2  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.11.1"
+VERSION = "1.11.2"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -1578,9 +1578,12 @@ class Watcher(threading.Thread):
         """コピーが始まった（まだ確定していない）フォルダを、確定を待たずに知らせる。"""
         com = self.committed
         groups = {}
+        mo = self.mgr.marker_of
         with self.lock:
             for k, (sig, _t, _f) in self.pending.items():
                 old = com.get(k)
+                if mo(k, sig if sig is not None else old):
+                    continue      # 目印画像（受付済・動画有 など）の出し入れは「受信中」にしない
                 g = group_of(k, sig if sig is not None else old, self.depth)
                 groups.setdefault(g, []).append((k, old, sig))
         new = [g for g in groups if g not in self.notified_pending]
@@ -1873,7 +1876,10 @@ class Watcher(threading.Thread):
                 if ana_kind(k):
                     s["px"].append((k, sig))
         for k, (sig, _t, _f) in self.pending.items():
-            key = group_of(k, sig if sig is not None else (self.committed or {}).get(k), self.depth)
+            s0 = sig if sig is not None else (self.committed or {}).get(k)
+            if self.mgr.marker_of(k, s0):
+                continue          # 目印画像の出し入れでは「コピー中」にしない
+            key = group_of(k, s0, self.depth)
             if key in g:
                 s = g[key]
                 s["pending"] += 1
@@ -4716,7 +4722,7 @@ function renderFolder(){
   const segs=F.group.split("/");const r=rootById(F.root);
   const name=F.group===""?((r&&r.depth>1)?"（演者フォルダより上のファイル）":"（直下のファイル）"):segs[segs.length-1];
   const files=F.items.filter(i=>!i.d&&!i.mk);const size=files.reduce((a,i)=>a+(i.s||0),0);const latest=files.reduce((a,i)=>Math.max(a,i.m||0),0);
-  const pend=F.items.filter(i=>i.st==="pending").length;
+  const pend=F.items.filter(i=>i.st==="pending"&&!i.mk).length;
   const cats={};files.forEach(i=>cats[i.c]=(cats[i.c]||0)+1);
   const osName=S.os==="win"?"Explorer":S.os==="mac"?"Finder":"ファイラー";
   const fv=venueOf(F.root,F.group);

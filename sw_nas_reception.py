@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS RECEPTION  v1.0.0  —  SEVENTHWELL
+SW NAS RECEPTION  v1.1.0  —  SEVENTHWELL
 
 学会の受付PC用。演者のデータ（USB・ドラッグ＆ドロップ）を受け取り、NAS上の演者フォルダへ入れる。
 監視・解析・一覧・会場ボードは SW NAS WATCH をそのまま使う（sw_nas_watch を部品として読み込む）。
@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS RECEPTION"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 DEFAULT_PORT = 8795
 RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（SW NAS WATCH は常に無視する）
 CHUNK = 1 << 20
@@ -53,7 +53,7 @@ JUNK = W.compile_ignore(W.DEFAULT_IGNORE)
 BAD_CHARS = set('<>:"/\\|?*')
 RESERVED = {"CON", "PRN", "AUX", "NUL"} | {"COM%d" % i for i in range(1, 10)} | {"LPT%d" % i for i in range(1, 10)}
 PRES_EXTS = set(W.PPT_CAT_EXTS) | {"key", "pdf"}
-DEFAULT_RX = {"verify": True, "keep_local": True, "pc_name": ""}
+DEFAULT_RX = {"verify": True, "keep_local": True, "pc_name": "", "flag_dir": "", "auto_recv": True}
 MAX_FILES = 20000
 
 
@@ -207,6 +207,13 @@ class Rx:
             s["keep_local"] = bool(body["keep_local"])
         if "pc_name" in body:
             s["pc_name"] = str(body["pc_name"]).strip()[:40] or socket.gethostname()[:40]
+        if "auto_recv" in body:
+            s["auto_recv"] = bool(body["auto_recv"])
+        if "flag_dir" in body:
+            fd = str(body["flag_dir"] or "").strip().strip('"')
+            if fd and not os.path.isdir(W.long_path(fd)):
+                raise ValueError("目印画像のフォルダが見つかりません: %s" % fd)
+            s["flag_dir"] = fd
         self.settings = s
         tmp = self.set_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -573,6 +580,18 @@ class Rx:
                     self._write_one(t, pdir, rel, drel, info, r, job, stamp, safe_group, st)
                     if r.get("st") not in ("ok", "replaced"):
                         job["done"] += info["size"] if r.get("st") != "same" else 0
+                # フォルダだけで運用している人にも分かるように、「受付済」の目印画像を入れる（設定でオフにできる）
+                if st.get("auto_recv") and st.get("flag_dir") and any(r.get("st") in ("ok", "replaced", "same") for r in results) \
+                        and not job["cancel"]:
+                    tpl = self._template(None, "recv")
+                    if tpl:
+                        try:
+                            fr = self._put_flag(w, pdir, t.group, tpl, skip_roles=("recv", "got", "done"))
+                            job["flag"] = fr.get("added") or ""
+                        except Exception as e:   # 目印を入れられなくても、受付（データ）は済んでいる
+                            job["errors"].append("「受付済」の目印を入れられませんでした: %s" % (W._err(e) if isinstance(e, OSError) else e))
+                    else:
+                        job["errors"].append("目印画像のフォルダに「受付済」の画像がありません")
         except Exception as e:   # 想定外でも、トレイと記録は残す
             job["errors"].append("%s: %s" % (type(e).__name__, e))
         finally:
@@ -681,7 +700,7 @@ class Rx:
         cnt = {k: sum(1 for r in results if r.get("st") == k) for k in ("ok", "replaced", "same", "busy", "err", "skip")}
         rec = {"ts": time.time(), "pc": self.settings["pc_name"], "root": t.rid, "root_label": w.label, "group": t.group,
                "files": [{k: r.get(k) for k in ("dest", "size", "st", "msg", "sha")} for r in results][:500],
-               "count": cnt}
+               "count": cnt, "flag": job.get("flag", "")}
         try:
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -689,10 +708,132 @@ class Rx:
             job["errors"].append("受付記録を保存できません: %s" % e)
         self.M.log("RECEPTION  %s / %s  書き込み%d 差し替え%d 同じ%d 使用中%d エラー%d" % (
             w.label, t.group, cnt["ok"], cnt["replaced"], cnt["same"], cnt["busy"], cnt["err"]))
-        job["result"] = {"files": results, "count": cnt}
+        job["result"] = {"files": results, "count": cnt, "flag": job.get("flag", "")}
         job["state"] = "done"
         job["t1"] = time.time()
         self.M.poke()
+
+    # ---- 目印画像（現場で使っている 00_受付済.jpg などを、そのままコピーして入れる）
+    def flag_templates(self):
+        """目印画像のフォルダにある画像の一覧。SW NAS WATCH が目印として認識するものだけ使える。"""
+        fd = self.settings.get("flag_dir") or ""
+        out = {"dir": fd, "templates": [], "error": ""}
+        if not fd:
+            return out
+        try:
+            with os.scandir(W.long_path(fd)) as it:
+                ents = [(de.name, de.stat().st_size) for de in it if de.is_file() and not de.name.startswith((".", "~$"))]
+        except OSError as e:
+            out["error"] = "目印画像のフォルダを読めません: %s" % W._err(e)
+            return out
+        for name, size in sorted(ents, key=lambda x: W.nat_key(x[0])):
+            if W.ext_of(name) not in W.MARK_EXTS or is_junk(name):
+                continue
+            mk = self.M.marker_of(name, (size, 0))
+            out["templates"].append({"name": nfc(name), "role": mk[0] if mk else None, "label": mk[1] if mk else None,
+                                     "ok": bool(mk)})
+        return out
+
+    def _template(self, name, role=None):
+        for t in self.flag_templates()["templates"]:
+            if t["ok"] and (t["name"] == name if name else t["role"] == role):
+                return t
+        return None
+
+    def _present_flags(self, w, group):
+        with w.lock:
+            cur = dict(w.current)
+        pre = group + "/"
+        out = []
+        for k, sig in cur.items():
+            if k.startswith(pre) and "/" not in k[len(pre):] and sig != W.DIR:
+                mk = self.M.marker_of(k, sig)
+                if mk:
+                    out.append((k[len(pre):], mk))
+        return out
+
+    def _put_flag(self, w, pdir, group, t, skip_roles=()):
+        """目印画像を演者フォルダへコピーする。同じ表示名の目印がすでにあれば何もしない（上書きしない）。"""
+        for n, mk in self._present_flags(w, group):
+            if mk[1] == t["label"] or mk[0] in skip_roles:
+                return {"ok": True, "exists": n}
+        dest = os.path.join(pdir, t["name"])
+        if os.path.lexists(W.long_path(dest)):
+            return {"ok": True, "exists": t["name"]}
+        src = os.path.join(self.settings["flag_dir"], t["name"])
+        tmp = os.path.join(pdir, RX_TMP + secrets.token_hex(6) + ".part")
+        try:
+            with W.open_ro(W.long_path(src)) as f:
+                data = f.read(W.MARK_MAX + 1)
+            if len(data) > W.MARK_MAX:
+                raise ValueError("目印画像が大きすぎます")
+            with open(W.long_path(tmp), "xb") as out:
+                W._hide(W.long_path(tmp))
+                out.write(data)
+                out.flush()
+                os.fsync(out.fileno())
+            with W.open_ro(W.long_path(tmp)) as f:
+                if f.read() != data:
+                    raise IOError("NASに書き込んだ内容が一致しません")
+            W._unhide(tmp)
+            if os.path.lexists(W.long_path(dest)):
+                return {"ok": True, "exists": t["name"]}
+            if W.IS_WIN:
+                os.rename(W.long_path(tmp), W.long_path(dest))     # 同じ名前があれば失敗する（上書きしない）
+            else:
+                os.link(tmp, dest)                                 # 同じ名前があれば失敗する（上書きしない）
+                os.remove(tmp)
+            tmp = None
+            W._unhide(dest)
+        finally:
+            if tmp:
+                try:
+                    os.remove(W.long_path(tmp))
+                except OSError:
+                    pass
+        self._log({"root": w.id, "group": group, "flag_add": t["name"]})
+        return {"ok": True, "added": t["name"]}
+
+    def add_flag(self, rid, group, name):
+        w, pdir = self.presenter(rid, group)
+        if not self.settings.get("flag_dir"):
+            raise ValueError("［設定］で目印画像のフォルダを指定してください")
+        t = self._template(str(name))
+        if not t:
+            raise ValueError("目印画像が見つからないか、目印として認識されません: %s" % name)
+        with self.wlock:
+            res = self._put_flag(w, pdir, group, t)
+        self.M.poke()
+        return res
+
+    def remove_flag(self, rid, group, names):
+        """目印画像だけを消す（データは消さない）。演者フォルダの直下にあり、目印として認識されるファイルに限る。"""
+        w, pdir = self.presenter(rid, group)
+        present = dict(self._present_flags(w, group))
+        done = []
+        with self.wlock:
+            for n in names or []:
+                n = nfc(str(n))
+                if "/" in n or "\\" in n or n not in present:
+                    raise ValueError("目印として認識されるファイルではありません: %s" % n)
+                p = os.path.join(pdir, n)
+                st = os.stat(W.long_path(p))
+                if self.M.marker_of(n, (st.st_size, 0)) is None:
+                    raise ValueError("目印として認識されるファイルではありません: %s" % n)
+                os.remove(W.long_path(p))
+                done.append(n)
+        if done:
+            self._log({"root": rid, "group": group, "flag_del": done})
+        self.M.poke()
+        return {"ok": True, "removed": done}
+
+    def _log(self, rec):
+        rec = dict(rec, ts=time.time(), pc=self.settings["pc_name"])
+        try:
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     # ---- 演者フォルダを作る
     def sessions(self, rid):
@@ -921,6 +1062,8 @@ class RxHandler(W.Handler):
                 self.send_json(RX.browse(g("path")))
             elif u.path == "/api/rx/settings":
                 self.send_json({"settings": RX.settings, "data_dir": RX.data})
+            elif u.path == "/api/rx/flags":
+                self.send_json(RX.flag_templates())
             else:
                 self.deny(404, "not found")
         except KeyError as e:
@@ -984,6 +1127,10 @@ class RxHandler(W.Handler):
                 self.send_json({"ok": True, "group": RX.mkdir(rid, str(body.get("parent") or ""), body.get("name"))})
             elif u.path == "/api/rx/eject":
                 self.send_json(RX.eject(body.get("path") or ""))
+            elif u.path == "/api/rx/flag":
+                self.send_json(RX.add_flag(rid, group, body.get("name") or ""))
+            elif u.path == "/api/rx/unflag":
+                self.send_json(RX.remove_flag(rid, group, [str(x) for x in (body.get("names") or [])]))
             elif u.path == "/api/rx/pickdir":
                 self.send_json({"ok": True, "path": W.pick_folder()})
             elif u.path == "/api/rx/settings":
@@ -1103,6 +1250,18 @@ RX_CSS = r'''
 .rxt{font-size:11px;font-weight:800;letter-spacing:.14em;color:#052e1a;background:var(--emerald);border-radius:6px;padding:2px 8px;flex:none}
 .rxn{font-size:19px;font-weight:700;letter-spacing:-.01em;word-break:break-all}
 .rxw{color:var(--muted-fg);font-size:12.5px}
+.rxflags{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin:-2px 0 12px;font-size:12.5px}
+.rxflags .lb{font-size:11.5px;font-weight:700;color:var(--muted-fg);margin-right:4px;letter-spacing:.06em}
+.rxflags.none{color:var(--muted-fg)}
+.rxflags .fb{height:26px;padding:0 9px;font-size:12px;font-weight:600;border-radius:999px;gap:4px;color:var(--muted-fg);background:transparent;box-shadow:none;border:1px dashed #3f3f46}
+.rxflags .fb svg{width:13px;height:13px}
+.rxflags .fb:hover{color:var(--foreground);border-color:#71717a}
+.rxflags .fb.on{border-style:solid;color:#e4e4e7;background:rgba(255,255,255,.07);border-color:#52525b}
+.rxflags .fb.on.r-recv{color:var(--emerald);border-color:rgba(16,185,129,.5);background:rgba(16,185,129,.1)}
+.rxflags .fb.on.r-got{color:var(--sky);border-color:rgba(56,189,248,.5);background:rgba(56,189,248,.1)}
+.rxflags .fb.on.r-warn{color:var(--amber);border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.1)}
+.rxflags .fb.on.r-direct{color:var(--violet);border-color:rgba(139,92,246,.5);background:rgba(139,92,246,.1)}
+.rxflags .fb.on.r-drop{color:#fca5a5;border-color:rgba(239,68,68,.5);background:rgba(239,68,68,.1)}
 .rxdrop{border:2px dashed #3f3f46;border-radius:12px;padding:18px 14px;text-align:center;transition:border-color .15s,background .15s}
 #center.dragging .rxdrop,.rxdrop.over{border-color:var(--emerald);background:rgba(16,185,129,.08)}
 .rxdrop .big{display:flex;gap:8px;justify-content:center;align-items:center;font-size:16px;font-weight:600}
@@ -1204,7 +1363,7 @@ const _oe=onEvent;onEvent=function(ev){_oe(ev);const k=ev.root+"|"+ev.group;   /
 function rxSel(){if(!RX.key)return null;const i=RX.key.indexOf("|");return {root:RX.key.slice(0,i),group:RX.key.slice(i+1)}}
 function rxSync(){const k=SEL&&SEL.group?SEL.root+"|"+SEL.group:"";
   if(k!==RX.key||!RX.inited){RX.inited=true;RX.key=k;RX.tray=null;RX.excl=new Set();RX.res=null;RX.hist=[];RX.job=null;renderRx();if(k){rxLoad();rxPoll()}}
-  else rxHead()}
+  else{rxHead();rxFlagsUpdate()}}
 async function rxLoad(){const s=rxSel();if(!s)return;const k=RX.key;
   try{const [t,h]=await Promise.all([api(`/api/rx/tray?root=${enc(s.root)}&group=${enc(s.group)}`),api(`/api/rx/history?root=${enc(s.root)}&group=${enc(s.group)}`)]);
     if(RX.key!==k)return;RX.tray=t;RX.hist=h.items||[]}
@@ -1220,6 +1379,7 @@ function renderRx(){const el=$("#rxpane");if(!el)return;
   if(!RX.key){el.innerHTML=`<div class="rxempty">${IC.inbox}<div><b>受付する演者を選んでください</b>左の一覧（または会場ボード）で演者を選ぶと、ここでデータを受け取れます。</div><button data-act="addp">${IC.plus}演者フォルダを追加</button></div>`;return}
   const s=rxSel();const name=s.group.split("/").pop();const busy=rxBusy();
   let h=`<div class="rxbox"><div class="rxh"><span class="rxt">受付</span><span class="rxn">${esc(nfc(name))}</span><span id="rxst">${rxStateTag()}</span><span class="rxw">${rxWhere()}</span><span style="flex:1"></span><button class="ghost" data-act="addp">${IC.plus}演者フォルダを追加</button></div>`;
+  h+=`<div id="rxflags">${rxFlagsHtml()}</div>`;
   h+=`<div class="rxdrop ${busy?"dis":""}" id="rxdrop"><div class="big">${IC.inbox}ここにファイル・フォルダをドロップ</div><div class="sub">USBのフォルダごとドロップしてもOK。いったんこのPCに受け取って中身を確認してから、NASへ書き込みます。</div>
     <div class="btns"><button class="pri" data-act="usb" ${busy?"disabled":""}>${IC.hd}USB・ドライブから取り込む</button><button data-act="pickf" ${busy?"disabled":""}>${IC.file}ファイルを選ぶ</button><button data-act="pickd" ${busy?"disabled":""}>${IC.folder}フォルダを選ぶ</button></div></div>`;
   h+=`<div id="rxprog">${rxProgHtml()}</div>${rxTrayHtml()}${rxResHtml()}${rxHistHtml()}</div>`;
@@ -1256,9 +1416,38 @@ function rxResHtml(){const r=RX.res;if(!r)return"";const c=r.count;const bad=c.b
   let h=`<div class="rxres ${bad?"ng":"ok"}"><div class="hd">${bad?IC.alert:IC.check2}${bad?`${good}件は完了、${bad}件は書き込めませんでした（トレイに残してあります）`:`受付しました：${good}件をNASの演者フォルダへ入れました`}</div><ul>`;
   h+=r.files.map(f=>`<li><span class="s s-${f.st}">${RXST[f.st]||f.st}</span><span class="f">${esc(nfc(f.dest))}</span>${f.msg?`<span class="m">${esc(f.msg)}</span>`:""}</li>`).join("");
   return h+`</ul></div>`}
-function rxHistHtml(){const hs=(RX.hist||[]).filter(x=>!x.mkdir);if(!hs.length)return"";
+function rxHistHtml(){const hs=(RX.hist||[]).filter(x=>x.count);if(!hs.length)return"";
   return `<div class="rxhist"><b>この演者の受付履歴</b><ul>${hs.slice(0,8).map(x=>{const c=x.count||{};const n=(c.ok||0)+(c.replaced||0);
-    return `<li>${dtm(x.ts)}　${esc(x.pc||"")}　${n}件${c.replaced?`（差し替え${c.replaced}）`:""}${c.busy||c.err?`　<span style="color:var(--amber)">未完了 ${(c.busy||0)+(c.err||0)}</span>`:""}</li>`}).join("")}</ul></div>`}
+    return `<li>${dtm(x.ts)}　${esc(x.pc||"")}　${n}件${c.replaced?`（差し替え${c.replaced}）`:""}${c.busy||c.err?`　<span style="color:var(--amber)">未完了 ${(c.busy||0)+(c.err||0)}</span>`:""}${x.flag?`　目印「${esc(nfc(x.flag))}」`:""}</li>`}).join("")}</ul></div>`}
+/* ---- 目印画像（現場の 00_受付済.jpg などをそのままコピーして付ける・外す） */
+function rxFolderFlags(){const s=rxSel();if(!s||!F||F.root!==s.root||F.group!==s.group)return null;
+  return (F.items||[]).filter(i=>i.mk&&!i.d&&!i.p.includes("/"))}
+function rxFlagsHtml(){const fl=RX.flags;const pres=rxFolderFlags();if(!fl)return"";
+  if(!fl.dir)return `<div class="rxflags none"><span class="lb">目印</span><span class="hint" style="margin:0">［設定］→「受付」で目印画像のフォルダ（00_受付済.jpg などの元画像）を指定すると、ここから目印を付けられます</span></div>`;
+  if(fl.error)return `<div class="rxflags none"><span class="lb">目印</span><span style="color:var(--amber)">${esc(fl.error)}</span></div>`;
+  const on=new Map();(pres||[]).forEach(i=>{if(!on.has(i.ml))on.set(i.ml,[]);on.get(i.ml).push(i.p)});
+  const busy=RX.flagBusy||pres===null;
+  let h=fl.templates.filter(t=>t.ok).map(t=>{const has=on.has(t.label);
+    return `<button class="fb ${has?"on":""} r-${esc(t.role)}" ${busy?"disabled":""} ${has?`data-unflag="${esc(t.label)}" title="NASの演者フォルダから「${esc(nfc(on.get(t.label).join("、")))}」を消します（データは消しません）"`:`data-flag="${esc(t.name)}" title="「${esc(nfc(t.name))}」を演者フォルダへ入れます"`}>${has?IC.chk:""}${esc(nfc(t.label))}</button>`}).join("");
+  const known=new Set(fl.templates.filter(t=>t.ok).map(t=>t.label));
+  h+=[...on.keys()].filter(l=>!known.has(l)).map(l=>`<button class="fb on" ${busy?"disabled":""} data-unflag="${esc(l)}" title="NASの演者フォルダから「${esc(nfc(on.get(l).join("、")))}」を消します">${IC.chk}${esc(nfc(l))}</button>`).join("");
+  const bad=fl.templates.filter(t=>!t.ok);
+  return `<div class="rxflags"><span class="lb">目印</span>${h}${bad.length?`<span class="hint" style="margin:0" title="${esc(bad.map(t=>t.name).join("、"))}">（目印として認識されない画像 ${bad.length}件：［設定］→「目印のファイル」に文字を追加すると使えます）</span>`:""}</div>`}
+function rxFlagsUpdate(){const e=$("#rxflags");if(e){const h=rxFlagsHtml();if(e.innerHTML!==h)e.innerHTML=h}}
+async function rxLoadFlags(){try{RX.flags=await api("/api/rx/flags")}catch(e){RX.flags={dir:"",templates:[],error:e.message}}rxFlagsUpdate()}
+rxLoadFlags();
+$("#rxpane").addEventListener("click",async e=>{const b=e.target.closest("[data-flag],[data-unflag]");if(!b)return;const s=rxSel();if(!s)return;
+  e.stopPropagation();
+  if(b.dataset.flag){RX.flagBusy=true;rxFlagsUpdate();
+    try{const j=await api("/api/rx/flag",{root:s.root,group:s.group,name:b.dataset.flag});toast(j.added?`目印「${nfc(j.added)}」を入れました`:`同じ目印がすでにあります（${nfc(j.exists||"")}）`,3500)}
+    catch(err){toast(err.message,6000)}
+    RX.flagBusy=false;refresh();return}
+  const names=(rxFolderFlags()||[]).filter(i=>i.ml===b.dataset.unflag).map(i=>i.p);if(!names.length)return;
+  if(!confirm(`目印「${nfc(b.dataset.unflag)}」を外します。\nNASの演者フォルダから ${names.map(nfc).join("、")} を削除します（データは消しません）。`))return;
+  RX.flagBusy=true;rxFlagsUpdate();
+  try{const j=await api("/api/rx/unflag",{root:s.root,group:s.group,names});toast(`目印を外しました（${j.removed.map(nfc).join("、")}）`,3500)}
+  catch(err){toast(err.message,6000)}
+  RX.flagBusy=false;refresh()},true);
 /* ---- 受け取り（ブラウザから） */
 function rxFilterList(list){return list.filter(x=>{const n=x.file.name;return !/^(\.ds_store|thumbs\.db|desktop\.ini)$/i.test(n)&&!n.startsWith("._")&&!n.startsWith("~$")})}
 function upOne(s,file,rel,onp){return new Promise((res,rej)=>{const x=new XMLHttpRequest();RX.xhr=x;
@@ -1373,17 +1562,23 @@ api("/api/rx/settings").then(j=>{RX.settings=j.settings;RX.data=j.data_dir}).cat
 const _rcfg=renderCfg;renderCfg=function(){_rcfg();
   const op=[...document.querySelectorAll("#modal h3")].find(x=>x.textContent.trim()==="会場オペレーターモード");
   if(op){op.style.display="none";const c=$("#opOn");if(c){c.checked=false;const p=c.closest("p");if(p)p.style.display="none"}const bx=$("#opBox");if(bx)bx.style.display="none"}
-  const foot=$("#modal .foot");const st=RX.settings||{verify:true,keep_local:true,pc_name:""};
+  const foot=$("#modal .foot");const st=RX.settings||{verify:true,keep_local:true,pc_name:"",flag_dir:"",auto_recv:true};
   if(foot&&!$("#rxSet")){const d=document.createElement("div");d.id="rxSet";
     d.innerHTML=`<h3>受付</h3><div class="checks" style="flex-direction:column;gap:8px">
       <label><input type="checkbox" id="rxVerify" ${st.verify?"checked":""}>NASへ書き込んだあと、読み直して内容を照合する（おすすめ）</label>
       <label><input type="checkbox" id="rxKeep" ${st.keep_local?"checked":""}>受け取ったデータと、差し替える前の版をこのPCにも残す（おすすめ。オフのときは差し替え前の版を残さずに置き換えます）</label></div>
       <div class="grid2" style="margin-top:10px"><span>受付PCの名前</span><input type="text" id="rxPc" value="${esc(st.pc_name||"")}" placeholder="例: 受付1"></div>
-      <p class="hint">受付履歴に記録されます。保存先: <span class="mono">${esc(RX.data||"")}</span>（received＝受け取ったデータ、backup＝差し替え前の版）</p>`;
-    foot.parentNode.insertBefore(d,foot)}};
+      <p class="hint">受付履歴に記録されます。保存先: <span class="mono">${esc(RX.data||"")}</span>（received＝受け取ったデータ、backup＝差し替え前の版）</p>
+      <div class="grid2" style="margin-top:10px"><span>目印画像のフォルダ</span><span style="display:flex;gap:6px;min-width:0"><input type="text" id="rxFlagDir" value="${esc(st.flag_dir||"")}" placeholder="例: \\\\192.168.0.10\\share\\目印" style="flex:1;min-width:0"><button class="ghost" id="rxFlagPick" type="button">選ぶ…</button></span></div>
+      <p class="hint">現場で使っている目印の元画像（00_受付済.jpg 〜 18_発表終了.jpg など）を入れたフォルダを指定すると、受付パネルから目印を付けたり外したりできます。画像はそのままコピーします（アプリが画像を作ることはありません）。</p>
+      <div class="checks" style="flex-direction:column;gap:8px;margin-top:6px"><label><input type="checkbox" id="rxAuto" ${st.auto_recv!==false?"checked":""}>受付したとき、「受付済」の目印画像を演者フォルダへ入れる（フォルダだけで確認している人にも受付済みが分かるように。すでに受付済・会場取得・発表終了の目印があれば入れません）</label></div>`;
+    foot.parentNode.insertBefore(d,foot);
+    $("#rxFlagPick").onclick=async()=>{try{const j=await api("/api/rx/pickdir",{});if(j.path)$("#rxFlagDir").value=j.path}catch(e){toast(e.message,5000)}}}};
 const _sc=saveCfg;saveCfg=async function(){
-  if($("#rxVerify")){try{const j=await api("/api/rx/settings",{verify:$("#rxVerify").checked,keep_local:$("#rxKeep").checked,pc_name:$("#rxPc").value.trim()});RX.settings=j.settings}catch(e){toast(e.message,5000)}}
-  return _sc()};
+  if($("#rxVerify")){try{const j=await api("/api/rx/settings",{verify:$("#rxVerify").checked,keep_local:$("#rxKeep").checked,pc_name:$("#rxPc").value.trim(),
+      flag_dir:$("#rxFlagDir").value.trim().replace(/^"|"$/g,""),auto_recv:$("#rxAuto").checked});RX.settings=j.settings}
+    catch(e){const c=$("#cerr");if(c)c.textContent=e.message;else toast(e.message,5000);return}}
+  const r=await _sc();rxLoadFlags();return r};
 '''
 
 if __name__ == "__main__":
