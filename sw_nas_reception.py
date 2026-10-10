@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS RECEPTION  v1.1.0  —  SEVENTHWELL
+SW NAS RECEPTION  v1.2.0  —  SEVENTHWELL
 
 学会の受付PC用。演者のデータ（USB・ドラッグ＆ドロップ）を受け取り、NAS上の演者フォルダへ入れる。
 監視・解析・一覧・会場ボードは SW NAS WATCH をそのまま使う（sw_nas_watch を部品として読み込む）。
@@ -27,6 +27,7 @@ NASへの書き込みのルール
 """
 import argparse
 import hashlib
+import re
 import json
 import os
 import secrets
@@ -45,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS RECEPTION"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 DEFAULT_PORT = 8795
 RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（SW NAS WATCH は常に無視する）
 CHUNK = 1 << 20
@@ -117,9 +118,8 @@ def is_busy_error(e):
 
 
 def pick_data_dir():
-    home = os.environ.get("SW_NAS_RECEPTION_HOME", "")
-    here = home if home and os.path.isdir(home) else os.path.dirname(os.path.abspath(__file__))
-    for d in (os.path.join(here, "sw_nas_reception_data"), os.path.join(os.path.expanduser("~"), ".sw_nas_reception")):
+    # exe をNAS上に置いて起動した場合は、NASに書かないようローカルのアプリ用フォルダへ保存する
+    for d in W.data_dir_candidates("SW_NAS_RECEPTION_HOME", "sw_nas_reception_data", ".sw_nas_reception"):
         try:
             os.makedirs(d, exist_ok=True)
             probe = os.path.join(d, ".probe")
@@ -144,13 +144,18 @@ class Tray:
         self.lock = threading.RLock()
 
     def path_of(self, rel):
-        return os.path.join(self.dir, "files", *rel.split("/"))
+        return W.long_path(os.path.join(self.dir, "files", *rel.split("/")))
+
+    def find_ci(self, rel):
+        """大文字小文字だけが違う同じ名前（Windowsでは同じファイルになる）がトレイにあれば、その名前を返す。"""
+        cf = rel.casefold()
+        return next((k for k in self.files if k != rel and k.casefold() == cf), None)
 
     def save(self):
         os.makedirs(self.dir, exist_ok=True)
         tmp = os.path.join(self.dir, "meta.json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"rid": self.rid, "group": self.group, "files": self.files}, f, ensure_ascii=False)
+        with open(tmp, "wb") as f:
+            f.write(W.json_bytes({"rid": self.rid, "group": self.group, "files": self.files}))
         os.replace(tmp, os.path.join(self.dir, "meta.json"))
 
     @classmethod
@@ -211,7 +216,7 @@ class Rx:
             s["auto_recv"] = bool(body["auto_recv"])
         if "flag_dir" in body:
             fd = str(body["flag_dir"] or "").strip().strip('"')
-            if fd and not os.path.isdir(W.long_path(fd)):
+            if fd and fd != self.settings.get("flag_dir") and not os.path.isdir(W.long_path(fd)):
                 raise ValueError("目印画像のフォルダが見つかりません: %s" % fd)
             s["flag_dir"] = fd
         self.settings = s
@@ -222,17 +227,21 @@ class Rx:
         return s
 
     # ---- NAS側の確認
-    def presenter(self, rid, group):
+    def presenter(self, rid, group, check=False):
+        """演者フォルダの場所。check=True（NASへ書き込む前）は、NAS上に今あることを必ず確かめる
+        （一覧が少し古いと、名前を変えた・消したフォルダを作り直してしまうため）。"""
         w = self.M.watchers.get(rid)
         if not w:
             raise KeyError("監視フォルダが見つかりません（設定を確認してください）")
         segs = group.split("/") if group else []
-        if len(segs) != w.depth or any(s in ("", ".", "..") or "\\" in s or ":" in s for s in segs):
+        # Windowsでは末尾の「.」「空白」が無視される（「...」が親フォルダを指してしまう等）ので、そういう名前は受け付けない
+        if len(segs) != w.depth or any(x in ("", ".", "..") or x.strip(" .") == "" or x.endswith((" ", "."))
+                                       or any(c in x for c in "\\/:") or any(ord(c) < 32 for c in x) for x in segs):
             raise ValueError("演者フォルダを選んでください")
         path = os.path.join(w.path, *segs)
         with w.lock:
             known = w.current.get(group) == W.DIR
-        if not known and not os.path.isdir(W.long_path(path)):
+        if (check or not known) and not os.path.isdir(W.long_path(path)):
             raise KeyError("演者フォルダがNAS上に見つかりません（削除・名前変更された可能性）")
         return w, path
 
@@ -254,6 +263,19 @@ class Rx:
     def _busy(self, key):
         j = self.job_of(key)
         return bool(j and j["state"] == "run")
+
+    def _drop_ci(self, t, rel):
+        """大文字小文字だけが違う古い項目をトレイから外す（Windowsでは同じファイルなので、新しい方だけを残す）。"""
+        old = t.find_ci(rel)
+        if not old:
+            return
+        try:
+            op, np_ = t.path_of(old), t.path_of(rel)
+            if os.path.exists(op) and not (os.path.exists(np_) and os.path.samefile(op, np_)):
+                os.remove(op)
+        except OSError:
+            pass
+        t.files.pop(old, None)
 
     # ---- トレイへ受け取る（ブラウザから）
     def upload(self, rid, group, rel, length, rfile):
@@ -307,6 +329,7 @@ class Rx:
                 except OSError:
                     pass
         with t.lock:
+            self._drop_ci(t, rel)
             t.files[rel] = {"size": n, "sha": h.hexdigest(), "src": "ドロップ", "t": time.time()}
             t.ver += 1
             t.save()
@@ -319,24 +342,35 @@ class Rx:
         if self._busy(t.key):
             raise ValueError("NASへの書き込み・取り込みの途中です")
         items = []
+
+        def is_link(x):     # シンボリックリンク・ジャンクションはたどらない（NASやこのアプリの保存先を指していることがある）
+            try:
+                return os.path.islink(x) or (hasattr(os.path, "isjunction") and os.path.isjunction(x))
+            except OSError:
+                return True
+        roots = self.nas_roots()
         for p in paths or []:
             p = os.path.abspath(str(p))
             if not os.path.exists(p):
                 raise ValueError("見つかりません: %s" % p)
-            for nr in self.nas_roots():
-                if W.is_under(p, nr) or W.is_under(nr, p):
+            for nr in roots:
+                if W.overlaps(p, nr):
                     raise ValueError("NASの監視フォルダの中からは取り込めません: %s" % p)
-            if W.is_under(p, self.data):
-                raise ValueError("このアプリの保存先からは取り込めません")
+            if W.is_under(p, self.data) or W.is_under(self.data, p):
+                raise ValueError("このアプリの保存先（またはそれを含むフォルダ）からは取り込めません")
+            if is_link(p):
+                raise ValueError("ショートカット（リンク）は取り込めません。元のファイル・フォルダを選んでください: %s" % p)
             if os.path.isfile(p):
                 items.append((p, nfc(os.path.basename(p))))
                 continue
             top = os.path.basename(p.rstrip("\\/"))
             for dp, dns, fns in os.walk(p):
                 dns[:] = sorted(d for d in dns if not d.startswith((".", "$")) and d != "System Volume Information"
-                                and not is_junk(d))
+                                and not is_junk(d) and not is_link(os.path.join(dp, d)))
                 for fn in sorted(fns):
                     sp = os.path.join(dp, fn)
+                    if is_link(sp):
+                        continue
                     rel = os.path.relpath(sp, p).replace("\\", "/")
                     items.append((sp, nfc((top + "/" + rel) if top else rel)))
                     if len(items) > MAX_FILES:
@@ -390,6 +424,7 @@ class Rx:
                         continue
                     os.replace(tmp, dst)
                     with t.lock:
+                        self._drop_ci(t, rel)
                         t.files[rel] = {"size": n, "sha": h.hexdigest(), "src": "USB", "t": time.time()}
                         t.ver += 1
                 except (OSError, ValueError, W.UnsafeOpen) as e:
@@ -431,10 +466,19 @@ class Rx:
         return res
 
     def tray_state(self, rid, group):
-        w, _pdir = self.presenter(rid, group)
+        missing = False
+        try:
+            w, _pdir = self.presenter(rid, group)
+        except KeyError:
+            w = self.M.watchers.get(rid)
+            if not w:
+                raise
+            missing = True          # 演者フォルダが名前変更・削除された：受け取ったデータは見せる（移す・空にするため）
         t = self.tray(rid, group)
-        out = {"files": [], "top": None, "total": 0, "warn": [], "busy": False}
+        out = {"files": [], "top": None, "total": 0, "warn": [], "busy": False, "missing": missing}
         if not t or not t.files:
+            if missing:
+                raise KeyError("演者フォルダがNAS上に見つかりません（削除・名前変更された可能性）")
             return out
         out["busy"] = self._busy(t.key)
         rels = sorted(t.files, key=W.nat_key)
@@ -443,16 +487,21 @@ class Rx:
             out["top"] = next(iter(tops))
         with w.lock:
             cur = w.current
+        pre = group + "/"
+        curcf = {k.casefold() for k in cur if k.startswith(pre)}     # NASは大文字小文字を区別しない
         warn = []
+        if missing:
+            warn.append(("bad", "この演者フォルダがNAS上に見つかりません（名前変更・削除された可能性）。受け取ったデータは残っています。"
+                                "「別の演者へ移す」で移すか、トレイを空にしてください"))
         pres, ppts = 0, []
         for rel in rels:
             info = t.files[rel]
             name = rel.split("/")[-1]
             ext = W.ext_of(name)
             f = {"rel": rel, "size": info["size"], "src": info.get("src", ""), "c": W.file_cat(name),
-                 "exists": (group + "/" + rel) in cur}
+                 "exists": (pre + rel).casefold() in curcf}
             if out["top"]:
-                f["exists_strip"] = (group + "/" + rel.split("/", 1)[1]) in cur
+                f["exists_strip"] = (pre + rel.split("/", 1)[1]).casefold() in curcf
             kind = W.ana_kind(rel)
             if ext in PRES_EXTS:
                 pres += 1
@@ -530,7 +579,7 @@ class Rx:
 
     # ---- NASへ書き込む
     def start_commit(self, rid, group, strip_top=False, exclude=None):
-        w, pdir = self.presenter(rid, group)
+        w, pdir = self.presenter(rid, group, check=True)
         t = self.tray(rid, group)
         if not t or not t.files:
             raise ValueError("トレイが空です")
@@ -550,6 +599,12 @@ class Rx:
                 raise ValueError("同じ名前になるファイルがあります: %s" % drel)
             seen.add(k)
             plan.append((rel, drel, dict(t.files[rel])))
+        # 置き換える予定のファイルが会場PCで開かれていたら、何も書かずに止める
+        # （動画だけ新しくなってPowerPointは古いまま、という中途半端な状態をNASに作らないため）
+        busy = [drel for _r, drel, _i in plan if W.in_use_by_office(os.path.join(pdir, *drel.split("/")))]
+        if busy:
+            raise ValueError("会場PCで開かれているファイルがあるため、受付を始めませんでした（%s）。閉じてからもう一度「受付する」を押してください"
+                             % "、".join(busy[:3]))
         # 動画などを先に、発表ファイルを最後に（会場側でPowerPointだけ先に届かないように）
         plan.sort(key=lambda x: (W.ext_of(x[1].split("/")[-1]) in PRES_EXTS, W.nat_key(x[1])))
         total = sum(x[2]["size"] for x in plan)
@@ -570,6 +625,8 @@ class Rx:
         safe_group = "/".join(p for p in t.group.split("/"))
         try:
             with self.wlock:
+                self._sweep_tmp(pdir)
+                done_bytes = 0
                 for i, (rel, drel, info) in enumerate(plan, 1):
                     job["i"], job["cur"] = i, drel
                     r = {"rel": rel, "dest": drel, "size": info["size"]}
@@ -578,11 +635,12 @@ class Rx:
                         r.update(st="skip", msg="中止しました")
                         continue
                     self._write_one(t, pdir, rel, drel, info, r, job, stamp, safe_group, st)
-                    if r.get("st") not in ("ok", "replaced"):
-                        job["done"] += info["size"] if r.get("st") != "same" else 0
-                # フォルダだけで運用している人にも分かるように、「受付済」の目印画像を入れる（設定でオフにできる）
-                if st.get("auto_recv") and st.get("flag_dir") and any(r.get("st") in ("ok", "replaced", "same") for r in results) \
-                        and not job["cancel"]:
+                    done_bytes += info["size"]
+                    job["done"] = done_bytes      # 書いた・飛ばした分を合わせた進み具合
+                # フォルダだけで運用している人にも分かるように、「受付済」の目印画像を入れる（設定でオフにできる）。
+                # 1つでも書き込めなかったファイルがあるときは入れない（受付が終わっていないため）
+                if st.get("auto_recv") and st.get("flag_dir") and results \
+                        and all(r.get("st") in ("ok", "replaced", "same") for r in results) and not job["cancel"]:
                     tpl = self._template(None, "recv")
                     if tpl:
                         try:
@@ -592,6 +650,8 @@ class Rx:
                             job["errors"].append("「受付済」の目印を入れられませんでした: %s" % (W._err(e) if isinstance(e, OSError) else e))
                     else:
                         job["errors"].append("目印画像のフォルダに「受付済」の画像がありません")
+                elif st.get("auto_recv") and st.get("flag_dir") and any(r.get("st") in ("busy", "err") for r in results):
+                    job["flag_skip"] = True
         except Exception as e:   # 想定外でも、トレイと記録は残す
             job["errors"].append("%s: %s" % (type(e).__name__, e))
         finally:
@@ -606,7 +666,19 @@ class Rx:
         ddir = os.path.dirname(dest)
         tmp = None
         try:
-            os.makedirs(W.long_path(ddir), exist_ok=True)
+            if not os.path.isdir(W.long_path(pdir)):
+                # 演者フォルダが名前変更・削除された：作り直さない（古い名前のフォルダをNASに復活させないため）
+                r.update(st="err", msg="演者フォルダがNAS上に見つかりません（名前変更・削除された可能性）。トレイに残しています")
+                return
+            # 演者フォルダの中のフォルダだけを1段ずつ作る（演者フォルダやその上は決して作らない）
+            sub = drel.split("/")[:-1]
+            for i in range(1, len(sub) + 1):
+                d = os.path.join(pdir, *sub[:i])
+                if not os.path.isdir(W.long_path(d)):
+                    try:
+                        os.mkdir(W.long_path(d))
+                    except FileExistsError:
+                        pass
             existed = os.path.lexists(ld)
             if existed and os.path.isdir(ld):
                 r.update(st="err", msg="同じ名前のフォルダがNASにあります")
@@ -660,7 +732,7 @@ class Rx:
             r.update(st="err", msg=str(e))
         except OSError as e:
             if is_busy_error(e):
-                r.update(st="busy", msg="NAS上で使用中のため書き込めません（%s）" % W._err(e))
+                r.update(st="busy", msg="NAS上で使用中か、書き込む権限がないため書き込めません（%s）" % W._err(e))
             else:
                 r.update(st="err", msg="書き込めません: %s" % W._err(e))
         except Exception as e:
@@ -672,6 +744,24 @@ class Rx:
                 except OSError:
                     pass
 
+    def _sweep_tmp(self, pdir):
+        """前に異常終了（書き込み中にウィンドウを閉じた等）して残った自分の一時ファイル（.swnr_xxxx.part）を片付ける。
+        この演者フォルダの中だけ。ほかの受付PCが書き込み中のものを消さないよう、15分以上更新されていないものに限る。"""
+        pat = re.compile(r"^%s[0-9a-f]{12}\.part$" % re.escape(RX_TMP))
+        cut = time.time() - 900
+        try:
+            for dp, _dns, fns in os.walk(W.long_path(pdir)):
+                for fn in fns:
+                    if pat.match(fn):
+                        fp = os.path.join(dp, fn)
+                        try:
+                            if os.stat(fp).st_mtime < cut:
+                                os.remove(fp)
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+
     def _finish(self, t, w, results, job, stamp, safe_group):
         done = [r for r in results if r.get("st") in ("ok", "replaced", "same")]
         keep = self.settings["keep_local"]
@@ -681,13 +771,18 @@ class Rx:
                 src = t.path_of(rel)
                 try:
                     if keep:
-                        dst = os.path.join(self.recv_dir, t.rid, *safe_group.split("/"), stamp, *r["dest"].split("/"))
+                        dst = W.long_path(os.path.join(self.recv_dir, t.rid, *safe_group.split("/"), stamp, *r["dest"].split("/")))
                         os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        if os.path.exists(dst):
+                            base_, ext_ = os.path.splitext(dst)
+                            dst = "%s_%s%s" % (base_, secrets.token_hex(2), ext_)
                         shutil.move(src, dst)
                     else:
                         os.remove(src)
-                except OSError:
-                    pass
+                except OSError as e:
+                    # NASへの受付は済んでいる。このPCの予備に移せなかったので、トレイに残しておく（消さない）
+                    r["msg"] = ((r.get("msg") or "") + "　このPCへの保存に失敗したため、トレイに残しています（%s）" % W._err(e)).strip()
+                    continue
                 t.files.pop(rel, None)
             t.ver += 1
             if t.files:
@@ -702,16 +797,55 @@ class Rx:
                "files": [{k: r.get(k) for k in ("dest", "size", "st", "msg", "sha")} for r in results][:500],
                "count": cnt, "flag": job.get("flag", "")}
         try:
-            with open(self.log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            with open(self.log_path, "ab") as f:
+                f.write(W.json_bytes(rec) + b"\n")
         except OSError as e:
             job["errors"].append("受付記録を保存できません: %s" % e)
         self.M.log("RECEPTION  %s / %s  書き込み%d 差し替え%d 同じ%d 使用中%d エラー%d" % (
             w.label, t.group, cnt["ok"], cnt["replaced"], cnt["same"], cnt["busy"], cnt["err"]))
-        job["result"] = {"files": results, "count": cnt, "flag": job.get("flag", "")}
+        job["result"] = {"files": results, "count": cnt, "flag": job.get("flag", ""), "flag_skip": bool(job.get("flag_skip"))}
         job["state"] = "done"
         job["t1"] = time.time()
         self.M.poke()
+
+    def move_tray(self, rid, group, to_group):
+        """受け取ったデータを、別の演者（名前を変えた演者フォルダなど）のトレイへ移す。"""
+        t = self.tray(rid, group)
+        if not t or not t.files:
+            raise ValueError("トレイが空です")
+        if self._busy(t.key):
+            raise ValueError("取り込み・書き込みの途中です")
+        self.presenter(rid, to_group, check=True)
+        nt = self.tray(rid, to_group)
+        if nt and nt.files:
+            raise ValueError("移す先の演者のトレイにもデータがあります。先に受付するか、空にしてください")
+        new = Tray(self.stage, rid, to_group)
+        with t.lock:
+            if os.path.exists(new.dir):
+                shutil.rmtree(new.dir, ignore_errors=True)
+            shutil.move(t.dir, new.dir)
+            new.files = dict(t.files)
+            new.ver = t.ver + 1
+            new.save()
+            t.files = {}
+        with self.lock:
+            self.trays.pop(t.key, None)
+            self.trays[new.key] = new
+        self._log({"root": rid, "group": to_group, "tray_from": group})
+        return {"ok": True}
+
+    def list_trays(self):
+        """トレイにデータが残っている演者の一覧（演者フォルダの名前が変わって見えなくなったものも含む）。"""
+        with self.lock:
+            ts = list(self.trays.values())
+        out = []
+        for t in ts:
+            if not t.files:
+                continue
+            w = self.M.watchers.get(t.rid)
+            out.append({"root": t.rid, "group": t.group, "n": len(t.files), "size": sum(i["size"] for i in t.files.values()),
+                        "exists": bool(w) and w.current.get(t.group) == W.DIR})
+        return sorted(out, key=lambda x: W.nat_key(x["group"]))
 
     # ---- 目印画像（現場で使っている 00_受付済.jpg などを、そのままコピーして入れる）
     def flag_templates(self):
@@ -757,6 +891,8 @@ class Rx:
         for n, mk in self._present_flags(w, group):
             if mk[1] == t["label"] or mk[0] in skip_roles:
                 return {"ok": True, "exists": n}
+        if not os.path.isdir(W.long_path(pdir)):
+            raise KeyError("演者フォルダがNAS上に見つかりません（名前変更・削除された可能性）")
         dest = os.path.join(pdir, t["name"])
         if os.path.lexists(W.long_path(dest)):
             return {"ok": True, "exists": t["name"]}
@@ -781,8 +917,15 @@ class Rx:
             if W.IS_WIN:
                 os.rename(W.long_path(tmp), W.long_path(dest))     # 同じ名前があれば失敗する（上書きしない）
             else:
-                os.link(tmp, dest)                                 # 同じ名前があれば失敗する（上書きしない）
-                os.remove(tmp)
+                try:
+                    os.link(tmp, dest)                             # 同じ名前があれば失敗する（上書きしない）
+                    os.remove(tmp)
+                except FileExistsError:
+                    return {"ok": True, "exists": t["name"]}
+                except OSError:                                    # SMBなど、リンクを作れない場所
+                    if os.path.lexists(dest):
+                        return {"ok": True, "exists": t["name"]}
+                    os.rename(tmp, dest)
             tmp = None
             W._unhide(dest)
         finally:
@@ -795,7 +938,7 @@ class Rx:
         return {"ok": True, "added": t["name"]}
 
     def add_flag(self, rid, group, name):
-        w, pdir = self.presenter(rid, group)
+        w, pdir = self.presenter(rid, group, check=True)
         if not self.settings.get("flag_dir"):
             raise ValueError("［設定］で目印画像のフォルダを指定してください")
         t = self._template(str(name))
@@ -807,21 +950,41 @@ class Rx:
         return res
 
     def remove_flag(self, rid, group, names):
-        """目印画像だけを消す（データは消さない）。演者フォルダの直下にあり、目印として認識されるファイルに限る。"""
-        w, pdir = self.presenter(rid, group)
-        present = dict(self._present_flags(w, group))
+        """目印画像だけを消す（データは消さない）。演者フォルダの直下にあり、目印として認識され、
+        しかも目印画像のフォルダにある元画像と中身が同じものに限る（同じ名前のデータ画像を消さないため）。"""
+        w, pdir = self.presenter(rid, group, check=True)
+        present = {nfc(n): n for n, _mk in self._present_flags(w, group)}     # Macで作られた名前（NFD）も同じに扱う
+        fd = self.settings.get("flag_dir") or ""
+        tpl = {}
+        for t in self.flag_templates()["templates"]:
+            if t["ok"]:
+                try:
+                    with W.open_ro(W.long_path(os.path.join(fd, t["name"]))) as f:
+                        b = f.read(W.MARK_MAX + 1)
+                    tpl.setdefault(len(b), set()).add(hashlib.sha256(b).hexdigest())
+                except (OSError, W.UnsafeOpen):
+                    pass
+        targets = []
+        for n in names or []:
+            n = nfc(str(n))
+            if "/" in n or "\\" in n or n not in present:
+                raise ValueError("目印として認識されるファイルではありません: %s" % n)
+            real = present[n]
+            p = os.path.join(pdir, real)
+            st = os.stat(W.long_path(p))
+            if st.st_size > W.MARK_MAX or self.M.marker_of(real, (st.st_size, 0)) is None:
+                raise ValueError("目印として認識されるファイルではありません: %s" % n)
+            with W.open_ro(W.long_path(p)) as f:
+                h = hashlib.sha256(f.read(W.MARK_MAX + 1)).hexdigest()
+            if h not in tpl.get(st.st_size, ()):
+                raise ValueError("「%s」は目印画像のフォルダにある元画像と中身が違うため、アプリからは外せません"
+                                 "（データの画像かもしれません。外すならExplorerで確認してから操作してください）" % n)
+            targets.append(real)
         done = []
         with self.wlock:
-            for n in names or []:
-                n = nfc(str(n))
-                if "/" in n or "\\" in n or n not in present:
-                    raise ValueError("目印として認識されるファイルではありません: %s" % n)
-                p = os.path.join(pdir, n)
-                st = os.stat(W.long_path(p))
-                if self.M.marker_of(n, (st.st_size, 0)) is None:
-                    raise ValueError("目印として認識されるファイルではありません: %s" % n)
-                os.remove(W.long_path(p))
-                done.append(n)
+            for real in targets:
+                os.remove(W.long_path(os.path.join(pdir, real)))
+                done.append(nfc(real))
         if done:
             self._log({"root": rid, "group": group, "flag_del": done})
         self.M.poke()
@@ -830,8 +993,8 @@ class Rx:
     def _log(self, rec):
         rec = dict(rec, ts=time.time(), pc=self.settings["pc_name"])
         try:
-            with open(self.log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            with open(self.log_path, "ab") as f:
+                f.write(W.json_bytes(rec) + b"\n")
         except OSError:
             pass
 
@@ -855,11 +1018,16 @@ class Rx:
         w = self.M.watchers.get(rid)
         if not w:
             raise KeyError("監視フォルダが見つかりません")
-        name = nfc(str(name)).strip()
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("フォルダ名を入れてください")
+        name = nfc(name).strip()
         if not safe_part(name) or name.startswith(RX_TMP):
             raise ValueError("フォルダ名に使えない文字があります（\\ / : * ? \" < > | など）")
+        if name.startswith((".", "~$")) or W.is_ignored(self.M.ignore_re, name):
+            raise ValueError("この名前のフォルダは一覧に表示されない（無視するファイル名に当たる）ため作れません: %s" % name)
         segs = [s for s in str(parent).split("/") if s] if parent else []
-        if len(segs) != w.depth - 1 or any(s in (".", "..") or "\\" in s or ":" in s for s in segs):
+        if len(segs) != w.depth - 1 or any(x in (".", "..") or x.strip(" .") == "" or x.endswith((" ", "."))
+                                           or "\\" in x or ":" in x for x in segs):
             raise ValueError("追加先のセッションを選んでください")
         pdir = os.path.join(w.path, *segs)
         if not os.path.isdir(W.long_path(pdir)):
@@ -869,12 +1037,7 @@ class Rx:
             raise ValueError("同じ名前のフォルダがすでにあります")
         os.mkdir(W.long_path(target))
         group = "/".join(segs + [name])
-        try:
-            with open(self.log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps({"ts": time.time(), "pc": self.settings["pc_name"], "root": rid, "group": group,
-                                    "mkdir": True}, ensure_ascii=False) + "\n")
-        except OSError:
-            pass
+        self._log({"root": rid, "group": group, "mkdir": True})
         self.M.poke()
         return group
 
@@ -921,8 +1084,19 @@ class Rx:
                             "type": "USB" if typ == 2 else ("CD/DVD" if typ == 5 else "ドライブ"),
                             "eject": typ in (2, 5), "total": du.total, "free": du.free})
         elif W.IS_MAC:
+            net = set()
+            try:        # ネットワーク上の共有（NASなど）は取り込み元に出さない
+                mo = subprocess.run(["mount"], capture_output=True, text=True, timeout=5).stdout
+                for ln in mo.splitlines():
+                    m = re.match(r"^\S+ on (.+) \((smbfs|afpfs|nfs|webdav|cifs)\b", ln)
+                    if m:
+                        net.add(m.group(1))
+            except (OSError, subprocess.SubprocessError):
+                pass
             for n in sorted(os.listdir("/Volumes")):
                 p = os.path.join("/Volumes", n)
+                if p in net or any(W.is_under(p, nr) or W.is_under(nr, p) for nr in self.nas_roots()):
+                    continue
                 if os.path.ismount(p) and os.path.realpath(p) != "/":
                     try:
                         du = shutil.disk_usage(p)
@@ -1064,6 +1238,8 @@ class RxHandler(W.Handler):
                 self.send_json({"settings": RX.settings, "data_dir": RX.data})
             elif u.path == "/api/rx/flags":
                 self.send_json(RX.flag_templates())
+            elif u.path == "/api/rx/trays":
+                self.send_json({"trays": RX.list_trays()})
             else:
                 self.deny(404, "not found")
         except KeyError as e:
@@ -1127,6 +1303,8 @@ class RxHandler(W.Handler):
                 self.send_json({"ok": True, "group": RX.mkdir(rid, str(body.get("parent") or ""), body.get("name"))})
             elif u.path == "/api/rx/eject":
                 self.send_json(RX.eject(body.get("path") or ""))
+            elif u.path == "/api/rx/move":
+                self.send_json(RX.move_tray(rid, group, str(body.get("to") or "")))
             elif u.path == "/api/rx/flag":
                 self.send_json(RX.add_flag(rid, group, body.get("name") or ""))
             elif u.path == "/api/rx/unflag":
@@ -1176,11 +1354,9 @@ def main():
     store = W.LocalStore(data_dir)
     raw = store.read_json("config.json", None)
     first = raw is None
-    try:
-        cfg = W.validate_cfg(raw or {}, data_dir)
-    except ValueError as e:
-        print("設定ファイルに問題があります（初期設定で起動）: %s" % e)
-        cfg = W.validate_cfg({}, data_dir)
+    cfg, cfg_msg = W.startup_config(store, data_dir, raw)
+    if cfg_msg:
+        print(cfg_msg)
     for p in a.root:
         if not any(W.norm_key(r["path"]) == W.norm_key(p) for r in cfg["roots"]):
             cfg["roots"].append({"path": p, "label": a.label, "depth": a.depth, "enabled": True})
@@ -1192,8 +1368,6 @@ def main():
         cfg = W.validate_cfg(cfg, data_dir)
     except ValueError as e:
         raise SystemExit(str(e))
-    store.roots = [r["path"] for r in cfg["roots"]]
-    store.write_json("config.json", cfg)
 
     url = "http://127.0.0.1:%d/" % a.port
     if not W.port_free("127.0.0.1", a.port):
@@ -1207,6 +1381,8 @@ def main():
         except Exception:
             pass
         raise SystemExit("ポート %d が使用中です。--port で別の番号を指定してください" % a.port)
+    store.roots = [r["path"] for r in cfg["roots"]]
+    store.write_json("config.json", cfg)      # 2つ目の起動（すでに起動中）では設定ファイルに触れない
 
     mgr = RxManager(store, cfg)
     srv = W.Server(("127.0.0.1", a.port), RxHandler)
@@ -1376,7 +1552,7 @@ function rxStateTag(){const s=rxSel();const r=s&&rootById(s.root);const g=r&&(r.
 function rxHead(){const e=$("#rxst");if(e){const h=rxStateTag();if(e.innerHTML!==h)e.innerHTML=h}}
 function rxBusy(){return !!(RX.up||(RX.job&&RX.job.state==="run"))}
 function renderRx(){const el=$("#rxpane");if(!el)return;
-  if(!RX.key){el.innerHTML=`<div class="rxempty">${IC.inbox}<div><b>受付する演者を選んでください</b>左の一覧（または会場ボード）で演者を選ぶと、ここでデータを受け取れます。</div><button data-act="addp">${IC.plus}演者フォルダを追加</button></div>`;return}
+  if(!RX.key){el.innerHTML=`<div class="rxempty">${IC.inbox}<div><b>受付する演者を選んでください</b>左の一覧（または会場ボード）で演者を選ぶと、ここでデータを受け取れます。</div><button data-act="addp">${IC.plus}演者フォルダを追加</button></div><div id="rxleft"></div>`;rxLeftovers();return}
   const s=rxSel();const name=s.group.split("/").pop();const busy=rxBusy();
   let h=`<div class="rxbox"><div class="rxh"><span class="rxt">受付</span><span class="rxn">${esc(nfc(name))}</span><span id="rxst">${rxStateTag()}</span><span class="rxw">${rxWhere()}</span><span style="flex:1"></span><button class="ghost" data-act="addp">${IC.plus}演者フォルダを追加</button></div>`;
   h+=`<div id="rxflags">${rxFlagsHtml()}</div>`;
@@ -1384,6 +1560,11 @@ function renderRx(){const el=$("#rxpane");if(!el)return;
     <div class="btns"><button class="pri" data-act="usb" ${busy?"disabled":""}>${IC.hd}USB・ドライブから取り込む</button><button data-act="pickf" ${busy?"disabled":""}>${IC.file}ファイルを選ぶ</button><button data-act="pickd" ${busy?"disabled":""}>${IC.folder}フォルダを選ぶ</button></div></div>`;
   h+=`<div id="rxprog">${rxProgHtml()}</div>${rxTrayHtml()}${rxResHtml()}${rxHistHtml()}</div>`;
   el.innerHTML=h}
+/* まだNASへ入れていないデータが残っている演者（フォルダ名が変わって見えなくなったものも） */
+async function rxLeftovers(){let ts=[];try{ts=(await api("/api/rx/trays")).trays}catch(e){return}
+  const el=$("#rxleft");if(!el||RX.key)return;if(!ts.length){el.innerHTML="";return}
+  el.innerHTML=`<div class="rxhist" style="margin-top:12px"><b>まだNASへ入れていないデータ（トレイに残っているもの）</b><ul>${ts.map(t=>`<li><button class="ghost" data-left-r="${esc(t.root)}" data-left-g="${esc(t.group)}" style="height:26px;font-size:12.5px">${esc(nfc(t.group.split("/").join(" › ")))}</button>　${t.n}ファイル · ${fmtSize(t.size)}${t.exists?"":`　<span style="color:var(--amber)">演者フォルダが見つかりません</span>`}</li>`).join("")}</ul></div>`}
+$("#rxpane").addEventListener("click",e=>{const b=e.target.closest("[data-left-g]");if(b)selectGroup(b.dataset.leftR,b.dataset.leftG)});
 function rxProgHtml(){
   if(RX.up){const u=RX.up;const pct=u.total?Math.floor(u.done*100/u.total):0;
     return `<div class="rxprog"><div class="l1">${IC.spin}<span class="t">このPCへ受け取り中 ${u.i}/${u.n}：${esc(nfc(u.cur))}</span><button class="ghost" data-act="cancel">中止</button></div><div class="bar"><i style="width:${pct}%"></i></div><div class="l2">${fmtSize(u.done)} / ${fmtSize(u.total)}（${pct}%）${u.who!==RX.key?" · 受付先: "+esc(nfc(u.who.split("/").pop())):""}</div></div>`}
@@ -1397,7 +1578,7 @@ function rxChips(f){if(f.na)return `<span class="tag t-dim">${esc(f.na)}</span>`
   return anaChips({n:1,done:1,err:0,video:s.video,vwarn:s.vbad||0,vfbad:s.vfbad||0,vfwarn:s.vfwarn||0,links:s.links,coi:s.coi?1:0,auto:s.auto,noclick:(s.noclick||0)+(s.kiosk?1:0)})}
 function rxTrayHtml(){const t=RX.tray;if(!t)return `<div class="rxtray"><div class="th"><span class="x">読み込み中…</span></div></div>`;
   if(!t.files.length)return t.warn&&t.warn.length?`<ul class="rxwarn">${t.warn.map(w=>`<li class="${w.lv}">${esc(w.msg)}</li>`).join("")}</ul>`:"";
-  const strip=!!(t.top&&RX.strip);const busy=rxBusy()||t.busy;
+  const strip=!!(t.top&&RX.strip);const busy=rxBusy()||t.busy;const miss=!!t.missing;
   const inc=t.files.filter(f=>!RX.excl.has(f.rel));const size=inc.reduce((a,f)=>a+f.size,0);
   const rep=inc.filter(f=>strip?f.exists_strip:f.exists).length;
   let h=`<div class="rxtray"><div class="th"><b>受け取ったデータ（このPCのトレイ）</b><span class="x">${t.files.length}ファイル · ${fmtSize(t.total)}</span><span style="flex:1"></span><button class="ghost" data-act="clear" ${busy?"disabled":""}>${IC.x}トレイを空にする</button></div><table>`;
@@ -1406,6 +1587,8 @@ function rxTrayHtml(){const t=RX.tray;if(!t)return `<div class="rxtray"><div cla
     return `<tr class="${off?"off":""}"><td style="width:30px"><input type="checkbox" data-inc="${esc(f.rel)}" ${off?"":"checked"} ${busy?"disabled":""}></td><td class="nm">${segs.length?`<span class="p">${esc(nfc(segs.join("/")))}/</span>`:""}${esc(nfc(nm))}</td><td><span class="chip c-${esc(f.c)}">${esc(f.c)}</span></td><td class="num">${fmtSize(f.size)}</td><td class="tg">${rxChips(f)}${ex?`<span class="tag t-repl" title="NASに同じ名前のファイルがあります。前の版をこのPCに保存してから置き換えます（同じ内容なら書き込みません）">差し替え</span>`:""}</td><td style="width:34px"><button class="ghost rm" data-rm="${esc(f.rel)}" title="トレイから外す" ${busy?"disabled":""}>${IC.x}</button></td></tr>`}).join("");
   h+=`</table>`;
   if(t.warn&&t.warn.length)h+=`<ul class="rxwarn">${t.warn.map(w=>`<li class="${w.lv}">${w.lv==="bad"?"⚠ ":w.lv==="warn"?"! ":"・"}${esc(w.msg)}</li>`).join("")}</ul>`;
+  if(miss){const s=rxSel(),r=rootById(s.root);const opts=(r&&r.groups||[]).filter(g=>g.key&&g.key!==s.group).sort((a,b)=>cmpPath(a.key,b.key));
+    h+=`<div class="rxgo"><select id="rxMoveTo" style="max-width:420px"><option value="">移す先の演者を選ぶ…</option>${opts.map(g=>`<option value="${esc(g.key)}">${esc(nfc(g.key.split("/").join(" › ")))}</option>`).join("")}</select><button data-act="move" ${busy?"disabled":""}>別の演者へ移す</button></div></div>`;return h}
   h+=`<div class="rxgo"><button class="pri big" data-act="commit" ${busy||!inc.length?"disabled":""}>${IC.check2}${rep?"差し替えて受付する":"受付する"}（NASの演者フォルダへ ${inc.length}ファイル · ${fmtSize(size)}）</button>`;
   if(t.top)h+=`<label title="ドロップしたフォルダの名前を付けずに、中身だけを演者フォルダへ入れます"><input type="checkbox" data-act="strip" ${RX.strip?"checked":""} ${busy?"disabled":""}>「${esc(nfc(t.top))}」フォルダの中身だけ入れる</label>`;
   if(rep)h+=`<span class="note">同じ名前のファイル ${rep}件 は差し替えます（前の版はこのPCに保存）</span>`;
@@ -1415,6 +1598,8 @@ function rxResHtml(){const r=RX.res;if(!r)return"";const c=r.count;const bad=c.b
   const good=c.ok+c.replaced+c.same;
   let h=`<div class="rxres ${bad?"ng":"ok"}"><div class="hd">${bad?IC.alert:IC.check2}${bad?`${good}件は完了、${bad}件は書き込めませんでした（トレイに残してあります）`:`受付しました：${good}件をNASの演者フォルダへ入れました`}</div><ul>`;
   h+=r.files.map(f=>`<li><span class="s s-${f.st}">${RXST[f.st]||f.st}</span><span class="f">${esc(nfc(f.dest))}</span>${f.msg?`<span class="m">${esc(f.msg)}</span>`:""}</li>`).join("");
+  if(r.flag)h+=`<li><span class="s s-ok">目印</span><span class="f">${esc(nfc(r.flag))}</span><span class="m">「受付済」の目印を入れました</span></li>`;
+  if(r.flag_skip)h+=`<li><span class="s s-busy">目印</span><span class="f">—</span><span class="m">書き込めなかったファイルがあるため、「受付済」の目印は入れていません</span></li>`;
   return h+`</ul></div>`}
 function rxHistHtml(){const hs=(RX.hist||[]).filter(x=>x.count);if(!hs.length)return"";
   return `<div class="rxhist"><b>この演者の受付履歴</b><ul>${hs.slice(0,8).map(x=>{const c=x.count||{};const n=(c.ok||0)+(c.replaced||0);
@@ -1461,11 +1646,14 @@ async function rxUpload(list){
   list=rxFilterList(list);if(!list.length){toast("受け取るファイルがありません");return}
   const s=rxSel();const total=list.reduce((a,x)=>a+x.file.size,0);
   RX.up={i:0,n:list.length,done:0,total,cur:"",who:RX.key,cancel:false};RX.res=null;renderRx();
-  let base=0,err=null;
+  let base=0;const errs=[];
   for(const [i,x] of list.entries()){if(RX.up.cancel)break;RX.up.i=i+1;RX.up.cur=x.rel;rxProgUpdate();
-    try{await upOne(s,x.file,x.rel,l=>{RX.up.done=base+l;rxProgUpdate()})}catch(e){err=e;break}
+    try{await upOne(s,x.file,x.rel,l=>{RX.up.done=base+l;rxProgUpdate()})}
+    catch(e){if(RX.up.cancel)break;errs.push(x.rel+"："+e.message)}     // 1つ受け取れなくても、残りは続ける
     base+=x.file.size;RX.up.done=base}
-  const who=RX.up.who;RX.up=null;if(err)toast("受け取れませんでした: "+err.message,7000);
+  const who=RX.up.who,canceled=RX.up.cancel;RX.up=null;
+  if(errs.length)toast(`${errs.length}件を受け取れませんでした：${errs.slice(0,3).join(" / ")}${errs.length>3?" ほか":""}`,9000);
+  else if(canceled)toast("中止しました",3000);
   if(RX.key===who)await rxLoad();else renderRx()}
 async function collectDrop(dt){
   const ents=[...dt.items].filter(i=>i.kind==="file").map(i=>i.webkitGetAsEntry?i.webkitGetAsEntry():null);
@@ -1507,6 +1695,8 @@ $("#rxpane").addEventListener("click",async e=>{const b=e.target.closest("[data-
   if(a==="pickd")return $("#rxD").click();
   if(a==="cancel"){if(RX.up){RX.up.cancel=true;if(RX.xhr)RX.xhr.abort()}else api("/api/rx/cancel",{root:s.root,group:s.group}).catch(()=>{});return}
   if(a==="clear"){try{await api("/api/rx/remove",{root:s.root,group:s.group,all:true});RX.excl=new Set();RX.res=null;await rxLoad()}catch(err){toast(err.message,5000)}return}
+  if(a==="move"){const to=$("#rxMoveTo")&&$("#rxMoveTo").value;if(!to){toast("移す先の演者を選んでください");return}
+    try{await api("/api/rx/move",{root:s.root,group:s.group,to});toast("移しました",3000);selectGroup(s.root,to)}catch(err){toast(err.message,6000)}return}
   if(a==="commit"){RX.res=null;const t=RX.tray;rxStart("/api/rx/commit",{root:s.root,group:s.group,strip_top:!!(t&&t.top&&RX.strip),exclude:[...RX.excl]})}});
 $("#rxpane").addEventListener("change",e=>{const c=e.target;
   if(c.dataset.inc!==undefined){if(c.checked)RX.excl.delete(c.dataset.inc);else RX.excl.add(c.dataset.inc);renderRx();return}

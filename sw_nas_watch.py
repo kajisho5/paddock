@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.11.2  —  SEVENTHWELL
+SW NAS WATCH  v1.12.0  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
@@ -41,14 +41,16 @@ import time
 import unicodedata
 import webbrowser
 import xml.etree.ElementTree as ET
+import lzma
 import zipfile
+import zlib
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.11.2"
+VERSION = "1.12.0"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -57,7 +59,7 @@ DIR = "D"                 # スナップショット上のフォルダ印
 MAX_GROUP_WAIT = 180.0    # 書き込みが続いていても、この秒数で途中経過を確定させる
 RECENT_KEEP = 6 * 3600    # フォルダ表示で「最近の変更」印を残す時間
 EVENT_KEEP = 3000
-ANA_VERSION = 4   # 解析内容を変えたら上げる（保存済みの解析結果を作り直す）  3: 動画の形式チェック  4: リンク動画の解析失敗を修正
+ANA_VERSION = 5   # 解析内容を変えたら上げる（保存済みの解析結果を作り直す）  3: 動画の形式チェック  4: リンク動画の解析失敗を修正  5: 全体点検の修正（音声リンク・H.264プロファイル等）
 SYNC_ANALYSIS_BUDGET = 12.0  # 通知に解析結果を載せるため、確定直後に待つ最大秒数
 
 DEFAULT_IGNORE = [
@@ -202,6 +204,11 @@ def compile_ignore(patterns):
     return re.compile("|".join("(?:%s)" % fnmatch.translate(p) for p in pats))
 
 
+def is_ignored(ignore_re, rel):
+    """rel のどこかの階層が無視パターンに当たるか（scan_tree と同じ判定）。"""
+    return ignore_re is not None and any(ignore_re.match(x.lower()) for x in rel.split("/"))
+
+
 class ScanTooLarge(Exception):
     pass
 
@@ -218,7 +225,7 @@ def scan_tree(root, ignore_re, max_depth, max_entries, only=None):
     while stack:
         rel, apath, lvl = stack.pop()
         try:
-            it = os.scandir(apath)
+            it = os.scandir(long_path(apath))     # 深いフォルダ（260文字超）も読めるように
         except OSError as e:
             if not rel:
                 raise
@@ -305,14 +312,36 @@ def in_use_by_office(path):
         if not c:
             continue
         try:
-            if os.path.exists(os.path.join(d, c)):
-                return True
-        except OSError:
-            return True   # 確認できないときも触らない側に倒す
+            os.stat(long_path(os.path.join(d, c)))
+            return True
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except (OSError, ValueError):
+            return True   # 確認できないとき（ネットワークの一時的な不調など）も触らない側に倒す
     return False
 
 
 _MK_SEP = re.compile(r"[\s_\-\u2010-\u2015\u2212\u30fb.,\u3001\u3002()\[\]\u3010\u3011\u300c-\u300f\u3014\u3015]+")
+
+
+_MK_NUM = re.compile(r"^\s*[(\[（【]?\d{1,4}[)\]）】]?[\s_\-.・]*")      # 先頭の番号（00_ / 17- / (3) など）
+_MK_TAIL = re.compile(r"^(?:み|済|済み)?(?:コピー|copy|\d)*$")            # 後ろに付いてよいもの（受付済み・「- コピー (2)」など）
+
+
+def mark_stem(name):
+    """目印の照合に使う名前：拡張子と先頭の番号を除き、mark_norm でそろえたもの。"""
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return mark_norm(_MK_NUM.sub("", unicodedata.normalize("NFKC", stem), count=1))
+
+
+def mark_match(marks, name):
+    """目印の文字で「始まる」ものだけを目印にする。後ろに別の言葉が続くもの（受付済の資料.png・Backup_図1.png など）は
+    データとして扱う（データの画像を目印と取り違えて数えない・消さないため）。"""
+    st = mark_stem(name)
+    for k, role, label, i in marks:          # 長いキーワードから順に
+        if st.startswith(k) and _MK_TAIL.match(st[len(k):]):
+            return role, label, i
+    return None
 
 
 def mark_norm(s):
@@ -429,7 +458,7 @@ PROBE_SEQ_MAX = 64 * 1024 * 1024      # 圧縮されたZIPメンバーを前か�
 PROBE_TOTAL_MAX = 320 * 1024 * 1024   # 1つのPowerPointで、動画の形式確認のために読む量の合計の上限
 VIDEO_LIST_MAX = 2000                 # 1つのPowerPointで記録する動画・音声の数の上限（本数に制限はかけない前提の安全弁）
 PRORES = {"apcn", "apch", "apcs", "apco", "ap4h", "ap4x", "aprn", "aprh"}
-H264_OK = {66: "Baseline", 77: "Main", 88: "Extended", 100: "High"}
+H264_OK = {66: "Baseline", 77: "Main", 100: "High"}
 H264_NG = {110: "High 10（10bit）", 122: "High 4:2:2", 244: "High 4:4:4", 44: "CAVLC 4:4:4"}
 
 
@@ -540,11 +569,15 @@ def _video_entry(buf, a, b, fmt):
         prof = lvl = None
         if c and c[1] - c[0] >= 4:
             prof, lvl = buf[c[0] + 1], buf[c[0] + 3]
-        out["name"] = "H.264" + (" %s" % (H264_OK.get(prof) or H264_NG.get(prof) or "profile %s" % prof) if prof else "")
+        out["name"] = "H.264" + (" %s" % (H264_OK.get(prof) or H264_NG.get(prof) or ("Extended" if prof == 88 else "profile %s" % prof))
+                                 if prof else "")
         if lvl:
             out["name"] += " L%d.%d" % (lvl // 10, lvl % 10)
         if prof in H264_NG:
             out["v"], out["why"] = "bad", "Windows標準のH.264再生は8bit・4:2:0（High以下）まで。この形式は再生できない可能性が高い"
+        elif prof and prof not in H264_OK:
+            out["v"], out["why"] = "warn", "一般的でないH.264のプロファイル（%s）。会場PCで試写を" % (
+                "Extended" if prof == 88 else prof)
         elif lvl and lvl > 51:
             out["v"], out["why"] = "warn", "Windows標準のH.264再生の対応はレベル5.1まで。試写で確認を"
     elif fmt in ("hvc1", "hev1", "dvh1", "dvhe"):
@@ -732,19 +765,23 @@ def analyze_pptx(path, coi):
         except zipfile.BadZipFile:
             f.seek(0)
             if f.read(8) == OLE_MAGIC:
-                return fail("パスワード付き（暗号化）のため解析できません")
+                return fail("パスワード付き（暗号化）か、拡張子だけ変えた旧形式(.ppt)のため解析できません")
             return fail("PowerPointとして読めません（破損・コピー途中の可能性）", retry=True)
         with z:
+            if len(z.infolist()) > 100000:
+                return fail("ファイル内の部品が多すぎるため解析できません")
             res = _parse_pptx(z, path, coi, f)
         st1 = os.fstat(f.fileno())
         if (st0.st_size, st0.st_mtime_ns) != (st1.st_size, st1.st_mtime_ns):
             return fail("読み取り中にファイルが変更されました", retry=True)
         return res
     except (KeyError, ET.ParseError, ValueError, zipfile.BadZipFile, EOFError, RuntimeError,
-            NotImplementedError, IndexError) as e:
-        return fail("解析できません: %s" % e)
+            NotImplementedError, IndexError, zlib.error, lzma.LZMAError) as e:
+        return fail("解析できません（ファイルが壊れている可能性）: %s" % e)
     except OSError as e:
         return fail("読み取りエラー: " + _err(e), retry=True)
+    except Exception as e:      # 想定外でも「解析中」のまま止まらないように、結果として返す
+        return fail("解析できません: %s: %s" % (type(e).__name__, e))
     finally:
         f.close()
 
@@ -755,7 +792,7 @@ def _parse_pptx(z, path, coi, f=None):
 
     def rd(name):
         info = z.getinfo(name)
-        if info.file_size > 40 * 1024 * 1024:
+        if info.file_size > 16 * 1024 * 1024:
             raise ValueError("XMLが大きすぎます: " + name)
         budget[0] -= info.file_size
         if budget[0] < 0:
@@ -777,6 +814,9 @@ def _parse_pptx(z, path, coi, f=None):
             if typ.endswith("/officeDocument"):
                 pres_part = _resolve("", tgt)
     pres = ET.fromstring(rd(pres_part))
+    if pres.tag.startswith("{http://purl.oclc.org/ooxml/"):
+        return {"v": ANA_VERSION, "ok": False,
+                "error": "「Strict Open XML」形式のため解析できません（通常の .pptx で保存し直すと解析できます）"}
     pdir = posixpath.dirname(pres_part)
     prel = {}
     props_part = posixpath.join(pdir, "presProps.xml")
@@ -895,8 +935,7 @@ def _parse_pptx(z, path, coi, f=None):
                     m["fmt"] = probe_zip_member(f, z, key, meter)
             elif lp and ext_of(lp) in VIDEO_EXTS:
                 m["fmt"] = probe_file(lp, meter)
-        except (_ProbeStop, OSError, UnsafeOpen, ValueError, struct.error, zipfile.BadZipFile,
-                RuntimeError, EOFError, NotImplementedError, IndexError, KeyError) as e:
+        except Exception as e:      # 1本の動画の確認に失敗しても、ほかの動画と解析全体は続ける
             m["fmt"] = {"container": "不明", "v": "unk", "why": "形式を確認できません（%s）" % (str(e) or type(e).__name__)}
     for m in list(media.values()):
         m.pop("_lp", None)
@@ -918,6 +957,7 @@ def ana_sum(r):
             "vbad": sum(1 for x in v if x.get("st") in ("missing", "abs")),
             "vfbad": sum(1 for x in v if (x.get("fmt") or {}).get("v") == "bad"),
             "vfwarn": sum(1 for x in v if (x.get("fmt") or {}).get("v") == "warn"),
+            "abad": sum(1 for x in (r.get("audio") or []) if x.get("kind") != "embed" and x.get("st") in ("missing", "abs")),
             "links": r.get("n_links", len(r["links"])), "other": r.get("n_other", len(r["other"])),
             "coi": bool(r["coi"]),
             "auto": len(r["auto"]) if r["use_timings"] else 0,
@@ -930,7 +970,8 @@ def ana_text(s):
         return "解析不可（%s）" % s["err"]
     parts = [
         "動画なし" if not s["video"] else "動画あり(%d%s)" % (s["video"], "・外部%d" % s["vlink"] if s["vlink"] else "")
-        + ("・再生できない形式%d" % s["vfbad"] if s.get("vfbad") else "") + ("・形式要確認%d" % s["vfwarn"] if s.get("vfwarn") else ""),
+        + ("・再生できない形式%d" % s["vfbad"] if s.get("vfbad") else "") + ("・形式要確認%d" % s["vfwarn"] if s.get("vfwarn") else "")
+        + ("・音声リンク切れ%d" % s["abad"] if s.get("abad") else ""),
         "リンクなし" if not s["links"] else "リンクあり(%d)" % s["links"],
         "COIあり" if s["coi"] else "COIなし",
         "自動送りなし" if not s["auto"] else "自動送りあり(%d枚)" % s["auto"],
@@ -941,10 +982,18 @@ def ana_text(s):
 
 def ana_warn(s):
     return bool(s.get("err") or s.get("vlink") or not s.get("coi") or s.get("noclick") or s.get("kiosk")
-                or s.get("vfbad") or s.get("vfwarn"))
+                or s.get("vfbad") or s.get("vfwarn") or s.get("abad"))
 
 
 # ---------------------------------------------------------------- local storage
+def json_bytes(obj):
+    """JSONをUTF-8のバイト列に。ファイル名に不正な文字（Mac/Linuxの壊れた名前など）があっても落ちないように。"""
+    try:
+        return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except UnicodeEncodeError:
+        return json.dumps(obj, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+
+
 class LocalStore:
     """設定・ログ・スナップショットはすべてローカルのデータフォルダへ。NAS配下には絶対に書かない。"""
 
@@ -966,8 +1015,8 @@ class LocalStore:
         self.guard(p)
         tmp = p + ".tmp"
         with self.lock:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
+            with open(tmp, "wb") as f:
+                f.write(json_bytes(obj))
             os.replace(tmp, p)
 
     def read_json(self, name, default=None):
@@ -981,15 +1030,42 @@ class LocalStore:
         p = self.path(name)
         self.guard(p)
         with self.lock:
-            with open(p, "a", encoding="utf-8") as f:
-                f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
+            with open(p, "ab") as f:
+                f.write(json_bytes(obj) + b"\n")
+
+
+def is_remote_path(p):
+    """ネットワーク上の場所（UNC・ネットワークドライブ）か。アプリの保存先をNAS上に作らないための確認。"""
+    ap = os.path.abspath(p)
+    if ap.startswith(("\\\\", "//")):
+        return True
+    if IS_WIN:
+        try:
+            import ctypes
+            return ctypes.windll.kernel32.GetDriveTypeW(ap[:3]) == 4       # DRIVE_REMOTE
+        except Exception:
+            return False
+    return False
+
+
+def data_dir_candidates(home_env, folder, hidden):
+    """保存先の候補：exe の横（ネットワーク上なら使わない）→ ローカルのアプリ用フォルダ → ホーム。"""
+    home = os.environ.get(home_env, "")
+    here = home if home and os.path.isdir(home) else os.path.dirname(os.path.abspath(__file__))
+    cands = []
+    if not is_remote_path(here):
+        cands.append(os.path.join(here, folder))
+    la = os.environ.get("LOCALAPPDATA", "")
+    if la and not is_remote_path(la):
+        cands.append(os.path.join(la, "SEVENTHWELL", folder))
+    cands.append(os.path.join(os.path.expanduser("~"), hidden))
+    return cands
 
 
 def pick_data_dir():
-    # SW_NAS_WATCH.exe から起動したときは exe の横に保存する（ランチャーが場所を渡す）
-    home = os.environ.get("SW_NAS_WATCH_HOME", "")
-    here = home if home and os.path.isdir(home) else os.path.dirname(os.path.abspath(__file__))
-    cands = [os.path.join(here, "sw_nas_watch_data"), os.path.join(os.path.expanduser("~"), ".sw_nas_watch")]
+    # SW_NAS_WATCH.exe から起動したときは exe の横に保存する（ランチャーが場所を渡す）。
+    # exe をNAS上に置いて起動した場合は、NASに書かないようローカルのアプリ用フォルダへ保存する
+    cands = data_dir_candidates("SW_NAS_WATCH_HOME", "sw_nas_watch_data", ".sw_nas_watch")
     for d in cands:
         try:
             os.makedirs(d, exist_ok=True)
@@ -1004,6 +1080,43 @@ def pick_data_dir():
 
 
 # ---------------------------------------------------------------- config
+def startup_config(store, data_dir, raw):
+    """起動時の設定の読み込み。問題があっても全部を初期化せず、問題のある監視フォルダだけ外す。
+    元の設定ファイルは config.bad-日時.json として残す。戻り値: (cfg, 知らせる文 or None)"""
+    try:
+        return validate_cfg(raw or {}, data_dir), None
+    except ValueError as e:
+        first_err = str(e)
+    bad = "config.bad-%s.json" % time.strftime("%Y%m%d-%H%M%S")
+    try:
+        store.write_json(bad, raw)
+    except Exception:
+        bad = ""
+    raw = raw if isinstance(raw, dict) else {}
+    keep, dropped = [], []
+    for r in raw.get("roots") or []:
+        try:
+            validate_cfg(dict(raw, roots=[r], op={}), data_dir)
+            keep.append(r)
+        except (ValueError, TypeError, AttributeError):
+            dropped.append(str(r.get("path") if isinstance(r, dict) else r))
+    cfg = None
+    for cand in (dict(raw, roots=keep), dict(raw, roots=keep, op={})):
+        try:
+            cfg = validate_cfg(cand, data_dir)
+            break
+        except (ValueError, TypeError, AttributeError):
+            continue
+    if cfg is None:
+        cfg = validate_cfg({}, data_dir)
+    msg = "設定ファイルに問題がありました（%s）。" % first_err
+    if dropped:
+        msg += "次の監視フォルダを外して起動します: %s。" % "、".join(dropped)
+    if bad:
+        msg += "元の設定は %s に残しています。" % bad
+    return cfg, msg
+
+
 def validate_cfg(raw, data_dir, old=None):
     old = old or DEFAULT_CFG
     cfg = json.loads(json.dumps(DEFAULT_CFG))
@@ -1035,8 +1148,8 @@ def validate_cfg(raw, data_dir, old=None):
         except (TypeError, ValueError):
             depth = 3
         rid = str(r.get("id") or "")
-        if not re.fullmatch(r"r[0-9a-f]{8}", rid):
-            rid = "r" + secrets.token_hex(4)
+        if not re.fullmatch(r"r[0-9a-f]{8}", rid) or any(x["id"] == rid for x in roots):
+            rid = "r" + secrets.token_hex(4)      # 同じIDが2つあると、監視が二重に動いて止められなくなる
         roots.append({
             "id": rid,
             "path": p,
@@ -1134,9 +1247,9 @@ def validate_op(op, roots, data_dir):
         if len(out["dests"]) >= MAX_DESTS:
             raise ValueError("コピー先は%dか所までです" % MAX_DESTS)
         for r in roots:
-            if is_under(p, r["path"]) or is_under(r["path"], p):
+            if overlaps(p, r["path"]):     # ネットワークドライブ（Z:）など別の書き方で同じNASを指していないかも確かめる
                 raise ValueError("コピー先にNAS（監視フォルダ）の中や、監視フォルダを含む場所は指定できません: %s" % p)
-        if is_under(p, data_dir) or is_under(data_dir, p):
+        if overlaps(p, data_dir):
             raise ValueError("コピー先にこのアプリの保存先は指定できません: %s" % p)
         for q in seen:
             if is_under(p, q) or is_under(q, p):
@@ -1196,6 +1309,7 @@ class Analyzer(threading.Thread):
         self.stop_ev = threading.Event()
         self.busy = {}          # PowerPointで開かれているため後回しにしているファイル
         self.last_cost = 0.0
+        self.last_retry = time.time()
         self.cs = coi_signature(mgr.cfg["coi_keywords"])
         d = mgr.store.read_json("analysis.json") or {}
         if d.get("cs") == self.cs and d.get("v") == ANA_VERSION:
@@ -1216,11 +1330,18 @@ class Analyzer(threading.Thread):
             return e["res"]
         return None
 
-    def _put(self, k, sig, res):
+    def _put(self, k, sig, res, cs=None):
+        if cs is not None and cs != self.cs:
+            return                  # 解析中にCOIの文字が変わった：古い設定での結果は使わない
         e = {"sig": [sig[0], sig[1]], "res": res, "at": time.time()}
         self.cache[k] = e
-        self._index(k, e)
+        if res.get("ok"):
+            self._index(k, e)
         self.dirty = True
+
+    @staticmethod
+    def _has_links(res):
+        return any(m.get("kind") != "embed" for m in (res.get("video") or []) + (res.get("audio") or []))
 
     def lookup(self, w, rel, sig):
         with self.lock:
@@ -1228,11 +1349,33 @@ class Analyzer(threading.Thread):
             if r is not None:
                 return r
             alt = self.by_sig.get((w.snap_name, sig[0], sig[1]))   # 名前変更・移動しただけなら再利用
-            if alt and alt in self.cache:
-                r = self.cache[alt]["res"]
+            e = self.cache.get(alt) if alt else None
+            if e and e["sig"][0] == sig[0] and e["sig"][1] == sig[1] and e["res"].get("ok"):
+                r = e["res"]
+                # リンク動画の有無はフォルダによって変わるので、別のフォルダへ移ったときは解析し直す
+                if self._has_links(r) and parent_of(alt.split("|", 1)[1]) != parent_of(rel):
+                    return None
                 self._put(self.key(w, rel), sig, r)
                 return r
         return None
+
+    def recheck_links(self, w, group):
+        """演者フォルダに変化があったとき、リンク動画・音声を含むPowerPointを解析し直す
+        （PowerPointの後から動画が届いた・動画を差し替えた、などを反映するため）。"""
+        pre = group + "/" if group else ""
+        with self.lock:
+            todo = []
+            for k, e in list(self.cache.items()):
+                kw, _, rel = k.partition("|")
+                if kw == w.snap_name and rel.startswith(pre) and e["res"].get("ok") and self._has_links(e["res"]):
+                    del self.cache[k]
+                    todo.append(rel)
+                    self.dirty = True
+        com = w.committed or {}
+        for rel in todo:
+            sig = com.get(rel)
+            if sig and sig != DIR:
+                self.enqueue(w, rel, sig)
 
     def analyze_file(self, w, rel, sig, attempt=0):
         r = self.lookup(w, rel, sig)
@@ -1246,15 +1389,19 @@ class Analyzer(threading.Thread):
             return None
         self.busy.pop(k, None)
         t0 = time.monotonic()
+        cs = self.cs
         res = analyze_pptx(path, self.mgr.coi)
         self.last_cost = time.monotonic() - t0
         if res.get("retry") and attempt < 3:
             self.enqueue(w, rel, sig, delay=5 * (attempt + 1), attempt=attempt + 1)
             return None
+        transient = not res.get("ok") and (res.get("retry") or str(res.get("error", "")).startswith(("開けません", "読み取りエラー")))
         res.pop("retry", None)
+        if transient:
+            res["transient"] = True     # ネットワークの一時的な不調など：保存せず、あとで解析し直す
         res["sum"] = ana_sum(res)
         with self.lock:
-            self._put(self.key(w, rel), sig, res)
+            self._put(self.key(w, rel), sig, res, cs)
         return res
 
     def is_busy(self, w, rel):
@@ -1264,6 +1411,11 @@ class Analyzer(threading.Thread):
         k = self.key(w, rel)
         with self.cv:
             if k in self.qset:
+                # すでに待ち行列にある：新しい版なら差し替える（古い版のまま捨てられて解析されないのを防ぐ）
+                for i, it in enumerate(self.q):
+                    if it[0] is w and it[1] == rel and it[2] != tuple(sig):
+                        self.q[i] = (w, rel, tuple(sig), it[3], it[4])
+                        break
                 return
             self.qset.add(k)
             self.q.append((w, rel, tuple(sig), time.time() + delay, attempt))
@@ -1272,7 +1424,10 @@ class Analyzer(threading.Thread):
     def enqueue_all(self, w):
         com = w.committed or {}
         for rel, sig in list(com.items()):
-            if sig != DIR and ana_kind(rel) == "pptx" and self.get(w, rel, sig) is None:
+            if sig == DIR or ana_kind(rel) != "pptx":
+                continue
+            r = self.get(w, rel, sig)
+            if r is None or r.get("transient"):
                 self.enqueue(w, rel, sig)
 
     def reset(self, cs):
@@ -1301,6 +1456,9 @@ class Analyzer(threading.Thread):
                     continue
                 with self.cv:
                     self.qset.discard(self.key(w, rel))
+                now_sig = (w.committed or {}).get(rel)
+                if now_sig and now_sig != DIR and now_sig != sig and ana_kind(rel) == "pptx" and not w.stop_ev.is_set():
+                    sig = tuple(now_sig)    # 待っている間に新しい版になった：新しい版を解析する
                 if self.mgr.cfg["analyze"] and not w.stop_ev.is_set() and (w.committed or {}).get(rel) == sig:
                     try:
                         if self.analyze_file(w, rel, sig, attempt) is not None:
@@ -1312,11 +1470,16 @@ class Analyzer(threading.Thread):
                     self.last_cost = 0.0
             if self.dirty and time.time() - self.last_save > 10:
                 self.save()
+            if time.time() - self.last_retry > 300:
+                self.last_retry = time.time()
+                for w in list(self.mgr.watchers.values()):   # 一時的に読めなかったものを解析し直す
+                    if w.online:
+                        self.enqueue_all(w)
         self.save()
 
     def save(self):
         with self.lock:
-            items = list(self.cache.items())[-20000:]
+            items = [(k, e) for k, e in self.cache.items() if not e["res"].get("transient")][-20000:]
             data = {"v": ANA_VERSION, "cs": self.cs, "entries": dict(items)}
             self.dirty = False
         try:
@@ -1353,6 +1516,8 @@ class Watcher(threading.Thread):
         self.scanning = False
         self.ver = 0
         self.rebaseline = False
+        self.reignore = None       # 無視パターンを変えたとき：変更前のパターン（基準を作り直さずに差し替える）
+        self.absorb = set()        # 最初の基準作りで読めなかったフォルダ。読めるようになったら通知せずに基準へ入れる
         self.fail_count = 0
         self.dirty = False
         self.last_save = 0.0
@@ -1446,13 +1611,17 @@ class Watcher(threading.Thread):
         self.fail_count = 0
         self._set_online()
 
-        if failed and self.committed is not None:
+        # 一時的に読めなかったフォルダは、前の状態のままとみなす（消えた・新しく入ったと誤って知らせない）
+        ref = self.committed if self.committed is not None else self.saved
+        if failed and ref is not None:
             pre = tuple(f + "/" for f in failed)
             for k in [k for k in cur if k.startswith(pre)]:
                 del cur[k]
-            for k, v in self.committed.items():
+            for k, v in ref.items():
                 if k.startswith(pre):
                     cur[k] = v
+        elif failed and ref is None:
+            self.absorb.update(failed)          # 最初の基準：読めなかったところは、読めたときに基準へ入れる
 
         flag = False
         first = self.committed is None
@@ -1474,11 +1643,37 @@ class Watcher(threading.Thread):
             self.dirty = True
             flag = False
             first = True
+            self.absorb = set(failed)
+        if self.absorb:
+            ok = [a for a in self.absorb if a not in failed]
+            if ok:
+                pre = tuple(a + "/" for a in ok)
+                with self.lock:
+                    for k, v in cur.items():
+                        if (k in ok or k.startswith(pre)) and k not in self.committed:
+                            self.committed[k] = v
+                self.absorb.difference_update(ok)
+                self.dirty = True
+        if self.reignore is not None:
+            # 無視パターンの変更：新しく無視するものは基準から外し、無視しなくなったものは今の状態を基準に入れる。
+            # 受信中のもの（pending）はそのまま続ける
+            old_re, self.reignore = self.reignore[0], None
+            new_re = self.mgr.ignore_re
+            with self.lock:
+                com = self.committed
+                for k in [k for k in com if is_ignored(new_re, k)]:
+                    del com[k]
+                    self.pending.pop(k, None)
+                for k, v in cur.items():
+                    if k not in com and is_ignored(old_re, k):
+                        com[k] = v
+            self.dirty = True
 
         before = self._pend_sig()
-        settle = 0.0 if flag else cfg["settle_sec"]
-        changes = self._process(cur, now, settle)
-        events = self._make_events(changes, now, flag) if changes else []
+        # 停止中に起きた変化は、次の確認（数秒後）で変わっていなければすぐ確定して「停止中の変化」として知らせる。
+        # いま書き込み中かもしれないもの（更新日時が新しい・次の確認で変わった）は、普段どおり落ち着くのを待つ
+        changes, quick_groups = self._process(cur, now, cfg["settle_sec"], quick=flag)
+        events = self._make_events(changes, now, False, quick_groups) if changes else []
         incoming = self._incoming() if not flag else []
         mk_gen = self.mgr.mk_gen
         with self.lock:
@@ -1493,6 +1688,10 @@ class Watcher(threading.Thread):
         for inc in incoming:
             self.mgr.transient("incoming", inc)
         if events and cfg["analyze"]:
+            for ev in events:   # 動画などが届いた・消えた → リンク動画のあるPowerPointの結果を作り直す
+                g = ev.get("group")
+                if g is not None and any(ana_kind(it.get("to") or it.get("path") or "") != "pptx" for it in ev.get("items", [])):
+                    self.mgr.analyzer.recheck_links(self, g)
             self._attach_analysis(events)
         for ev in events:
             self.mgr.emit(ev)
@@ -1524,12 +1723,16 @@ class Watcher(threading.Thread):
         if was is not True:
             self.ver += 1
         if was is False:
+            if self.mgr.cfg["analyze"] and self.committed is not None:
+                self.mgr.analyzer.enqueue_all(self)     # 接続が切れていた間に失敗した解析をやり直す
             self.mgr.emit({"kind": "online", "kinds": ["online"], "root": self.id, "root_label": self.label,
                            "group": None, "where": "", "title": self.label, "summary": "接続が復帰しました",
                            "detail": self.path, "items": [], "n_items": 0, "while_stopped": False})
 
     # ---- diff / settle
-    def _process(self, cur, now, settle):
+    QUICK_SETTLE = 1.0
+
+    def _process(self, cur, now, settle, quick=False):
         com = self.committed
         changed = set(k for k, v in cur.items() if com.get(k) != v)
         changed.update(k for k in com if k not in cur)
@@ -1541,30 +1744,41 @@ class Watcher(threading.Thread):
                 sig = cur.get(k)
                 p = self.pending.get(k)
                 if p is None:
-                    self.pending[k] = [sig, now, now]
+                    # 起動直後に見つかった「停止中の変化」：更新日時が古いものは次の確認で変わらなければすぐ確定する
+                    q = bool(quick) and (sig is None or sig == DIR or now - sig[1] / 1e9 >= settle + 2)
+                    self.pending[k] = [sig, now, now, q]
                 elif p[0] != sig:
                     p[0] = sig
                     p[1] = now
+                    if len(p) > 3:
+                        p[3] = False          # まだ変わり続けている＝書き込み中
             if not self.pending:
-                return {}
+                return {}, set()
             groups = {}
-            for k, (sig, _t, _f) in self.pending.items():
+            for k, (sig, _t, _f, *_q) in self.pending.items():
                 g = group_of(k, sig if sig is not None else com.get(k), self.depth)
                 groups.setdefault(g, []).append(k)
             ready = {}
+            def need(k):
+                p = self.pending[k]
+                return self.QUICK_SETTLE if len(p) > 3 and p[3] else settle
             for g, keys in groups.items():
-                quiet = all(now - self.pending[k][1] >= settle for k in keys)
+                quiet = all(now - self.pending[k][1] >= need(k) for k in keys)
                 if quiet:
                     ready[g] = keys
                 elif now - min(self.pending[k][2] for k in keys) >= MAX_GROUP_WAIT:
-                    rk = [k for k in keys if now - self.pending[k][1] >= settle]
+                    rk = [k for k in keys if now - self.pending[k][1] >= need(k)]
                     if rk:
                         ready[g] = rk
             changes = {}
+            quick_groups = set()
             for g, keys in ready.items():
                 lst = []
+                allq = True
                 for k in keys:
-                    new = self.pending.pop(k)[0]
+                    p = self.pending.pop(k)
+                    new = p[0]
+                    allq = allq and len(p) > 3 and p[3]
                     old = com.get(k)
                     lst.append((k, old, new))
                     if new is None:
@@ -1572,7 +1786,9 @@ class Watcher(threading.Thread):
                     else:
                         com[k] = new
                 changes[g] = lst
-        return changes
+                if allq:
+                    quick_groups.add(g)
+        return changes, quick_groups
 
     def _incoming(self):
         """コピーが始まった（まだ確定していない）フォルダを、確定を待たずに知らせる。"""
@@ -1580,7 +1796,7 @@ class Watcher(threading.Thread):
         groups = {}
         mo = self.mgr.marker_of
         with self.lock:
-            for k, (sig, _t, _f) in self.pending.items():
+            for k, (sig, _t, _f, *_q) in self.pending.items():
                 old = com.get(k)
                 if mo(k, sig if sig is not None else old):
                     continue      # 目印画像（受付済・動画有 など）の出し入れは「受信中」にしない
@@ -1664,7 +1880,7 @@ class Watcher(threading.Thread):
             out.append((rel[len(g) + 1:], s if s == DIR else tuple(s)))
         return tuple(sorted(out, key=lambda x: x[0]))
 
-    def _make_events(self, changes, now, flag):
+    def _make_events(self, changes, now, flag, stopped_groups=()):
         evs = []
         dels, news = {}, {}
         for g, ch in changes.items():
@@ -1679,7 +1895,9 @@ class Watcher(threading.Thread):
         for dg, dsig in dels.items():
             if dsig is None:
                 continue
-            for ng, nsig in news.items():
+            # 中身が同じフォルダが複数あるときは、同じ名前（移動）→ 同じ親（名前変更）の順に組み合わせる
+            cands = sorted(news.items(), key=lambda x: (base(x[0]) != base(dg), parent_of(x[0]) != parent_of(dg), x[0]))
+            for ng, nsig in cands:
                 if ng in used or nsig is None or dsig != nsig:
                     continue
                 if not dsig and parent_of(dg) != parent_of(ng):
@@ -1689,7 +1907,8 @@ class Watcher(threading.Thread):
                 frm = base(dg) if parent_of(dg) == parent_of(ng) else dg
                 evs.append(self._ev("folder_rename", ["folder_rename"], ng, base(ng),
                                     "フォルダ名変更", "%s → %s" % (frm, base(ng)) + (" (%dファイル)" % nfiles if nfiles else ""),
-                                    [{"op": "folder_rename", "path": dg, "to": ng}], flag, {"from_group": dg}))
+                                    [{"op": "folder_rename", "path": dg, "to": ng}], flag or (dg in stopped_groups and ng in stopped_groups),
+                                    {"from_group": dg}))
                 for rel in list(self.recent):
                     if rel == dg or rel.startswith(dg + "/"):
                         op, ts = self.recent.pop(rel)
@@ -1698,7 +1917,7 @@ class Watcher(threading.Thread):
                 changes.pop(ng, None)
                 break
         for g, ch in changes.items():
-            ev = self._group_event(g, ch, now, flag)
+            ev = self._group_event(g, ch, now, flag or g in stopped_groups)
             if ev:
                 evs.append(ev)
         cut = now - RECENT_KEEP
@@ -1830,8 +2049,8 @@ class Watcher(threading.Thread):
             pa = sum(1 for k in now_data if isp(k))
             pb = pa - sum(1 for sub, _s in adds if isp(sub)) + sum(1 for sub, _s in dels if isp(sub)) \
                 - sum(1 for f, t, _s in renames if isp(t) and not isp(f)) + sum(1 for f, t, _s in renames if isp(f) and not isp(t))
-            pchg = any(isp(x[0]) for x in adds) or any(isp(x[0]) for x in mods) or any(isp(x[0]) for x in dels) \
-                or any(isp(f) or isp(t) for f, t, _s in renames)
+            # 差し替え＝新しいパワーポイントが入った・中身が変わったときだけ（名前変更・移動・削除は数えない）
+            pchg = any(isp(x[0]) for x in adds) or any(isp(x[0]) for x in mods)
             extra = {"fchg": True, "fa": fa, "fb": fb, "pchg": bool(pchg), "pa": pa, "pb": pb}
         return self._ev(kinds[0], kinds, g, title, " / ".join(parts), detail, items, flag, extra)
 
@@ -1875,7 +2094,7 @@ class Watcher(threading.Thread):
                 s["cats"][c] = s["cats"].get(c, 0) + 1
                 if ana_kind(k):
                     s["px"].append((k, sig))
-        for k, (sig, _t, _f) in self.pending.items():
+        for k, (sig, _t, _f, *_q) in self.pending.items():
             s0 = sig if sig is not None else (self.committed or {}).get(k)
             if self.mgr.marker_of(k, s0):
                 continue          # 目印画像の出し入れでは「コピー中」にしない
@@ -1955,6 +2174,7 @@ def long_path(p):
     """Windowsで260文字を超えるパスでも読み書きできるようにする（コピー処理だけで使う）。"""
     if not IS_WIN or len(p) < 240 or p.startswith("\\\\?\\"):
         return p
+    p = os.path.normpath(p)        # 「/」区切りのままだと \\?\ 付きのパスとして無効になる
     if p.startswith("\\\\"):
         return "\\\\?\\UNC\\" + p[2:]
     return "\\\\?\\" + os.path.abspath(p)
@@ -2007,6 +2227,66 @@ def _unhide(path):
         pass
 
 
+def _canon(p):
+    try:
+        return os.path.realpath(p)
+    except (OSError, ValueError):
+        return p
+
+
+def overlaps(a, b):
+    """a と b が同じ場所か、どちらかがもう一方の中にあるか。書き方の違い（ネットワークドライブ Z: と \\\\NAS\\share、
+    シンボリックリンクなど）も、実在する部分を stat して確かめる（読むだけ・書き込みはしない）。"""
+    if is_under(a, b) or is_under(b, a):
+        return True
+    ca, cb = _canon(a), _canon(b)
+    if is_under(ca, cb) or is_under(cb, ca):
+        return True
+
+    def anc_hits(child, parent):
+        try:
+            sp = os.stat(parent)
+        except OSError:
+            return False
+        x = child
+        for _ in range(64):
+            try:
+                sx = os.stat(x)
+                if sx.st_ino and sp.st_ino and os.path.samestat(sx, sp):
+                    return True
+            except OSError:
+                pass
+            nx = os.path.dirname(x.rstrip("\\/"))
+            if not nx or nx == x:
+                break
+            x = nx
+        return False
+    return anc_hits(a, b) or anc_hits(b, a)
+
+
+def dest_locked(path):
+    """（Windows）コピー先のファイルを他のアプリ（動画プレーヤー・PDFビューアなど）が開いていて、置き換えられない状態か。
+    「削除」の権限で開けるかを試して、すぐ閉じるだけ（読み書きはしない）。NASのファイルには使わない。"""
+    if not IS_WIN:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        fn = k32.CreateFileW
+        fn.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        fn.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        h = fn(long_path(path), 0x00010000, 0x7, None, 3, 0x80, None)   # DELETE / 共有すべて許可 / OPEN_EXISTING
+        if h is None or h == ctypes.c_void_p(-1).value:
+            return ctypes.get_last_error() in (32, 33)                  # 共有違反＝ほかのアプリが開いている
+        k32.CloseHandle(h)
+        return False
+    except Exception:
+        return False
+
+
 class Copier(threading.Thread):
     """会場オペレーターモード：受信が完了した演者フォルダを、コピー先（メインPC・バックアップPCなど）へコピーする。
     ・NASは読むだけ。Windowsでは他の人の読み取り・上書き・削除・名前変更を妨げない開き方で読む。NASには何も書かない。
@@ -2038,6 +2318,8 @@ class Copier(threading.Thread):
         self.last_save = 0.0
         self.last_prog = 0.0
         self.touched = {}       # group -> set(rel)  今回コピーを試みたファイル（完了の知らせ用）
+        self.alias_cache = {}   # コピー先がNASの別名でないかの確認結果
+        self.backoff = {}       # (did, rel) -> [NAS側の版, 次に試す時刻, 待ち秒数]  失敗したコピーをすぐ繰り返さない
         self.reported = {}      # group -> 最後に知らせた内容（同じ内容を何度も知らせない）
         self.depth = 3
 
@@ -2120,6 +2402,14 @@ class Copier(threading.Thread):
     @staticmethod
     def _dpath(root, prefix, rel):
         return os.path.join(root, *rel[len(prefix):].split("/"))
+
+    def _dest_is_nas(self, dpath, roots):
+        key = (dpath, tuple(roots))
+        v = self.alias_cache.get(key)
+        if v is None or time.time() - v[1] > 300:
+            v = (any(overlaps(dpath, r) for r in roots), time.time())
+            self.alias_cache[key] = v
+        return v[0]
 
     def _set(self, did, rel, state, msg=""):
         with self.lock:
@@ -2230,7 +2520,7 @@ class Copier(threading.Thread):
         with w.lock:
             com = dict(w.committed)
             pend = list(w.pending.items())
-        pend_groups = set(group_of(k, s if s is not None else com.get(k), w.depth) for k, (s, _t, _f) in pend)
+        pend_groups = set(group_of(k, s if s is not None else com.get(k), w.depth) for k, (s, _t, _f, *_q) in pend)
         files, dirs = {}, []
         for rel, sig in com.items():
             if prefix and not rel.startswith(prefix):
@@ -2268,13 +2558,21 @@ class Copier(threading.Thread):
                     new[rel] = ["wait", "NASへの受信が終わるのを待っています"]
                     continue
                 st = self._need(did, d["path"], prefix, rel, sig)
-                new[rel] = st
                 if st[0] == "todo":
-                    work.setdefault(rel, []).append(did)
+                    bo = self.backoff.get((did, rel))
+                    if bo and bo[0] == sig and time.time() < bo[1]:
+                        # 直前に失敗した（コピー先で使用中など）。NASからの読み直しを繰り返さないよう、少し待ってから
+                        prev = (self.fst.get(did) or {}).get(rel)
+                        st = prev if prev and prev[0] in ("busy", "err") else ["busy", "少し待ってから、もう一度コピーします"]
+                    else:
+                        work.setdefault(rel, []).append(did)
+                new[rel] = st
             with self.lock:
                 self.fst[did] = new
         self._aggregate(files)
         self._bump()
+        for key in [k for k, v in self.backoff.items() if files.get(k[1]) != v[0]]:
+            del self.backoff[key]
 
         gnew = {}
         for rel, sig in files.items():
@@ -2289,13 +2587,23 @@ class Copier(threading.Thread):
                 cur = (w.committed or {}).get(rel)
                 g = group_of(rel, files[rel], w.depth)
                 busy_g = any(group_of(k, s if s is not None else w.committed.get(k), w.depth) == g
-                             for k, (s, _t, _f) in w.pending.items())
+                             for k, (s, _t, _f, *_q) in w.pending.items())
             if cur != files[rel] or busy_g:
                 for did in work[rel]:
                     self._set(did, rel, "wait", "NASへの受信が終わるのを待っています")
                 self.queue_n -= 1
                 continue
             self._copy(w, op, prefix, rel, files[rel], [d for d in dests if d["id"] in work[rel]], gen)
+            now = time.time()
+            for did in work[rel]:
+                st0 = ((self.fst.get(did) or {}).get(rel) or ["todo"])[0]
+                key = (did, rel)
+                if st0 in ("busy", "err"):
+                    bo = self.backoff.get(key)
+                    delay = min(300, bo[2] * 2) if bo and bo[0] == files[rel] else 30
+                    self.backoff[key] = [files[rel], now + delay, delay]
+                else:
+                    self.backoff.pop(key, None)
             self.queue_n -= 1
             self._aggregate(files)
             self._bump()
@@ -2315,22 +2623,37 @@ class Copier(threading.Thread):
         self.touched.setdefault(g, set()).add(rel)
         roots = [r["path"] for r in self.mgr.cfg["roots"]]
         targets = []
+        vol_need = {}
         for d in dlist:
             did = d["id"]
             dp = self._dpath(d["path"], prefix, rel)
-            if any(is_under(dp, r) for r in roots):
+            if any(is_under(dp, r) for r in roots) or self._dest_is_nas(d["path"], roots):
                 self._set(did, rel, "err", "NAS（監視フォルダ）の中には書き込みません")
                 continue
             if in_use_by_office(dp):
                 self._set(did, rel, "busy", "コピー先で開かれているため、閉じられてから差し替えます")
                 continue
+            if dest_locked(dp):      # 動画プレーヤー・PDFビューアなどで開かれている（NASを読む前に確かめる）
+                self._set(did, rel, "busy", "コピー先でほかのアプリが開いているため、閉じられてから差し替えます")
+                continue
             try:
                 ddir = os.path.dirname(dp)
                 os.makedirs(long_path(ddir), exist_ok=True)
+                try:
+                    old_size = os.stat(long_path(dp)).st_size     # 旧版を「_差し替え前」に残す分も要る
+                except OSError:
+                    old_size = 0
+                try:
+                    vol = os.stat(long_path(ddir)).st_dev
+                except OSError:
+                    vol = ddir
+                vol_need[vol] = vol_need.get(vol, 0) + sig[0] + old_size
                 free = shutil.disk_usage(long_path(ddir)).free
-                if free < sig[0] + 64 * 1024 * 1024:
+                need = vol_need[vol] + 64 * 1024 * 1024
+                if free < need:
+                    vol_need[vol] -= sig[0] + old_size
                     raise OSError(errno.ENOSPC, "空き容量が足りません（必要 %.1fGB / 空き %.1fGB）"
-                                  % (sig[0] / 1e9, free / 1e9))
+                                  % (need / 1e9, free / 1e9))
                 tmp = os.path.join(ddir, TMP_PREFIX + secrets.token_hex(6) + ".part")
                 f = open(long_path(tmp), "xb")
                 _hide(tmp)
@@ -2381,7 +2704,7 @@ class Copier(threading.Thread):
                             ahead = n / limit - (now - t0)
                             if ahead > 0:
                                 self.stop_ev.wait(min(ahead, 5))
-            if abort is None:
+            if abort is None and not all(t["err"] for t in targets):
                 try:
                     st = os.stat(long_path(src))
                     now_sig = (st.st_size, st.st_mtime_ns)
@@ -2489,6 +2812,15 @@ class Copier(threading.Thread):
                     os.remove(long_path(backup))
                 except OSError:
                     pass
+                # 置き換えられなかったときは、作った「_差し替え前\日時\…」の空フォルダも片付ける
+                stop = os.path.normcase(os.path.join(d["path"], OP_OLD_DIR))
+                x = os.path.dirname(backup)
+                while os.path.normcase(x) != stop and len(x) > len(stop):
+                    try:
+                        os.rmdir(long_path(x))
+                    except OSError:
+                        break
+                    x = os.path.dirname(x)
             raise
         try:
             os.utime(long_path(dp), ns=(time.time_ns(), sig[1]))   # 更新日時はNAS上の元ファイルに合わせる
@@ -2552,7 +2884,8 @@ class Copier(threading.Thread):
                 ds = self.dest.get(did, {})
                 out.append({"id": did, "label": d["label"], "path": d["path"], "enabled": d["enabled"],
                             "online": ds.get("online"), "error": ds.get("error", ""), "count": cnt, "total": len(fs)})
-        act = dict(self.active) if self.active else None
+        a0 = self.active
+        act = dict(a0) if a0 else None
         return {"enabled": True, "root": op["root"], "venue": op["venue"], "dests": out,
                 "queue": self.queue_n, "active": act, "max_mbps": op["max_mbps"]}
 
@@ -2573,6 +2906,7 @@ class Manager:
         self.ignore_re = compile_ignore(list(cfg["ignore"]) + BUILTIN_IGNORE)
         self.coi = compile_coi(cfg["coi_keywords"])
         self.marks = compile_marks(cfg)
+        self.cfg_lock = threading.Lock()
         self._mk_cache = {}
         self.mk_gen = 0          # 目印の設定を変えたら増やす（演者の状態を作り直して画面へ知らせる）
         self.watchers = {}
@@ -2669,8 +3003,7 @@ class Manager:
         cache = self._mk_cache
         r = cache.get(name, False)
         if r is False:
-            stem = mark_norm(name.rsplit(".", 1)[0] if "." in name else name)
-            r = next(((role, label, i) for k, role, label, i in self.marks if k in stem), None)
+            r = mark_match(self.marks, name)
             if len(cache) > 50000:
                 cache.clear()
             cache[name] = r
@@ -2786,11 +3119,23 @@ class Manager:
         return ev["id"] > max(self.seen_floor, self.seen.get(key, 0))
 
     def apply_config(self, new):
+        with self.cfg_lock:          # 保存の2度押しなどで同時に走らないように
+            self._apply_config(new)
+
+    def _apply_config(self, new):
         old = self.cfg
         ignore_changed = old["ignore"] != new["ignore"]
         coi_changed = old["coi_keywords"] != new["coi_keywords"]
         analyze_on = new["analyze"] and not old["analyze"]
         op_changed = old.get("op") != new.get("op") or [r["path"] for r in old["roots"]] != [r["path"] for r in new["roots"]]
+        old_ignore_re = self.ignore_re
+        old_roots = self.store.roots
+        self.store.roots = [r["path"] for r in new["roots"]]
+        try:
+            self.store.write_json("config.json", new)     # 先に保存（保存できなければ何も変えない）
+        except Exception:
+            self.store.roots = old_roots
+            raise
         self.cfg = new
         self.ignore_re = compile_ignore(list(new["ignore"]) + BUILTIN_IGNORE)
         self.coi = compile_coi(new["coi_keywords"])
@@ -2798,8 +3143,6 @@ class Manager:
             self.marks = compile_marks(new)
             self._mk_cache = {}
             self.mk_gen += 1
-        self.store.roots = [r["path"] for r in new["roots"]]
-        self.store.write_json("config.json", new)
         want = {r["id"]: r for r in new["roots"] if r["enabled"]}
         for rid, w in list(self.watchers.items()):
             r = want.get(rid)
@@ -2812,7 +3155,7 @@ class Manager:
             else:
                 w.label = r["label"] or default_label(r["path"])
                 if ignore_changed:
-                    w.rebaseline = True
+                    w.reignore = (old_ignore_re,)
         for rid, r in want.items():
             if rid not in self.watchers:
                 self._start_watcher(r)
@@ -2841,7 +3184,7 @@ class Manager:
         return {"ver": self.total_ver(), "boot": self.boot, "now": time.time(), "roots": roots}
 
     def group_ana(self, w, px):
-        a = {"n": 0, "done": 0, "video": 0, "vwarn": 0, "vfbad": 0, "vfwarn": 0, "links": 0, "coi": 0, "auto": 0,
+        a = {"n": 0, "done": 0, "video": 0, "vwarn": 0, "vfbad": 0, "vfwarn": 0, "abad": 0, "links": 0, "coi": 0, "auto": 0,
              "noclick": 0, "err": 0, "na": 0}
         for rel, sig in px:
             if ana_kind(rel) != "pptx":
@@ -2860,6 +3203,7 @@ class Manager:
             a["vwarn"] += s["vlink"]
             a["vfbad"] += s.get("vfbad", 0)
             a["vfwarn"] += s.get("vfwarn", 0)
+            a["abad"] += s.get("abad", 0)
             a["links"] += s["links"]
             a["coi"] += 1 if s["coi"] else 0
             a["auto"] += s["auto"]
@@ -2867,7 +3211,9 @@ class Manager:
         return a
 
     def state_payload(self, local):
-        evs = list(self.events)
+        with self.cond:          # 一覧と「最後の通知番号」を同時に取る（その間に起きた通知を取りこぼさない）
+            evs = list(self.events)
+            last_id = self.next_id - 1
         unread = {}
         for e in evs:
             if self.is_unread(e):
@@ -2919,7 +3265,7 @@ class Manager:
             x["u"] = self.is_unread(e)
             out_evs.append(x)
         return {"app": APP_NAME, "version": VERSION, "boot": self.boot, "now": time.time(),
-                "last_event_id": self.next_id - 1, "ver": self.total_ver(), "roots": roots,
+                "last_event_id": last_id, "ver": self.total_ver(), "roots": roots,
                 "events": out_evs, "ui": self.cfg["ui"], "notify": self.cfg["notify"], "local": local,
                 "analyze": analyze_on, "os": "win" if IS_WIN else ("mac" if IS_MAC else "other"),
                 "unread_total": sum(unread.values()), "op": self.copier.summary()}
@@ -3104,7 +3450,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.server.lan and not self.is_local()
 
     def send_json(self, obj, code=200):
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        body = json_bytes(obj)
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -3183,17 +3529,17 @@ class Handler(BaseHTTPRequestHandler):
             out = []
             for t in trs:
                 tlast = t["tid"]
-                out.append("event: incoming\ndata: %s\n\n" % json.dumps(t, ensure_ascii=False))
+                out.append("event: incoming\ndata: %s\n\n" % json_bytes(t).decode("utf-8"))
             for ev in evs:
                 last = ev["id"]
                 x = dict(ev)
                 x["u"] = M.is_unread(ev)
-                out.append("id: %d\nevent: ev\ndata: %s\n\n" % (ev["id"], json.dumps(x, ensure_ascii=False)))
+                out.append("id: %d\nevent: ev\ndata: %s\n\n" % (ev["id"], json_bytes(x).decode("utf-8")))
             st = M.status_payload()
             sig = (st["ver"], tuple((r["id"], r.get("online"), r.get("scanning"), int(r.get("last_scan") or 0)) for r in st["roots"]))
             now = time.time()
             if sig != last_status or now - last_beat > 10:
-                out.append("event: status\ndata: %s\n\n" % json.dumps(st, ensure_ascii=False))
+                out.append("event: status\ndata: %s\n\n" % json_bytes(st).decode("utf-8"))
                 last_status = sig
                 last_beat = now
             if out:
@@ -3317,11 +3663,9 @@ def main():
     os.makedirs(data_dir, exist_ok=True)
     store = LocalStore(data_dir)
     raw = store.read_json("config.json", None)
-    try:
-        cfg = validate_cfg(raw or {}, data_dir)
-    except ValueError as e:
-        print("設定ファイルに問題があります（初期設定で起動）: %s" % e)
-        cfg = validate_cfg({}, data_dir)
+    cfg, cfg_msg = startup_config(store, data_dir, raw)
+    if cfg_msg:
+        print(cfg_msg)
     for p in a.root:
         if not any(norm_key(r["path"]) == norm_key(p) for r in cfg["roots"]):
             cfg["roots"].append({"path": p, "label": a.label, "depth": a.depth, "enabled": True})
@@ -3329,8 +3673,6 @@ def main():
         cfg = validate_cfg(cfg, data_dir)
     except ValueError as e:
         raise SystemExit(str(e))
-    store.roots = [r["path"] for r in cfg["roots"]]
-    store.write_json("config.json", cfg)
 
     host = "0.0.0.0" if a.lan else "127.0.0.1"
     url = "http://127.0.0.1:%d/" % a.port
@@ -3345,6 +3687,8 @@ def main():
         except Exception:
             pass
         raise SystemExit("ポート %d が使用中です。--port で別の番号を指定してください" % a.port)
+    store.roots = [r["path"] for r in cfg["roots"]]
+    store.write_json("config.json", cfg)      # 2つ目の起動（すでに起動中）では設定ファイルに触れない
 
     mgr = Manager(store, cfg)
     srv = Server((host, a.port), Handler)
@@ -3987,7 +4331,8 @@ function nameKey(s){s=String(s==null?"":s);let k=SKC.get(s);if(k!==undefined)ret
   try{k=s.normalize("NFKC")}catch(e){k=s}
   k=k.replace(/[❶-➓⓫-⓿]/g,c=>DINGNUM[c]!==undefined?DINGNUM[c]:c);
   if(SKC.size>20000)SKC.clear();SKC.set(s,k);return k}
-const cmpName=(a,b)=>nameKey(a).localeCompare(nameKey(b),"ja",{numeric:true,sensitivity:"base"})||(nfc(a)<nfc(b)?-1:nfc(a)>nfc(b)?1:0);
+const COLL=new Intl.Collator("ja",{numeric:true,sensitivity:"base"});
+const cmpName=(a,b)=>COLL.compare(nameKey(a),nameKey(b))||(nfc(a)<nfc(b)?-1:nfc(a)>nfc(b)?1:0);
 function cmpPath(a,b){const x=a.split("/"),y=b.split("/");for(let i=0;i<Math.min(x.length,y.length);i++){const c=cmpName(x[i],y[i]);if(c)return c}return x.length-y.length}
 const whereText=w=>nfc(w).split("/").join(" › ");
 function sl(arr){const a=[...new Set(arr)].sort((x,y)=>x-y);const out=[];for(let i=0;i<a.length;){let j=i;while(j+1<a.length&&a[j+1]===a[j]+1)j++;out.push(i===j?a[i]+"枚目":a[i]+"〜"+a[j]+"枚目");i=j+1}return out.join("、")}
@@ -4002,13 +4347,15 @@ let S=null,SEL=ls.get("sel",null),F=null,lastId=0,ready=false,lastVer=-1,boot=nu
 let VENUE=ls.get("venue",""),FOLLOW=ls.get("follow",true),lastInteract=0;
 ["pointerdown","keydown","wheel"].forEach(t=>document.addEventListener(t,()=>{lastInteract=Date.now()},{passive:true,capture:true}));
 function rootById(id){return S&&S.roots.find(r=>r.id===id)}
-function effVenue(){return OPON()&&S.op.venue?S.op.root+"|"+S.op.venue:VENUE}
-function inVenue(root,group){const V=effVenue();if(!V)return true;const i=V.indexOf("|");if(root!==V.slice(0,i))return false;if(group==null||group==="")return true;
+function effVenue(){return OPON()?S.op.root+"|"+(S.op.venue||""):VENUE}
+function inVenue(root,group){const V=effVenue();if(!V)return true;const i=V.indexOf("|");if(root!==V.slice(0,i))return false;if(group==null||group===""||!V.slice(i+1))return true;
   if(OPON()&&S.op.venue&&root===S.op.root)return group.split("/")[0]===S.op.venue;   // 会場オペレーターモードはNASの最上位フォルダ単位
   const r=rootById(root);return r?fuOf(r,group)===V.slice(i+1):group.split("/")[0]===V.slice(i+1)}
 
 async function loadState(){
-  S=await api("/api/state");updateRates();
+  const st=await api("/api/state");
+  if(S&&st.boot===S.boot&&st.ver<S.ver)return;   // 遅れて届いた古い状態で上書きしない
+  S=st;updateRates();
   ANYGOT=S.roots.some(r=>(r.groups||[]).some(g=>g.mk_got||g.mk_done));
   if(!ready){ready=true;lastId=S.last_event_id;boot=S.boot;connect();}
   renderAll();
@@ -4102,10 +4449,15 @@ function flashTitle(){
     on=!on;document.title=on?"● 新着 "+liveUnread+"件":setTitle(true)},900);
 }
 function setTitle(ret){const u=S?S.unread_total:0;const t=(u?"("+u+") ":"")+"SW NAS WATCH";if(ret)return t;document.title=t}
-window.addEventListener("focus",()=>{liveUnread=0;setTitle();if(SEL&&S&&S.local)api("/api/seen",SEL).then(refresh).catch(()=>{})});
+window.addEventListener("focus",()=>{liveUnread=0;setTitle();if(SEL&&S&&S.local&&(VIEW==="list"||drawerOpen()))api("/api/seen",SEL).then(refresh).catch(()=>{})});
 
 /* ---------- render ---------- */
-function renderAll(){renderRoots();renderOpBar();renderBanner();renderVenue();renderGroups();renderBoard();renderLog();setTitle();renderFollow()}
+/* クリックの途中（押してから離すまで）に画面を作り直すとクリックが消えるので、離してから作り直す */
+let PDOWN=false,PENDR=false;
+document.addEventListener("pointerdown",e=>{if(e.target.closest&&e.target.closest("#groups,#board"))PDOWN=true},{capture:true});
+["pointerup","pointercancel"].forEach(t=>window.addEventListener(t,()=>{if(!PDOWN)return;PDOWN=false;if(PENDR){PENDR=false;setTimeout(renderAll,0)}},{capture:true}));
+function renderAll(){if(PDOWN){PENDR=true;return}
+  renderRoots();renderOpBar();renderBanner();renderVenue();if(VIEW!=="board")renderGroups();renderBoard();renderLog();setTitle();renderFollow()}
 function renderFollow(){$("#swFollow").checked=!!FOLLOW}
 $("#swFollow").onchange=()=>{FOLLOW=$("#swFollow").checked;ls.set("follow",FOLLOW)};
 $("#bLog").innerHTML=IC.list+"ログ";$("#bTest").innerHTML=IC.bell+"テスト通知";$("#bAll").innerHTML=IC.check2+"すべて既読";$("#bCfg").innerHTML=IC.cog+"設定";
@@ -4201,6 +4553,7 @@ function anaChips(a){
     else if(a.vfwarn)h+=`<span class="tag t-warn" title="形式の確認が必要な動画があります（試写推奨）">動画要試写</span>`;
     if(!a.vwarn&&!a.vfbad&&!a.vfwarn)h+=`<span class="tag t-info">動画あり</span>`;
   }
+  if(a.abad)h+=`<span class="tag t-bad" title="リンクされた音声ファイルが見つからない、または発表者PCの場所を指しています">音声リンク⚠</span>`;
   if(a.links)h+=`<span class="tag t-info">リンクあり</span>`;
   if(a.done===a.n&&a.done>a.err)h+=a.coi?`<span class="tag t-ok">COI</span>`:`<span class="tag t-warn">COIなし</span>`;
   if(a.auto)h+=`<span class="tag t-warn">自動送り</span>`;
@@ -4224,7 +4577,9 @@ function lay(r){
   const L=Math.max(0,(r.depth||1)-1);const keys=(r.groups||[]).map(g=>g.key).filter(Boolean);
   let dl=-1;
   for(let i=0;i<L&&dl<0;i++){const vals=new Set();for(const k of keys){const x=k.split("/")[i];if(x!=null)vals.add(x)}
-    if(vals.size&&vals.size<=31&&[...vals].every(v=>{const d=dayInfo(v);return d&&d.rest.replace(/[\s_\-.()（）［］\[\]・,、曜月火水木金土日]/g,"").length<=8}))dl=i}
+    const tokN=new Map();
+    if(vals.size&&vals.size<=31&&[...vals].every(v=>{const d=dayInfo(v);if(d)tokN.set(d.tok,(tokN.get(d.tok)||0)+1);return d&&d.rest.replace(/[\s_\-.()（）［］\[\]・,、曜月火水木金土日]/g,"").length<=8})
+       &&[...tokN.values()].every(n=>n===1))dl=i}   // 「day1_第1会場」「day1_第2会場」のように同じ日が並ぶなら日の階層ではない
   const others=[];for(let i=0;i<L;i++)if(i!==dl)others.push(i);
   const vl=others.length>=2?others[0]:-1,sl=others.length>=2?others.slice(1):others;
   let sd=false;
@@ -4250,11 +4605,13 @@ function ymd(t){t=t||new Date();return t.getFullYear()+"-"+p2(t.getMonth()+1)+"-
 function allDays(){const set=new Set();const EV=effVenue();
   for(const r of (S?S.roots:[])){if(EV&&EV.slice(0,EV.indexOf("|"))!==r.id)continue;for(const g of (r.groups||[]))if(g.key){const d=parts(r,g.key).day;if(d)set.add(d)}}
   return [...set].sort(cmpDay)}
-function effDay(days){if(!DAYSEL||!DAYSEL.v)return "";days=days||allDays();const d=dayInfo(DAYSEL.v);
+function effDay(days){if(!DAYSEL||!DAYSEL.v)return "";days=days||allDays();
+  if(!days.length)return "";                       // 日のフォルダがない（別の学会など）：前に選んだ日では絞り込まない
+  const d=dayInfo(DAYSEL.v);
   if(d&&d.n!=null&&DAYSEL.at){const diff=Math.round((new Date(ymd()+"T00:00:00")-new Date(DAYSEL.at+"T00:00:00"))/864e5);
     if(diff>0){const hit=days.find(x=>{const e=dayInfo(x);return e&&e.n===d.n+diff});if(hit)return hit}}
-  return DAYSEL.v}
-function dayOK(r,key,ed){return !ed||parts(r,key).day===ed}
+  return days.includes(DAYSEL.v)?DAYSEL.v:""}
+function dayOK(r,key,ed){if(!ed)return true;const y=lay(r);if(y.dl<0&&!y.sd)return true;return parts(r,key).day===ed}
 /* 進行状況の基準になる「今日」：日付の名前なら今日の日付、day1 などなら選んでいる日。日の情報がなければ全部今日 */
 function todayDay(days,ed){const t=days.find(isTodayLabel);return t||ed||null}
 /* セッション名の時刻：0900-1030 / 9:00〜10:30 / 9時30分 / 先頭の0900_ など */
@@ -4266,7 +4623,7 @@ function sesTime(path){if(!path)return null;const t=nameKey(path);let m,a=null,b
   if((m=RE_TR.exec(t))){a=tm(m[1],m[2],m[3]);b=tm(m[4],m[5],m[6])}
   else if((m=RE_HR.exec(t))){a=+m[1]*60+ +m[2];b=+m[3]*60+ +m[4]}
   else if((m=RE_T.exec(t)))a=tm(m[1],m[2],m[3]);
-  else for(const seg of t.split("/")){if((m=RE_HH.exec(seg))){a=+m[1]*60+ +m[2];break}}
+  else for(const seg of t.split("/")){if((m=RE_HH.exec(seg))&&+m[2]%5===0){a=+m[1]*60+ +m[2];break}}   // 「1101_一般演題」「2026」などの番号は時刻にしない
   if(a==null)return null;if(b!=null&&b<=a)b=null;return {s:a,e:b}}
 const fmtT=m=>Math.floor(m/60)+":"+p2(m%60);
 const fmtDur=m=>m>=60?Math.floor(m/60)+"時間"+(m%60?(m%60)+"分":""):m+"分";
@@ -4308,8 +4665,9 @@ function unfold(root,group){let ch=false;foldKeysOf(root,group).forEach(k=>{if(F
 /* 目印：「演題取り下げ」→取り下げ（受付の数に入れない）、「発表終了」→発表終了、「会場直」→データがなくても未受付にしない */
 const recvState=g=>g.pending?"copying":g.mk_drop?"drop":g.mk_done?"done":g.mk_got?"got":((g.files>0||g.mk_recv)?"recv":g.mk_direct?"direct":"none");
 const RECV_OK=new Set(["recv","got","done","direct"]);
-const isRecv=g=>RECV_OK.has(recvState(g));
-const isGot=g=>{const s=recvState(g);return s==="got"||s==="done"};
+/* 差し替えを受信中（コピー中）でも、もともと受付済みなら受付済みとして数える */
+const isRecv=g=>{const s=recvState(g);return RECV_OK.has(s)||(s==="copying"&&!!(g.files>0||g.mk_recv||g.mk_got||g.mk_done||g.mk_direct))};
+const isGot=g=>{const s=recvState(g);return s==="got"||s==="done"||(s==="copying"&&!!(g.mk_got||g.mk_done))};
 const actv=list=>list.filter(g=>!g.mk_drop);
 const isTodo=g=>!g.mk_drop&&!isRecv(g);
 const STL={got:"会場取得済",recv:"受付済み",copying:"コピー中",none:"未受付",done:"発表終了",drop:"演題取り下げ",direct:"会場直"};
@@ -4356,6 +4714,11 @@ function renderGroups(){
     if(!hier){for(const g of gs)h+=rowHtml(r,g,false);continue}
     // 会場 → （日）→ セッション → 演者 のツリー（日の階層があれば、会場の中で日ごとに並べる）
     const tree=new Map();const rest=[];const SI={};
+    /* 見出しの「受付 n/t」・未確認数・進行状況は、絞り込み（未受付のみ・検索など）に関係なく、その会場・セッションの全員で数える */
+    const FV=new Map(),FS=new Map();
+    for(const g of all){const pp=parts(r,g.key);if(!FV.has(pp.venue))FV.set(pp.venue,new Map());const m=FV.get(pp.venue);
+      if(!m.has(pp.sesKey))m.set(pp.sesKey,[]);m.get(pp.sesKey).push(g);if(!FS.has(pp.sesKey))FS.set(pp.sesKey,m.get(pp.sesKey));
+      if(!SI[pp.sesKey])SI[pp.sesKey]={day:pp.day,ses:pp.ses}}
     for(const g of gs){
       if(g.key===""){rest.push(g);continue}
       const pp=parts(r,g.key);const v=pp.venue;const sk=pp.sesKey;
@@ -4364,23 +4727,24 @@ function renderGroups(){
     }
     const venues=[...tree.keys()].sort(cmpName);
     for(const v of venues){const sessions=new Map([...tree.get(v).entries()].sort((a,b)=>cmpDay(SI[a[0]].day,SI[b[0]].day)||cmpPath(SI[a[0]].ses,SI[b[0]].ses)));
-      const vlist=[...sessions.values()].flat();
+      const vfull=FV.get(v)?[...FV.get(v).values()].flat():[...sessions.values()].flat();
+      const vlist=vfull;
       const vk=r.id+"|"+v;
       if(v){
-        const vfold=!filtering&&isFold(vk);const vun=vlist.filter(g=>g.unread).length;const vpend=vlist.some(g=>g.pending);
+        const vfold=!filtering&&isFold(vk);const vun=vfull.filter(g=>g.unread).length;const vpend=vfull.some(g=>g.pending);
         const vflash=vfold&&vlist.some(g=>flashKeys.has(r.id+"|"+g.key));
         h+=`<div class="vhead ${vfold?"fold":""} ${vflash?"flashh":""}" data-fold="${esc(vk)}" tabindex="0" role="button" aria-expanded="${!vfold}" style="--vc:${vColor(r.id,v)}"><span class="vic">${IC.building}</span><span class="vn">${esc(nfc(v))}</span>${vpend?`<span class="pdot" title="コピー中"></span>`:""}${progHtml(vlist)}${vun?`<span class="badge">${vun}</span>`:""}<span class="chev">${IC.down}</span></div>`;
         if(vfold)continue;
       }
-      const TL=listTimeline(r,v,sessions,SI);
+      const TL=listTimeline(r,v,FV.get(v)||sessions,SI);
       for(const [skey,list] of sessions){
-        const info=SI[skey]||{day:"",ses:""};const ses=info.ses;
+        const info=SI[skey]||{day:"",ses:""};const ses=info.ses;const sall=FS.get(skey)||list;
         if(ses||info.day){
           const sk=r.id+"|"+skey;const sfold=!filtering&&isFold(sk);
-          const sun=list.filter(g=>g.unread).length;const spend=list.some(g=>g.pending);
+          const sun=sall.filter(g=>g.unread).length;const spend=sall.some(g=>g.pending);
           const sflash=sfold&&list.some(g=>flashKeys.has(r.id+"|"+g.key));
           const tt=sesTime(ses);const st=TL.get(skey);
-          h+=`<div class="shead ${sfold?"fold":""} ${sflash?"flashh":""} ${st?"st-"+st.st:""}" data-fold="${esc(sk)}" tabindex="0" role="button" aria-expanded="${!sfold}"><span class="chev">${IC.down}</span><span class="sn">${info.day&&lay(r).dl>=0?`<span class="dchip">${esc(nfc(info.day))}</span>`:""}${(ses||"").split("/").map(x=>esc(nfc(x))).join('<span class="sep"> › </span>')}</span>${spend?`<span class="pdot" title="コピー中"></span>`:""}${progHtml(list)}${sun?`<span class="badge">${sun}</span>`:""}${tt?`<span class="tl">${timeChip(tt)}${statusHtml(st,list)}</span>`:""}</div>`;
+          h+=`<div class="shead ${sfold?"fold":""} ${sflash?"flashh":""} ${st?"st-"+st.st:""}" data-fold="${esc(sk)}" tabindex="0" role="button" aria-expanded="${!sfold}"><span class="chev">${IC.down}</span><span class="sn">${info.day&&lay(r).dl>=0?`<span class="dchip">${esc(nfc(info.day))}</span>`:""}${(ses||"").split("/").map(x=>esc(nfc(x))).join('<span class="sep"> › </span>')}</span>${spend?`<span class="pdot" title="コピー中"></span>`:""}${progHtml(sall)}${sun?`<span class="badge">${sun}</span>`:""}${tt?`<span class="tl">${timeChip(tt)}${statusHtml(st,sall)}</span>`:""}</div>`;
           if(sfold)continue;
         }
         for(const g of list)h+=rowHtml(r,g,true);
@@ -4483,7 +4847,7 @@ function bpRow(r,g){
   const fc=flagChips(g,3);
   const tags=st==="none"?`<span class="tag t-dim">未受付</span>`+fc:st==="drop"?`<span class="tag t-drop">取り下げ</span>`+fc:st==="done"?`<span class="tag t-done">発表終了</span>`+replTag(g)+fc:(!g.files&&!g.pending&&st!=="direct"?`<span class="tag t-dim">データなし</span>`:"")+replTag(g)+cps+fc+anaChips(g.ana)+cats;
   const stl=STL[st]||"";
-  const tip=nfc(name)+"\n"+stl+(g.files?` · ${g.files}ファイル · ${fmtSize(g.size)}`:"")+(g.recv_ts?` · 受付 ${dtm(g.recv_ts)}`:"")+(g.repl?` · 差し替え ${g.repl}回`:"")+(g.last_ts?` · 最終変更 ${ago(g.last_ts)}`:"")+(g.unread?` · 未確認 ${g.unread}`:"")+(g.fl&&g.fl.length?"\n目印: "+g.fl.map(x=>nfc(x[0])).join("、"):"")+(S.ui.os_open&&S.local?"\nダブルクリックでフォルダを開く":"");
+  const tip=nfc(name)+"\n"+stl+(g.files?` · ${g.files}ファイル · ${fmtSize(g.size)}`:"")+(g.recv_ts?` · 受付 ${dtm(g.recv_ts)}`:"")+(g.repl?` · 差し替え ${g.repl}回`:"")+(g.last_ts?` · 最終変更 ${dtm(g.last_ts)}`:"")+(g.unread?` · 未確認 ${g.unread}`:"")+(g.fl&&g.fl.length?"\n目印: "+g.fl.map(x=>nfc(x[0])).join("、"):"")+(S.ui.os_open&&S.local?"\nダブルクリックでフォルダを開く":"");
   return `<div class="bp st-${st} ${g.unread?"unread":""} ${isSel?"sel":""} ${flashKeys.has(r.id+"|"+g.key)?"flash":""}" data-r="${esc(r.id)}" data-g="${esc(g.key)}" tabindex="0" role="button" title="${esc(tip)}"><span class="sti">${sti}</span><span class="nm">${esc(nfc(name))}</span>${g.unread?`<span class="badge">${g.unread}</span>`:""}${tags?`<span class="tg">${tags}</span>`:""}${progHtmlRow(r,g)}</div>`;
 }
 function renderBoard(){
@@ -4649,7 +5013,7 @@ setView(VIEW,false);
 /* ---------- folder ---------- */
 function selectGroup(root,group,auto){
   SEL={root,group};ls.set("sel",SEL);
-  if(unfold(root,group))renderGroups();
+  if(unfold(root,group)){renderGroups();if(VIEW==="board"){boardHtml="";renderBoard()}}
   document.querySelectorAll(".grp.sel,.bp.sel").forEach(x=>x.classList.remove("sel"));
   const row=[...document.querySelectorAll(".grp")].find(x=>x.dataset.r===root&&x.dataset.g===group);if(row){row.classList.add("sel");if(VIEW==="list")row.scrollIntoView({block:"nearest"})}
   if(VIEW==="board"){openDrawer();const b=[...document.querySelectorAll(".bp")].find(x=>x.dataset.r===root&&x.dataset.g===group);if(b){b.classList.add("sel");revealInBoard(b)}}
@@ -4657,14 +5021,16 @@ function selectGroup(root,group,auto){
   if(S.local&&(!auto||document.hasFocus()))api("/api/seen",{root,group}).then(refresh).catch(()=>{});
 }
 async function loadFolder(scrollTop){
-  if(!SEL)return;
-  try{F=await api(`/api/folder?root=${encodeURIComponent(SEL.root)}&group=${encodeURIComponent(SEL.group)}`)}
-  catch(e){F=null;foldEl().innerHTML=`<div class="empty">${esc(e.message)}</div>`;return}
+  if(!SEL)return;const want=SEL.root+"|"+SEL.group;let res;
+  try{res=await api(`/api/folder?root=${encodeURIComponent(SEL.root)}&group=${encodeURIComponent(SEL.group)}`)}
+  catch(e){if(!SEL||SEL.root+"|"+SEL.group!==want)return;F=null;delete foldEl().dataset.h;foldEl().innerHTML=`<div class="empty">${esc(e.message)}</div>`;return}
+  if(!SEL||SEL.root+"|"+SEL.group!==want)return;      // 速く続けて選んだとき、前の演者の結果で上書きしない
+  F=res;
   const el=$("#fold");const st=el.scrollTop;renderFolder();el.scrollTop=scrollTop?0:st;
 }
 /* フォルダ表示の書き込み先（受付アプリでは上に受付パネルがあるので #foldbody に書く） */
 function foldEl(){return $("#foldbody")||$("#fold")}
-function renderFolderEmpty(){foldEl().innerHTML=`<div class="empty" style="padding-top:90px"><div class="ico">${IC.folder}</div><b>演者フォルダを選択</b>左の一覧か通知をクリックすると、<br>その演者フォルダの中身と解析結果がここに表示されます。<br><br><span style="color:var(--dim);font-size:12.5px">NAS上のファイルは書き換えません（一覧・属性の取得と、PowerPoint解析のための読み取りのみ）</span></div>`}
+function renderFolderEmpty(){delete foldEl().dataset.h;foldEl().innerHTML=`<div class="empty" style="padding-top:90px"><div class="ico">${IC.folder}</div><b>演者フォルダを選択</b>左の一覧か通知をクリックすると、<br>その演者フォルダの中身と解析結果がここに表示されます。<br><br><span style="color:var(--dim);font-size:12.5px">NAS上のファイルは書き換えません（一覧・属性の取得と、PowerPoint解析のための読み取りのみ）</span></div>`}
 function sortKey(p,isDir){const s=p.split("/");return s.map((x,i)=>((i<s.length-1||isDir)?"0":"1")+x)}
 function cmpKeys(a,b){for(let i=0;i<Math.min(a.length,b.length);i++){if(a[i]!==b[i]){if(a[i][0]!==b[i][0])return a[i][0]<b[i][0]?-1:1;return cmpName(a[i].slice(1),b[i].slice(1))}}return a.length-b.length}
 
@@ -4677,11 +5043,11 @@ function vline(v){
   const st={here:["同じフォルダにあり","o-add"],missing:["見つかりません","o-del"],abs:["発表者PCのパス（会場PCでは再生できない可能性大）","o-del"],unc:["ネットワーク上のパス","o-mod"],online:["ネット接続が必要","o-mod"]};
   if(v.kind==="embed")return `<span class="sub">${sl(v.s)}　埋め込み ${esc(v.name)}${v.size?" · "+fmtSize(v.size):""}${vfmtLine(v)}</span>`;
   const x=st[v.st]||["外部リンク","o-mod"];
-  return `<span class="sub">${sl(v.s)}　<b class="${x[1]}">${v.kind==="online"?"オンライン動画":"リンク動画"}</b> ${esc(nfc(v.target||v.name))} — <span class="${x[1]}">${x[0]}</span>${vfmtLine(v)}</span>`;
+  return `<span class="sub">${sl(v.s)}　<b class="${x[1]}">${v.kind==="online"?(v.av==="audio"?"オンライン音声":"オンライン動画"):(v.av==="audio"?"リンク音声":"リンク動画")}</b> ${esc(nfc(v.target||v.name))} — <span class="${x[1]}">${x[0]}</span>${vfmtLine(v)}</span>`;
 }
 /* 動画：問題のあるもの（再生NG・要試写・形式不明・リンク切れなど）を先に。本数が多いときは再生OKの分を折りたたむ */
 const vProb=v=>!!((v.fmt&&v.fmt.v!=="ok")||(v.kind==="embed"&&!v.fmt)||(v.kind!=="embed"&&v.st!=="here"));
-function videoRow(a){const vs=a.video||[],nv=a.n_video!=null?a.n_video:vs.length;
+function videoRow(a,key){const vs=a.video||[],nv=a.n_video!=null?a.n_video:vs.length;
   if(!nv)return["動画","t-dim","なし",""];
   const cnt=k=>vs.filter(v=>v.fmt&&v.fmt.v===k).length;const nb=cnt("bad"),nw=cnt("warn"),nu=cnt("unk");
   const nl=vs.filter(v=>v.kind!=="embed").length,nlb=vs.filter(v=>v.kind!=="embed"&&(v.st==="missing"||v.st==="abs")).length;
@@ -4691,7 +5057,7 @@ function videoRow(a){const vs=a.video||[],nv=a.n_video!=null?a.n_video:vs.length
   let body;
   if(vs.length<=10)body=vs.map(vline).join("");
   else{body=prob.map(vline).join("");
-    if(ok.length)body+=`<details class="vok"${prob.length?"":" open"}><summary>${prob.length?`問題のない動画 ${ok.length}本（再生OK）を表示`:`すべて再生OK（${ok.length}本）`}</summary>${ok.map(vline).join("")}</details>`}
+    if(ok.length)body+=`<details class="vok" data-k="${esc(key||"")}"${prob.length?"":" open"}><summary>${prob.length?`問題のない動画 ${ok.length}本（再生OK）を表示`:`すべて再生OK（${ok.length}本）`}</summary>${ok.map(vline).join("")}</details>`}
   if(nv>vs.length)body+=`<span class="sub">ほか ${nv-vs.length}本（表示を省略）</span>`;
   return["動画",cls,`あり ${nv}${sum?"（"+sum+"）":""}`,body]}
 function autoText(auto){const m=new Map();auto.forEach(([s,sec])=>{if(!m.has(sec))m.set(sec,[]);m.get(sec).push(s)});return [...m].map(([sec,ss])=>`${sl(ss)}：${sec}秒`).join("　")}
@@ -4701,7 +5067,9 @@ function anaCard(it){
   if(a.pending)return `<div class="ana"><div class="hd">${chip}<span class="fn">${nm}</span><span class="tag t-dim ${a.inuse?"":"copying"}">${a.copying?"コピー完了後に解析":a.inuse?"PowerPointで開かれているため解析待ち（閉じたら自動で解析）":"解析中…"}</span></div></div>`;
   if(!a.ok)return `<div class="ana"><div class="hd">${chip}<span class="fn">${nm}</span><span class="tag t-bad">解析できません</span></div><div class="msg">${esc(a.error||"")}</div></div>`;
   const rows=[];
-  rows.push(videoRow(a));
+  rows.push(videoRow(a,it.p));
+  if(a.audio&&a.audio.length){const ab=a.audio.filter(v=>v.kind!=="embed"&&(v.st==="missing"||v.st==="abs")).length;
+    rows.push(["音声",ab?"t-bad":"t-info",`あり ${a.n_audio!=null?a.n_audio:a.audio.length}${ab?`（リンク切れ ${ab}）`:""}`,a.audio.slice(0,40).map(vline).join("")])}
   const nl=a.n_links!=null?a.n_links:a.links.length;
   let ls2=a.links.slice(0,8).map(l=>`<span class="sub">${sl(l.s)}　${esc(l.url)}</span>`).join("")+(nl>8?`<span class="sub">ほか ${nl-8} 件</span>`:"");
   if(a.other&&a.other.length)ls2+=a.other.slice(0,5).map(o=>`<span class="sub">${sl(o.s)}　<b class="o-mod">外部リンク(${esc(o.type)})</b> ${esc(o.target)}</span>`).join("");
@@ -4765,11 +5133,20 @@ function renderFolder(){
       return `<tr class="${cls}"><td class="nm" style="padding-left:${8+dep*16}px">${i.d?"▸ ":""}${esc(nfc(nm))}${i.mk?` <span class="tag ${MKC[i.mk]||"t-dim"}" title="ファイル名から判断した目印（${MKR[i.mk]||""}）。データとしては数えません">目印：${esc(nfc(i.ml||""))}</span>`:""}</td><td>${i.d?"":i.mk?`<span class="chip">目印</span>`:`<span class="chip c-${esc(i.c)}">${esc(i.c)}</span>`}</td><td class="num">${i.d?"":fmtSize(i.s)}</td><td class="tm">${i.m?dtm(i.m):""}</td><td>${s?`<span class="stl o-${s[1]} ${i.st==="pending"?"copying":""}">${s[0]}${i.ct?" "+hms(i.ct):""}</span>`:""}</td>${fd.length?`<td style="white-space:nowrap">${i.d?"":fd.map(d=>i.cp&&i.cp[d.id]?cpPill(d.label,i.cp[d.id][0],i.cp[d.id][1]):"").join(" ")}</td>`:""}</tr>`}).join("");
     h+=`</tbody></table></div></div><div style="height:32px"></div>`;
   }
-  foldEl().innerHTML=h;
+  /* 更新のたびに作り直すと、開いていた「問題のない動画」が閉じ、スクロール位置も戻ってしまう：中身が同じなら作り直さない */
+  const fe=foldEl();
+  if(fe.dataset.h===h&&fe.childElementCount)return;
+  const openK=new Map([...fe.querySelectorAll("details[data-k]")].map(d=>[d.dataset.k,d.open]));
+  fe.innerHTML=h;fe.dataset.h=h;
+  fe.querySelectorAll("details[data-k]").forEach(d=>{if(openK.has(d.dataset.k))d.open=openK.get(d.dataset.k)});
   const bo=$("#bOpen");if(bo)bo.onclick=()=>openOS(F.root,F.group);
-  $("#bCopy").onclick=()=>{navigator.clipboard.writeText(F.path).then(()=>toast("パスをコピーしました"),()=>toast("コピーできませんでした"))};
-  document.querySelectorAll("[data-cpath]").forEach(b=>b.onclick=()=>navigator.clipboard.writeText(b.dataset.cpath).then(()=>toast("コピー先のパスをコピーしました"),()=>toast("コピーできませんでした")));
+  $("#bCopy").onclick=()=>{copyText(F.path).then(()=>toast("パスをコピーしました"),()=>toast("コピーできませんでした"))};
+  document.querySelectorAll("[data-cpath]").forEach(b=>b.onclick=()=>copyText(b.dataset.cpath).then(()=>toast("コピー先のパスをコピーしました"),()=>toast("コピーできませんでした")));
 }
+/* クリップボード（LANの他の端末から http で開いたときは navigator.clipboard が使えないので、昔の方法で） */
+function copyText(t){if(navigator.clipboard&&window.isSecureContext)return navigator.clipboard.writeText(t);
+  return new Promise((ok,ng)=>{const a=document.createElement("textarea");a.value=t;a.style.position="fixed";a.style.opacity="0";document.body.appendChild(a);a.select();
+    let r=false;try{r=document.execCommand("copy")}catch(e){}a.remove();r?ok():ng()})}
 function openOS(root,group){api("/api/open",{root,rel:group}).catch(e=>toast(e.message,5000))}
 
 /* ---------- header buttons ---------- */
@@ -4873,7 +5250,8 @@ function renderCfg(){
     if(b.dataset.act==="rebase"){if(!r.id){toast("保存後に使えます");return}api("/api/rebaseline",{root:r.id}).then(()=>toast("次の確認で今の状態を基準にします")).catch(e=>toast(e.message))}};
   $("#bPick").onclick=async()=>{try{const j=await api("/api/pick",{});if(j.path)$("#nPath").value=j.path}catch(e){toast(e.message,5000)}};
   $("#bAdd").onclick=()=>{const p=$("#nPath").value.trim().replace(/^"|"$/g,"");if(!p){toast("パスを入力してください");return}
-    keepForm();CFG.roots.push({path:p,label:$("#nLabel").value.trim(),depth:+$("#nDepth").value,enabled:true});renderCfg()};
+    keepForm();CFG._np=null;CFG.roots.push({path:p,label:$("#nLabel").value.trim(),depth:+$("#nDepth").value,enabled:true});renderCfg()};
+  if(CFG._np){$("#nPath").value=CFG._np.p||"";$("#nLabel").value=CFG._np.l||""}
   $("#bIgDef").onclick=()=>{$("#ig").value=DEF.ignore.join("\n")};
   $("#bCoiDef").onclick=()=>{$("#coi").value=DEF.coi.join("\n")};
   $("#bMkDef").onclick=()=>{$("#mkt tbody").innerHTML=(DEF.marks||[]).map(mkRow).join("")};
@@ -4898,15 +5276,16 @@ const MKROLES=[["recv","受付済にする"],["got","会場取得済にする"],
 function mkRow(m){return `<tr><td><input type="text" class="mkw" value="${esc(m.w||"")}" maxlength="40" spellcheck="false" placeholder="ファイル名に入る文字（例: 動画有）"></td><td style="width:240px"><select class="mkr">${MKROLES.map(([k,l])=>`<option value="${k}" ${m.role===k?"selected":""}>${l}</option>`).join("")}</select></td><td><button class="ghost x" data-mkdel title="この行を削除">${IC.x}</button></td></tr>`}
 async function loadVenues(){
   const sel=$("#opVenue");if(!sel||!CFG.op.root)return;
-  const cur=CFG.op.venue;let vs=[],err="";
-  try{vs=(await api("/api/venues?root="+encodeURIComponent(CFG.op.root))).venues}catch(e){err=e.message}
-  if(!$("#opVenue"))return;
+  const cur=CFG.op.venue,root0=CFG.op.root;let vs=[],err="";
+  try{vs=(await api("/api/venues?root="+encodeURIComponent(root0))).venues}catch(e){err=e.message}
+  if(!$("#opVenue")||CFG.op.root!==root0)return;     // 待っている間に監視フォルダを選び直した
   let h=`<option value="">（監視フォルダ全体）</option>`+vs.map(v=>`<option value="${esc(v)}" ${v===cur?"selected":""}>${esc(nfc(v))}</option>`).join("");
   if(cur&&!vs.includes(cur))h+=`<option value="${esc(cur)}" selected>${esc(nfc(cur))}（現在見つかりません）</option>`;
   if(err)h+=`<option disabled>${esc(err)}</option>`;
   sel.innerHTML=h;
 }
 function keepForm(){
+  if($("#nPath"))CFG._np={p:$("#nPath").value,l:$("#nLabel").value};   // 画面を作り直しても、入力中のパスを消さない
   CFG.poll_sec=+$("#poll").value;CFG.settle_sec=+$("#settle").value;CFG.report_while_stopped=$("#rws").checked;CFG.analyze=$("#ana").checked;
   document.querySelectorAll("[data-n]").forEach(x=>CFG.notify[x.dataset.n]=x.checked);
   CFG.ui={sound:$("#snd").checked,sticky:$("#stk").checked,os_open:$("#osOpen").checked,click:(document.querySelector("input[name=clk]:checked")||{}).value||"app"};
@@ -4920,7 +5299,7 @@ function keepForm(){
   if($("#opVenue")&&$("#opVenue").options.length)CFG.op.venue=$("#opVenue").value;
 }
 async function saveCfg(){
-  keepForm();const body=Object.assign({},CFG);delete body._data;
+  keepForm();const body=Object.assign({},CFG);delete body._data;delete body._np;
   const np=$("#nPath").value.trim();if(np){toast("入力中のパスは［追加］を押してから保存してください",4500);return}
   try{const j=await api("/api/config",body);closeCfg();if(j.warnings&&j.warnings.length)toast(j.warnings.join(" / "),7000);else toast("保存しました");setTimeout(refresh,300)}
   catch(e){$("#cerr").textContent=e.message}
