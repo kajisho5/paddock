@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS RECEPTION  v1.2.0  —  SEVENTHWELL
+SW NAS RECEPTION  v1.2.1  —  SEVENTHWELL
 
 学会の受付PC用。演者のデータ（USB・ドラッグ＆ドロップ）を受け取り、NAS上の演者フォルダへ入れる。
 監視・解析・一覧・会場ボードは SW NAS WATCH をそのまま使う（sw_nas_watch を部品として読み込む）。
@@ -46,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS RECEPTION"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 DEFAULT_PORT = 8795
 RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（SW NAS WATCH は常に無視する）
 CHUNK = 1 << 20
@@ -1163,7 +1163,7 @@ class Rx:
 # ---------------------------------------------------------------- manager / http
 class RxManager(W.Manager):
     def apply_config(self, new):
-        new["op"]["enabled"] = False      # 受付アプリでは会場オペレーターモードを使わない
+        new["op"] = dict(new.get("op") or {}, enabled=False)   # 受付アプリではコピーしない（SW NAS OPERATOR の役目）
         super().apply_config(new)
 
 
@@ -1193,7 +1193,8 @@ class RxHandler(W.Handler):
         return self.server.rx
 
     def send_page(self):
-        body = self.server.page.replace("__TOKEN__", self.server.token).replace("__VERSION__", W.VERSION).encode("utf-8")
+        body = self.server.page.replace("__TOKEN__", self.server.token).replace("__VERSION__", W.VERSION).replace(
+            "__APPKIND__", "reception").encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -1747,11 +1748,9 @@ async function rxAddOpen(){if(!S||!S.roots.length){toast("先に［設定］で�
   $("#rxaGo").onclick=async()=>{const name=$("#rxaName").value.trim();if(!name){toast("フォルダ名を入れてください");return}
     try{const j=await api("/api/rx/mkdir",{root:rid,parent:$("#rxaSes").value,name});closeCfg();toast("作成しました: "+name,4000);RX.pendSel={root:rid,group:j.group};refresh()}
     catch(e){toast(e.message,6000)}}}
-/* ---- 設定：会場オペレーターモードは隠し、受付の設定を足す */
+/* ---- 設定：受付の設定を足す（会場オペレーターの設定は SW NAS OPERATOR だけに出る） */
 api("/api/rx/settings").then(j=>{RX.settings=j.settings;RX.data=j.data_dir}).catch(()=>{});
 const _rcfg=renderCfg;renderCfg=function(){_rcfg();
-  const op=[...document.querySelectorAll("#modal h3")].find(x=>x.textContent.trim()==="会場オペレーターモード");
-  if(op){op.style.display="none";const c=$("#opOn");if(c){c.checked=false;const p=c.closest("p");if(p)p.style.display="none"}const bx=$("#opBox");if(bx)bx.style.display="none"}
   const foot=$("#modal .foot");const st=RX.settings||{verify:true,keep_local:true,pc_name:"",flag_dir:"",auto_recv:true};
   if(foot&&!$("#rxSet")){const d=document.createElement("div");d.id="rxSet";
     d.innerHTML=`<h3>受付</h3><div class="checks" style="flex-direction:column;gap:8px">

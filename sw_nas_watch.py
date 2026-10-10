@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.12.0  —  SEVENTHWELL
+SW NAS WATCH  v1.13.0  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
 PowerPoint は 動画 / ハイパーリンク / COI / 自動送り / クリック無効 を自動で解析する。
 「会場ボード」表示では、全会場を横に並べて受付状況を一覧できる。
-会場オペレーターモードでは、自分の会場だけを監視し、受信が完了した演者フォルダを
-指定したコピー先（メインPC・バックアップPCなど）へコピーする（NASには書き込まない）。
+受付PC用の SW NAS RECEPTION（NASへ書き込む）、会場の発表PC用の SW NAS OPERATOR（発表PCへコピーする）は、
+このファイルを部品として読み込む別アプリ。このファイル単体（SW NAS WATCH）はどこにも書き込まない。
 
   ・Python 3.7 以上 / 標準ライブラリのみ（追加インストール不要）
   ・NAS上で行うのは「フォルダ一覧・サイズ・更新日時の取得」と「PowerPoint解析のための読み取り」だけ。
@@ -50,7 +50,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.12.0"
+VERSION = "1.13.0"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -1224,6 +1224,8 @@ def validate_op(op, roots, data_dir):
     rid = str(op.get("root") or "")
     if any(r["id"] == rid for r in roots):
         out["root"] = rid
+    elif len(roots) == 1:
+        out["root"] = roots[0]["id"]          # 監視フォルダが1つだけなら、それを使う（保存前の新しいフォルダでも）
     venue = str(op.get("venue") or "").strip()
     if venue in (".", "..") or any(c in venue for c in "/\\:") or len(venue) > 255:
         raise ValueError("会場フォルダ名が不正です: %s" % venue)
@@ -2899,7 +2901,42 @@ class Copier(threading.Thread):
 
 
 # ---------------------------------------------------------------- manager
+class NullCopier:
+    """コピーをしないアプリ（SW NAS WATCH・SW NAS RECEPTION）用の空のコピー係。
+    コピー（会場PCへの書き込み）は SW NAS OPERATOR だけが行う。"""
+    ver = 0
+    active = None
+
+    def __init__(self, mgr=None):
+        pass
+
+    def start(self):
+        pass
+
+    def stop_now(self):
+        pass
+
+    def join(self, timeout=None):
+        pass
+
+    def kick(self):
+        pass
+
+    def reconfigure(self):
+        pass
+
+    def summary(self):
+        return {"enabled": False}
+
+    def group_states(self, group):
+        return {}
+
+    def file_states(self, rels):
+        return {}
+
+
 class Manager:
+    COPIER_CLASS = None      # SW NAS OPERATOR だけが Copier を使う（WATCH・RECEPTION はコピーしない）
     def __init__(self, store, cfg):
         self.store = store
         self.cfg = cfg
@@ -2929,7 +2966,13 @@ class Manager:
         self.logq = queue.Queue(maxsize=2000)
         threading.Thread(target=self._log_loop, daemon=True, name="log").start()
         self.analyzer = Analyzer(self)
-        self.copier = Copier(self)
+        if self.COPIER_CLASS is None:
+            # このアプリはコピーしない：オペレーター設定が残っていても使わない（会場PCへは何も書かない）
+            self.op_moved = bool(cfg.get("op", {}).get("enabled"))
+            cfg["op"] = dict(cfg.get("op") or {}, enabled=False)
+        else:
+            self.op_moved = False
+        self.copier = (self.COPIER_CLASS or NullCopier)(self)
 
     def log(self, msg):
         # 監視スレッドはここで待たない（コンソールが止まっても監視は止めない）
@@ -3123,6 +3166,8 @@ class Manager:
             self._apply_config(new)
 
     def _apply_config(self, new):
+        if self.COPIER_CLASS is None:
+            new["op"] = dict(new.get("op") or {}, enabled=False)
         old = self.cfg
         ignore_changed = old["ignore"] != new["ignore"]
         coi_changed = old["coi_keywords"] != new["coi_keywords"]
@@ -3268,7 +3313,7 @@ class Manager:
                 "last_event_id": last_id, "ver": self.total_ver(), "roots": roots,
                 "events": out_evs, "ui": self.cfg["ui"], "notify": self.cfg["notify"], "local": local,
                 "analyze": analyze_on, "os": "win" if IS_WIN else ("mac" if IS_MAC else "other"),
-                "unread_total": sum(unread.values()), "op": self.copier.summary()}
+                "unread_total": sum(unread.values()), "op": self.copier.summary(), "op_moved": self.op_moved}
 
     def folder_payload(self, rid, group):
         w = self.watchers.get(rid)
@@ -3302,14 +3347,18 @@ class Manager:
             out["op"] = {"dests": dl}
         return out
 
-    def list_venues(self, rid):
-        """会場オペレーターモードの設定用：監視フォルダ直下のフォルダ名（一覧の取得のみ）。"""
-        rc = next((r for r in self.cfg["roots"] if r["id"] == rid), None)
-        if not rc:
-            raise KeyError("監視フォルダが見つかりません")
+    def list_venues(self, rid, path=None):
+        """会場オペレーター用の設定：監視フォルダ直下のフォルダ名（一覧の取得のみ）。保存前のパスでも見られる。"""
+        if path:
+            target = str(path).strip().strip('"')
+        else:
+            rc = next((r for r in self.cfg["roots"] if r["id"] == rid), None)
+            if not rc:
+                raise KeyError("監視フォルダが見つかりません")
+            target = rc["path"]
         out = []
         try:
-            with os.scandir(rc["path"]) as it:
+            with os.scandir(long_path(target)) as it:
                 for de in it:
                     if self.ignore_re is not None and self.ignore_re.match(de.name.lower()):
                         continue
@@ -3469,7 +3518,8 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         try:
             if u.path in ("/", "/index.html"):
-                body = HTML.replace("__TOKEN__", self.server.token).replace("__VERSION__", VERSION).encode("utf-8")
+                body = HTML.replace("__TOKEN__", self.server.token).replace("__VERSION__", VERSION).replace(
+                    "__APPKIND__", getattr(self.server, "appkind", "watch")).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -3494,7 +3544,8 @@ class Handler(BaseHTTPRequestHandler):
                                                                    "marks": DEFAULT_MARKS},
                                 "data_dir": self.M.store.dir if self.is_local() else ""})
             elif u.path == "/api/venues":
-                self.send_json({"venues": self.M.list_venues((q.get("root") or [""])[0])})
+                path = (q.get("path") or [""])[0] if self.is_local() else ""
+                self.send_json({"venues": self.M.list_venues((q.get("root") or [""])[0], path)})
             elif u.path == "/api/stream":
                 self.stream(q)
             else:
@@ -3673,6 +3724,8 @@ def main():
         cfg = validate_cfg(cfg, data_dir)
     except ValueError as e:
         raise SystemExit(str(e))
+    if cfg["op"].get("enabled"):
+        print("※ 会場オペレーターモード（発表PCへのコピー）は SW NAS OPERATOR に分かれました。このアプリではコピーしません。")
 
     host = "0.0.0.0" if a.lan else "127.0.0.1"
     url = "http://127.0.0.1:%d/" % a.port
@@ -4268,6 +4321,7 @@ tr.mkrow td{color:var(--muted-fg)}
 <script>
 "use strict";
 const TOKEN="__TOKEN__";
+const APPKIND="__APPKIND__";        /* watch / reception / operator */
 const SV=(d)=>`<svg class="i" viewBox="0 0 24 24">${d}</svg>`;
 const IC={
  search:SV('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
@@ -4489,6 +4543,7 @@ function renderBanner(){
   else if(Notification.permission==="default"){h=`デスクトップ通知がまだ許可されていません。<button class="pri" onclick="askPerm()">通知を許可</button>`}
   else if(Notification.permission==="denied"){h="デスクトップ通知がブロックされています。Chrome / Edge のサイト設定で 127.0.0.1 の「通知」を許可してください（音とログ表示は動作します）";warn=true}
   else if(!S.local){h="閲覧専用で表示中（別端末）。既読・設定などの操作は監視PC側で行ってください。";warn=true}
+  if(S.op_moved&&APPKIND==="watch"){h=`このPCでは「会場オペレーターモード」（発表PCへのコピー）を使っていました。コピーは <b>SW NAS OPERATOR</b> に分かれたため、このアプリではコピーしません。発表PCでは SW NAS OPERATOR を使ってください（このアプリと同じ場所にZIPを展開すれば、はじめて起動したときに会場・コピー先の設定を引き継ぎます）。`+(h?"<br>"+h:"");warn=true}
   const off=S.roots.filter(r=>r.enabled&&r.online===false);
   const offd=opDests().filter(d=>d.online===false);
   if(offd.length){h=offd.map(d=>`⚠ コピー先「${esc(d.label)}」に接続できません（つながったら自動でコピーします）`).join("　")+(h?"<br>"+h:"");warn=true}
@@ -5169,10 +5224,12 @@ async function openCfg(){
 }
 function closeCfg(){$("#modal").classList.remove("open")}
 function depthSel(v,id){return `<select ${id?`id="${id}"`:""} data-k="depth" title="演者フォルダの階層">${[1,2,3,4,5,6].map(n=>`<option value="${n}" ${n==v?"selected":""}>階層 ${n}</option>`).join("")}</select>`}
+const OPAPP=APPKIND==="operator";
 function renderCfg(){
-  const c=CFG;c.op=c.op||{enabled:false,root:"",venue:"",dests:[],max_mbps:0};const nk=[["incoming","受信開始（コピー中にすぐ知らせる）"],["folder_new","新しい演者フォルダ"],["add","ファイル追加"],["mod","ファイル更新（差し替え）"],["rename","ファイル名変更"],["del","ファイル削除"],["folder_rename","フォルダ名変更"],["folder_del","フォルダ削除"],["offline","NAS接続断"],["online","NAS復帰"],["copied","コピー完了（会場オペレーター）"],["copy_err","コピーできない・差し替え待ち（会場オペレーター）"]];
+  const c=CFG;
+  if(OPAPP){c.op=c.op||{enabled:false,root:"",venue:"",dests:[],max_mbps:0};if(!c.op.dests.length)c.op.dests=[{label:"メイン",path:"",enabled:true},{label:"バックアップ",path:"",enabled:true}]}c.op=c.op||{enabled:false,root:"",venue:"",dests:[],max_mbps:0};const nk=[["incoming","受信開始（コピー中にすぐ知らせる）"],["folder_new","新しい演者フォルダ"],["add","ファイル追加"],["mod","ファイル更新（差し替え）"],["rename","ファイル名変更"],["del","ファイル削除"],["folder_rename","フォルダ名変更"],["folder_del","フォルダ削除"],["offline","NAS接続断"],["online","NAS復帰"]];
   $("#modal").innerHTML=`<div class="dlg">
-  <h2>設定</h2><p class="desc">監視するNASのフォルダ、検出のタイミング、通知と解析の動作を設定します。</p>
+  <h2>設定</h2><p class="desc">${OPAPP?"見るNASのフォルダ、この発表PCの会場とコピー先、解析の動作を設定します。":"監視するNASのフォルダ、検出のタイミング、通知と解析の動作を設定します。"}</p>
   <h3>監視フォルダ</h3>
   <div id="rlist">${c.roots.length?c.roots.map((r,i)=>`<div class="rrow" data-i="${i}">
      <input type="text" data-k="label" value="${esc(r.label)}" placeholder="表示名（例: 学会名）">
@@ -5187,28 +5244,7 @@ function renderCfg(){
   <b>階層3</b>: 学会名フォルダ／会場／セッション／<b>001_演者名</b>／…（学会名フォルダを登録）<br>
   階層2: 会場フォルダ／セッション／<b>演者</b>　　階層1: セッションフォルダ／<b>演者</b><br>
   NAS側で「読み取り専用のユーザー」を作り、そのユーザーで接続しておくと、誤操作でも書き込めないので確実です。</p>
-  <h3>会場オペレーターモード</h3>
-  <p style="margin:0"><label class="lbl"><input type="checkbox" id="opOn" ${c.op.enabled?"checked":""}>このPCを会場オペレーター用にする（自分の会場だけを監視し、受信が完了した演者フォルダをコピー先へコピー）</label></p>
-  <div id="opBox" style="${c.op.enabled?"":"display:none"}">
-    ${c.roots.some(r=>r.id)?`<div class="grid2" style="margin-top:12px">
-      <span>監視フォルダ</span><span><select id="opRoot">${c.roots.filter(r=>r.id).map(r=>`<option value="${esc(r.id)}" ${r.id===c.op.root?"selected":""}>${esc(r.label||r.path)}</option>`).join("")}</select></span>
-      <span>自分の会場</span><span><select id="opVenue"><option value="${esc(c.op.venue)}">${esc(c.op.venue||"読み込み中…")}</option></select></span>
-      <span>速度の上限</span><span><input type="number" id="opMbps" min="0" max="1000" step="1" value="${c.op.max_mbps||0}"> MB/秒（0 = 制限なし）</span>
-    </div>`:`<p class="hint">先に「監視フォルダ」を追加して［保存］してください。</p>`}
-    <p class="hint" style="margin-top:14px">コピー先（最大4か所。メインPC・バックアップPCなど。バックアップPCは共有フォルダのパス \\\\PC名\\共有名\\… で指定）</p>
-    <div id="dlist">${c.op.dests.map((d,i)=>`<div class="drow" data-i="${i}">
-       <input type="text" data-k="label" value="${esc(d.label)}" placeholder="名前（例: メイン）">
-       <input type="text" class="pth mono" data-k="path" value="${esc(d.path)}" placeholder="D:\\発表データ  /  \\\\BACKUP-PC\\共有\\発表データ">
-       <button class="ghost" data-act="pick">参照…</button>
-       <label><input type="checkbox" data-k="enabled" ${d.enabled?"checked":""}>有効</label>
-       <button class="ghost danger" data-act="del">削除</button></div>`).join("")}</div>
-    <p class="hint" style="margin-top:0">${c.op.dests.length<4?`<button class="ghost" id="bDAdd">${IC.plus}コピー先を追加</button>`:""}</p>
-    <p class="hint">・コピー先には、会場より下（セッション／演者フォルダ）を同じ構成で作ります。<br>
-    ・<b>NASには一切書き込みません</b>（読むだけ）。受信中の演者フォルダはコピーせず、NAS上で開かれているファイルにも触れません。<br>
-    ・コピー先で<b>開かれているファイル（発表中など）は上書きしません</b>。閉じられてから新しい版に差し替えます。<br>
-    ・差し替えた旧版はコピー先の「_差し替え前」フォルダに残します。<b>コピー先のファイルを消すことはありません</b>（NAS側で消えても残します）。<br>
-    ・コピー先で編集したファイルは、NAS側が更新されない限り上書きしません。</p>
-  </div>
+  ${OPAPP?opSectionHtml(c):""}
   <h3>検出</h3>
   <div class="grid2">
     <span>確認する間隔</span><span><input type="number" id="poll" min="1" max="60" step="1" value="${c.poll_sec}"> 秒</span>
@@ -5226,10 +5262,10 @@ function renderCfg(){
   <p class="hint" style="margin:0 0 8px">演者フォルダの画像（またはテキスト）ファイルの名前にこの文字が入っていれば、データではなく<b>目印</b>として扱います。全角半角・大文字小文字・空白や「_」は区別せず、先頭の番号（00_ など）があってもかまいません。2つ以上に当てはまるときは長い文字のほうを使います。</p>
   <table class="mkt" id="mkt"><tbody>${(c.marks||[]).map(mkRow).join("")}</tbody></table>
   <p class="hint"><button class="ghost" id="bMkAdd">${IC.plus}行を追加</button> <button class="ghost" id="bMkDef">初期値に戻す</button></p>
+  ${OPAPP?`<h3>通知</h3><p class="hint" style="margin:0">このアプリはスライドショーをしている発表PCで使うため、<b>通知も音も出しません</b>（画面の表示だけ更新します）。</p>`:`
   <h3>通知する変化</h3>
   <div class="checks">${nk.map(([k,l])=>`<label><input type="checkbox" data-n="${k}" ${c.notify[k]!==false?"checked":""}>${l}</label>`).join("")}</div>
   <h3>通知の動作</h3>
-  <p class="hint" style="margin:0 0 10px">※ 会場オペレーターモードのPCでは、スライドショーの邪魔にならないよう<b>通知も音も出しません</b>（画面上の表示だけ更新します）。</p>
   <div class="checks" style="flex-direction:column;gap:8px">
     <label><input type="checkbox" id="snd" ${c.ui.sound?"checked":""}>通知音を鳴らす（アプリ独自の音。OSの通知音は鳴らさない）</label>
     <label><input type="checkbox" id="stk" ${c.ui.sticky?"checked":""}>通知を自動で消さない（クリックするまで残す）</label>
@@ -5238,6 +5274,7 @@ function renderCfg(){
     <label style="padding-left:23px"><input type="radio" name="clk" value="both" ${c.ui.click==="both"?"checked":""} ${c.ui.os_open?"":"disabled"}>通知クリック → アプリ内表示 ＋ Explorer / Finder でも開く</label>
   </div>
   <p class="hint">※ Explorer / Finder はこのアプリの管理外です。表示設定によってはサムネイル作成のためにファイルを読みに行ったり、Thumbs.db（Windows）や .DS_Store（Mac）をNASに作ったりすることがあります。会場側への影響を完全になくすため、通常はオフのままにしてください。<br>※ 会場の絞り込みと「自動表示」は画面上部・左上で切り替えます（このPCだけの設定）。</p>
+  `}
   <h3>無視するファイル名（1行1パターン、* と ? が使えます）</h3>
   <textarea id="ig" spellcheck="false">${esc(c.ignore.join("\n"))}</textarea>
   <p class="hint"><button class="ghost" id="bIgDef">初期値に戻す</button>　設定の保存先: <span class="mono">${esc(c._data||"")}</span></p>
@@ -5257,27 +5294,51 @@ function renderCfg(){
   $("#bMkDef").onclick=()=>{$("#mkt tbody").innerHTML=(DEF.marks||[]).map(mkRow).join("")};
   $("#bMkAdd").onclick=()=>{const tb=$("#mkt tbody");tb.insertAdjacentHTML("beforeend",mkRow({w:"",role:"info"}));const ins=tb.querySelectorAll(".mkw");ins[ins.length-1].focus()};
   $("#mkt").onclick=e=>{const b=e.target.closest("[data-mkdel]");if(b)b.closest("tr").remove()};
-  $("#osOpen").onchange=()=>{const b=document.querySelector("input[name=clk][value=both]");b.disabled=!$("#osOpen").checked;if(b.disabled&&b.checked)document.querySelector("input[name=clk][value=app]").checked=true};
+  if($("#osOpen"))$("#osOpen").onchange=()=>{const b=document.querySelector("input[name=clk][value=both]");b.disabled=!$("#osOpen").checked;if(b.disabled&&b.checked)document.querySelector("input[name=clk][value=app]").checked=true};
   $("#bCancel").onclick=closeCfg;
   $("#bSave").onclick=saveCfg;
-  $("#opOn").onchange=()=>{const on=$("#opOn").checked;$("#opBox").style.display=on?"":"none";
-    if(on&&!CFG.op.dests.length){keepForm();CFG.op.dests=[{label:"メイン",path:"",enabled:true},{label:"バックアップ",path:"",enabled:true}];renderCfg()}};
   const da=$("#bDAdd");if(da)da.onclick=()=>{keepForm();CFG.op.dests.push({label:"",path:"",enabled:true});renderCfg()};
+  if($("#dlist")){
   $("#dlist").oninput=$("#dlist").onchange=e=>{const row=e.target.closest(".drow");if(!row)return;const d=CFG.op.dests[+row.dataset.i];const k=e.target.dataset.k;if(!k)return;d[k]=e.target.type==="checkbox"?e.target.checked:e.target.value};
   $("#dlist").onclick=async e=>{const b=e.target.closest("button");if(!b)return;const i=+b.closest(".drow").dataset.i;
     if(b.dataset.act==="del"){keepForm();CFG.op.dests.splice(i,1);renderCfg()}
     if(b.dataset.act==="pick"){try{const j=await api("/api/pick",{dest:true});if(j.path){CFG.op.dests[i].path=j.path;b.closest(".drow").querySelector("[data-k=path]").value=j.path}}catch(err){toast(err.message,5000)}}};
+  }
   const orr=$("#opRoot");
-  if(orr){if(!CFG.op.root||!CFG.roots.some(r=>r.id===CFG.op.root))CFG.op.root=orr.value;
+  if(orr){if(!CFG.op.root||!CFG.roots.some((r,i)=>(r.id||"#"+i)===CFG.op.root))CFG.op.root=orr.value;
     orr.onchange=()=>{CFG.op.root=orr.value;CFG.op.venue="";loadVenues()};
     $("#opVenue").onchange=()=>{CFG.op.venue=$("#opVenue").value};loadVenues()}
 }
+function opSectionHtml(c){return `
+  <h3>このPCの会場とコピー先</h3>
+  <p class="hint" style="margin:0 0 6px">自分の会場だけを監視し、NASへの受信が完了した演者フォルダを、下のコピー先（この発表PC・バックアップPCなど）へコピーします。</p>
+  <div id="opBox">
+    ${c.roots.length?`<div class="grid2" style="margin-top:12px">
+      <span>監視フォルダ</span><span><select id="opRoot" ${c.roots.length<2?"disabled":""}>${c.roots.map((r,i)=>`<option value="${esc(r.id||"#"+i)}" ${(r.id||"#"+i)===c.op.root?"selected":""}>${esc(r.label||r.path)}</option>`).join("")}</select></span>
+      <span>自分の会場</span><span><select id="opVenue"><option value="${esc(c.op.venue)}">${esc(c.op.venue||"読み込み中…")}</option></select></span>
+      <span>速度の上限</span><span><input type="number" id="opMbps" min="0" max="1000" step="1" value="${c.op.max_mbps||0}"> MB/秒（0 = 制限なし）</span>
+    </div>`:`<p class="hint">先に「監視フォルダ」に学会名フォルダを追加してください（追加すると、ここで会場を選べます）。</p>`}
+    <p class="hint" style="margin-top:14px">コピー先（最大4か所。メインPC・バックアップPCなど。バックアップPCは共有フォルダのパス \\\\PC名\\共有名\\… で指定）</p>
+    <div id="dlist">${c.op.dests.map((d,i)=>`<div class="drow" data-i="${i}">
+       <input type="text" data-k="label" value="${esc(d.label)}" placeholder="名前（例: メイン）">
+       <input type="text" class="pth mono" data-k="path" value="${esc(d.path)}" placeholder="D:\\発表データ  /  \\\\BACKUP-PC\\共有\\発表データ">
+       <button class="ghost" data-act="pick">参照…</button>
+       <label><input type="checkbox" data-k="enabled" ${d.enabled?"checked":""}>有効</label>
+       <button class="ghost danger" data-act="del">削除</button></div>`).join("")}</div>
+    <p class="hint" style="margin-top:0">${c.op.dests.length<4?`<button class="ghost" id="bDAdd">${IC.plus}コピー先を追加</button>`:""}</p>
+    <p class="hint">・コピー先には、会場より下（セッション／演者フォルダ）を同じ構成で作ります。<br>
+    ・<b>NASには一切書き込みません</b>（読むだけ）。受信中の演者フォルダはコピーせず、NAS上で開かれているファイルにも触れません。<br>
+    ・コピー先で<b>開かれているファイル（発表中など）は上書きしません</b>。閉じられてから新しい版に差し替えます。<br>
+    ・差し替えた旧版はコピー先の「_差し替え前」フォルダに残します。<b>コピー先のファイルを消すことはありません</b>（NAS側で消えても残します）。<br>
+    ・コピー先で編集したファイルは、NAS側が更新されない限り上書きしません。</p>
+  </div>`}
 const MKROLES=[["recv","受付済にする"],["got","会場取得済にする"],["done","発表終了にする"],["drop","取り下げ（数に入れない）"],["direct","会場直（未受付にしない）"],["warn","注意（黄色のチップ）"],["info","チップで表示するだけ"]];
 function mkRow(m){return `<tr><td><input type="text" class="mkw" value="${esc(m.w||"")}" maxlength="40" spellcheck="false" placeholder="ファイル名に入る文字（例: 動画有）"></td><td style="width:240px"><select class="mkr">${MKROLES.map(([k,l])=>`<option value="${k}" ${m.role===k?"selected":""}>${l}</option>`).join("")}</select></td><td><button class="ghost x" data-mkdel title="この行を削除">${IC.x}</button></td></tr>`}
 async function loadVenues(){
   const sel=$("#opVenue");if(!sel||!CFG.op.root)return;
   const cur=CFG.op.venue,root0=CFG.op.root;let vs=[],err="";
-  try{vs=(await api("/api/venues?root="+encodeURIComponent(root0))).venues}catch(e){err=e.message}
+  const rr=CFG.roots.find((r,i)=>(r.id||"#"+i)===root0);
+  try{vs=(await api("/api/venues?root="+encodeURIComponent(rr&&rr.id||"")+"&path="+encodeURIComponent(rr?rr.path:""))).venues}catch(e){err=e.message}
   if(!$("#opVenue")||CFG.op.root!==root0)return;     // 待っている間に監視フォルダを選び直した
   let h=`<option value="">（監視フォルダ全体）</option>`+vs.map(v=>`<option value="${esc(v)}" ${v===cur?"selected":""}>${esc(nfc(v))}</option>`).join("");
   if(cur&&!vs.includes(cur))h+=`<option value="${esc(cur)}" selected>${esc(nfc(cur))}（現在見つかりません）</option>`;
@@ -5288,18 +5349,20 @@ function keepForm(){
   if($("#nPath"))CFG._np={p:$("#nPath").value,l:$("#nLabel").value};   // 画面を作り直しても、入力中のパスを消さない
   CFG.poll_sec=+$("#poll").value;CFG.settle_sec=+$("#settle").value;CFG.report_while_stopped=$("#rws").checked;CFG.analyze=$("#ana").checked;
   document.querySelectorAll("[data-n]").forEach(x=>CFG.notify[x.dataset.n]=x.checked);
-  CFG.ui={sound:$("#snd").checked,sticky:$("#stk").checked,os_open:$("#osOpen").checked,click:(document.querySelector("input[name=clk]:checked")||{}).value||"app"};
+  if($("#snd"))CFG.ui={sound:$("#snd").checked,sticky:$("#stk").checked,os_open:$("#osOpen").checked,click:(document.querySelector("input[name=clk]:checked")||{}).value||"app"};
   CFG.ignore=$("#ig").value.split("\n").map(s=>s.trim()).filter(Boolean);
   CFG.coi_keywords=$("#coi").value.split("\n").map(s=>s.trim()).filter(Boolean);
   if($("#mkt"))CFG.marks=[...document.querySelectorAll("#mkt tbody tr")].map(tr=>({w:tr.querySelector(".mkw").value.trim(),role:tr.querySelector(".mkr").value})).filter(m=>m.w);
   delete CFG.mark_recv;delete CFG.mark_got;
-  CFG.op.enabled=$("#opOn").checked;
+  // コピーするのは SW NAS OPERATOR だけ。コピー先が1つ以上あれば有効
+  CFG.op.enabled=OPAPP&&CFG.op.dests.some(d=>d.enabled&&String(d.path||"").trim());
   if($("#opMbps"))CFG.op.max_mbps=Math.max(0,+$("#opMbps").value||0);
   if($("#opRoot"))CFG.op.root=$("#opRoot").value;
   if($("#opVenue")&&$("#opVenue").options.length)CFG.op.venue=$("#opVenue").value;
 }
 async function saveCfg(){
   keepForm();const body=Object.assign({},CFG);delete body._data;delete body._np;
+  if(body.op&&String(body.op.root||"").startsWith("#"))body.op=Object.assign({},body.op,{root:""});   // 保存前の監視フォルダ（1つだけなら自動でそれを使う）
   const np=$("#nPath").value.trim();if(np){toast("入力中のパスは［追加］を押してから保存してください",4500);return}
   try{const j=await api("/api/config",body);closeCfg();if(j.warnings&&j.warnings.length)toast(j.warnings.join(" / "),7000);else toast("保存しました");setTimeout(refresh,300)}
   catch(e){$("#cerr").textContent=e.message}
