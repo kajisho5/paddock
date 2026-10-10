@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS WATCH  v1.8.0  —  SEVENTHWELL
+SW NAS WATCH  v1.8.1  —  SEVENTHWELL
 
 NAS上の「演者フォルダ」を読み取り専用で監視して、変化があったらデスクトップ通知する。
 通知をクリックすると、そのフォルダの中身をアプリ内で表示する（Explorer / Finder でも開ける）。
@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -1046,6 +1046,19 @@ def validate_op(op, roots, data_dir):
 def unc_host(p):
     m = re.match(r"^[\\/]{2}([^\\/]+)", p or "")
     return m.group(1).lower() if m else ""
+
+
+_DINGNUM = {}
+for _base, _n0, _cnt in ((0x2776, 1, 10), (0x2780, 1, 10), (0x278A, 1, 10), (0x24EB, 11, 10), (0x24F5, 1, 10), (0x24FF, 0, 1)):
+    for _i in range(_cnt):
+        _DINGNUM[chr(_base + _i)] = str(_n0 + _i)
+
+
+def nat_key(name):
+    """画面と同じ並び（①〜⑳・全角数字などを数字に読み替え、数字は数値として比べる）。"""
+    t = unicodedata.normalize("NFKC", str(name))
+    t = "".join(_DINGNUM.get(c, c) for c in t).lower()
+    return [(0, int(x), "") if x.isdigit() else (1, 0, x) for x in re.split(r"(\d+)", t) if x], str(name)
 
 
 def default_label(path):
@@ -2759,7 +2772,7 @@ class Manager:
                         continue
         except OSError as e:
             raise KeyError("フォルダを開けません: %s" % _err(e))
-        return sorted(out)[:500]
+        return sorted(out, key=nat_key)[:500]
 
     def resolve(self, rid, rel):
         w = self.watchers.get(rid)
@@ -3647,7 +3660,16 @@ function dtm(t){const d=new Date(t*1000),n=new Date();const day=(d.toDateString(
 function ago(t){const s=Math.max(0,Date.now()/1000-t);if(s<60)return Math.floor(s)+"秒前";if(s<3600)return Math.floor(s/60)+"分前";if(s<86400)return Math.floor(s/3600)+"時間前";return Math.floor(s/86400)+"日前"}
 function kindPill(k){const x=KIND[k]||[k,"acc"];return `<span class="kind k-${x[1]}">${esc(x[0])}</span>`}
 function toast(msg,ms){const t=$("#toast");t.textContent=msg;t.style.display="block";clearTimeout(toast._t);toast._t=setTimeout(()=>t.style.display="none",ms||3200)}
-const cmpName=(a,b)=>nfc(a).localeCompare(nfc(b),"ja",{numeric:true,sensitivity:"base"});
+/* 並べ替え用の読み替え：①〜⑳・㉑〜㊿・⑴・⒈・全角数字などは NFKC で数字に、❶➀➊⓫⓵ など NFKC で変わらない丸数字も数字に直してから
+   「数字は数値として」比べる（そのままだと ⑩ が「1」「0」扱いになり ① の直後に来てしまう） */
+const DINGNUM=(()=>{const m={};const put=(from,n0,cnt)=>{for(let i=0;i<cnt;i++)m[String.fromCharCode(from+i)]=String(n0+i)};
+  put(0x2776,1,10);put(0x2780,1,10);put(0x278A,1,10);put(0x24EB,11,10);put(0x24F5,1,10);put(0x24FF,0,1);return m})();
+const SKC=new Map();
+function nameKey(s){s=String(s==null?"":s);let k=SKC.get(s);if(k!==undefined)return k;
+  try{k=s.normalize("NFKC")}catch(e){k=s}
+  k=k.replace(/[❶-➓⓫-⓿]/g,c=>DINGNUM[c]!==undefined?DINGNUM[c]:c);
+  if(SKC.size>20000)SKC.clear();SKC.set(s,k);return k}
+const cmpName=(a,b)=>nameKey(a).localeCompare(nameKey(b),"ja",{numeric:true,sensitivity:"base"})||(nfc(a)<nfc(b)?-1:nfc(a)>nfc(b)?1:0);
 function cmpPath(a,b){const x=a.split("/"),y=b.split("/");for(let i=0;i<Math.min(x.length,y.length);i++){const c=cmpName(x[i],y[i]);if(c)return c}return x.length-y.length}
 const whereText=w=>nfc(w).split("/").join(" › ");
 function sl(arr){const a=[...new Set(arr)].sort((x,y)=>x-y);const out=[];for(let i=0;i<a.length;){let j=i;while(j+1<a.length&&a[j+1]===a[j]+1)j++;out.push(i===j?a[i]+"枚目":a[i]+"〜"+a[j]+"枚目");i=j+1}return out.join("、")}
