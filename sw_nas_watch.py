@@ -50,7 +50,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.13.1"
+VERSION = "1.13.2"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -77,7 +77,8 @@ MARK_ROLES = ("recv", "got", "done", "drop", "direct", "warn", "info")
 DEFAULT_MARKS = [
     {"w": "受付済", "role": "recv"}, {"w": "受付完了", "role": "recv"},
     {"w": "動画有", "role": "info"}, {"w": "音声有", "role": "info"}, {"w": "動画のみ音声不要", "role": "info"},
-    {"w": "Win持込", "role": "info"}, {"w": "Mac持込", "role": "info"}, {"w": "Backup", "role": "info"},
+    {"w": "PC持込", "role": "info"}, {"w": "Win持込", "role": "info"}, {"w": "Mac持込", "role": "info"}, {"w": "持込", "role": "info"},
+    {"w": "Backup", "role": "info"},
     {"w": "持込リモプレ", "role": "info"}, {"w": "OP卓PC 発表者ツール", "role": "info"}, {"w": "発表者ツール", "role": "info"},
     {"w": "ミラーリング", "role": "info"}, {"w": "Mac PPT", "role": "info"}, {"w": "Mac Keynote", "role": "info"},
     {"w": "変更有", "role": "warn"}, {"w": "演者変更", "role": "warn"},
@@ -87,6 +88,8 @@ DEFAULT_MARKS = [
     {"w": "受け取り済", "role": "got"}, {"w": "DL済", "role": "got"}, {"w": "ダウンロード済", "role": "got"},
     {"w": "発表終了", "role": "done"}, {"w": "発表済", "role": "done"},
 ]
+MARKS_V = 2                       # 目印の既定を増やしたら上げる（保存済みの設定にも新しい既定を足す）
+MARKS_ADDED = {2: ["PC持込", "持込"]}
 MARK_STATUS_ROLES = ("recv", "got", "done", "drop", "direct")   # 演者の状態を決める目印
 MARK_CHIP_ROLES = ("direct", "warn", "info")                    # 演者の行にチップで出す目印
 MARK_MAX = 20 * 1024 * 1024
@@ -347,9 +350,17 @@ def mark_match(marks, name):
     return None
 
 
+_MK_OKURI = (("持ち込み", "持込"), ("持込み", "持込"), ("持ち込", "持込"), ("受け付け", "受付"), ("受付け", "受付"),
+             ("受け付", "受付"), ("受け取り", "受取"), ("受取り", "受取"), ("受け取", "受取"), ("取り下げ", "取下げ"))
+
+
 def mark_norm(s):
-    """目印の照合用：全角半角・大文字小文字をそろえ、空白・_・-・括弧などを取り除く。"""
-    return _MK_SEP.sub("", unicodedata.normalize("NFKC", str(s)).lower())
+    """目印の照合用：全角半角・大文字小文字をそろえ、空白・_・-・括弧（【】など）を取り除く。
+    送り仮名の違い（持ち込み／持込、受け取り／受取、取り下げ／取下げ など）も同じとみなす。"""
+    t = _MK_SEP.sub("", unicodedata.normalize("NFKC", str(s)).lower())
+    for a, b in _MK_OKURI:
+        t = t.replace(a, b)
+    return t
 
 
 def compile_marks(cfg):
@@ -1223,7 +1234,17 @@ def validate_cfg(raw, data_dir, old=None):
             continue
         seen_mk.add(k)
         marks.append({"w": w, "role": x.get("role") if x.get("role") in MARK_ROLES else "info"})
+    try:
+        mver = int(raw.get("marks_v", old.get("marks_v", 1 if (raw.get("marks") or old.get("marks")) else MARKS_V)))
+    except (TypeError, ValueError):
+        mver = 1
+    for v in range(mver + 1, MARKS_V + 1):    # 前の版で保存した設定にも、新しく増やした既定の目印を足す
+        for w in MARKS_ADDED.get(v, []):
+            if mark_norm(w) not in seen_mk:
+                seen_mk.add(mark_norm(w))
+                marks.append({"w": w, "role": next((m["role"] for m in DEFAULT_MARKS if m["w"] == w), "info")})
     cfg["marks"] = marks[:100]
+    cfg["marks_v"] = MARKS_V
     nt = raw.get("notify", old.get("notify", {}))
     nt = nt if isinstance(nt, dict) else {}
     cfg["notify"] = {k: bool(nt.get(k, True)) for k in NOTIFY_KINDS}
