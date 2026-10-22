@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS OPERATOR  v1.2.0  —  SEVENTHWELL
+SW NAS OPERATOR  v1.3.0  —  SEVENTHWELL
 
 学会の各会場の発表PC（オペレーターPC）用。自分の会場の演者フォルダをNASから読み、NASへの受信が完了したものを
 この発表PC・バックアップPCなどのコピー先へコピーする。NASには一切書き込まない（読むだけ）。
@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS OPERATOR"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 DEFAULT_PORT = 8797
 
 
@@ -1156,6 +1156,152 @@ def valid_password(p):
     return p
 
 
+# ---------------------------------------------------------------- 演者のスライドを開く（このPCのコピーを開く。NASのファイルは開かない）
+OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file"}
+PRES_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps", ".key", ".pdf")      # 発表ファイル（この順に優先）
+SHOW_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps")                      # スライドショーで開けるもの
+OPENABLE_STATES = ("ok", "edited")                                                     # コピー済み（コピー先で編集されたものも含む）
+
+
+def _powerpoint_exe():
+    if not W.IS_WIN:
+        return ""
+    try:
+        import winreg
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\POWERPNT.EXE") as k:
+                    v = winreg.QueryValue(k, None)
+                    if v and os.path.isfile(v.strip('"')):
+                        return v.strip('"')
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return ""
+
+
+def open_native(path, how):
+    """ファイル・フォルダを、このPCの既定のアプリで開く（how="show" は PowerPoint のスライドショー）。"""
+    if W.IS_WIN:
+        if how == "show":
+            try:
+                os.startfile(path, "show")       # PowerPoint の「スライド ショー」（右クリックメニューと同じ）
+                return
+            except OSError:
+                exe = _powerpoint_exe()
+                if not exe:
+                    raise ValueError("PowerPoint が見つからないため、スライドショーで開けません（［開く］で開いてください）")
+                subprocess.Popen([exe, "/S", path])
+                return
+        os.startfile(path)
+    elif W.IS_MAC:
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
+OPEN_FN = open_native               # テストでは差し替える
+
+
+class Opener:
+    """演者のスライド・フォルダを、このPCのコピー先（コピー済みのもの）から開く。
+    NAS上のファイルは開かない（会場側・受付の差し替えに影響を出さないため。PowerPointの鍵ファイルもNASに作らない）。"""
+    LABELS = {"todo": "コピー待ち", "copying": "コピー中", "wait": "NASへの受信が終わるのを待っています", "srcbusy": "NAS側で使用中",
+              "busy": "差し替え待ち", "off": "コピー先に接続できません", "err": "コピーできませんでした"}
+
+    def __init__(self, mgr, data_dir):
+        self.mgr = mgr
+        self.name = "open_settings.json"
+        d = mgr.store.read_json(self.name, None)
+        self.settings = self._valid(d if isinstance(d, dict) else {})
+
+    def _valid(self, d):
+        out = dict(OPEN_DEFAULTS)
+        out["enabled"] = bool(d.get("enabled", OPEN_DEFAULTS["enabled"]))
+        dest = str(d.get("dest") or "")
+        out["dest"] = dest if re.fullmatch(r"d[0-9a-f]{8}", dest) else ""
+        out["dbl"] = d.get("dbl") if d.get("dbl") in ("file", "show", "folder") else OPEN_DEFAULTS["dbl"]
+        return out
+
+    def dest(self):
+        op = self.mgr.cfg["op"]
+        ds = [d for d in op["dests"] if d.get("enabled") and d.get("path")]
+        for d in ds:
+            if d["id"] == self.settings["dest"]:
+                return d
+        for d in ds:   # 自動：このPCのフォルダ（ネットワーク上でないもの）
+            if not _unc_parts(d["path"])[0] and not (W.IS_WIN and W.is_remote_path(d["path"])):
+                return d
+        return ds[0] if ds else None
+
+    def get(self):
+        d = self.dest()
+        return {"settings": self.settings, "dest": {"id": d["id"], "label": d["label"]} if d else None}
+
+    def set(self, body):
+        self.settings = self._valid(body if isinstance(body, dict) else {})
+        self.mgr.store.write_json(self.name, self.settings)
+        return self.get()
+
+    def _state(self, it, did):
+        return ((it.get("cp") or {}).get(did) or [None])[0]
+
+    def open(self, root, group, rel, how):
+        if not self.settings["enabled"]:
+            raise ValueError("［設定］→「演者のスライドを開く」がオフになっています")
+        if how not in ("folder", "file", "show"):
+            raise ValueError("開き方が正しくありません")
+        op = self.mgr.cfg["op"]
+        if not op["enabled"] or op["root"] != root:
+            raise ValueError("このPCの会場とコピー先が設定されていません")
+        d = self.dest()
+        if not d:
+            raise ValueError("コピー先がありません（［設定］→「このPCの会場とコピー先」）")
+        prefix = (op["venue"] + "/") if op["venue"] else ""
+        group = str(group or "")
+        if not group or (prefix and not group.startswith(prefix)):
+            raise ValueError("この会場の演者フォルダではありません")
+        sub = group[len(prefix):]
+        base = os.path.join(d["path"], *sub.split("/"))
+        fp = self.mgr.folder_payload(root, group)
+        files = [it for it in fp["items"] if not it.get("d") and not it.get("mk")]
+        msg = ""
+        target = None
+        if rel:
+            target = next((it for it in files if it["p"] == rel), None)
+            if not target:
+                raise ValueError("ファイルが見つかりません（NAS側で名前が変わった・消えた可能性）")
+        elif how != "folder":
+            pres = [it for it in files if os.path.splitext(it["p"])[1].lower() in PRES_EXT]
+            if pres:
+                rank = lambda it: (PRES_EXT.index(os.path.splitext(it["p"])[1].lower()), it["p"].count("/"))   # noqa: E731
+                best = min(rank(it)[0] for it in pres)
+                top = [it for it in pres if rank(it)[0] == best]
+                if len(top) == 1:
+                    target = top[0]
+                else:
+                    msg = "発表ファイルが%d個あるため、フォルダを開きました（フォルダ画面の［開く］から選べます）" % len(top)
+            else:
+                msg = "発表ファイル（PowerPoint・PDFなど）がないため、フォルダを開きました"
+        if target is None:
+            if not os.path.isdir(W.long_path(base)):
+                raise ValueError("「%s」にはまだこの演者のフォルダがありません（コピーが終わってから開いてください）" % d["label"])
+            OPEN_FN(base, "folder")
+            return {"ok": True, "what": "folder", "path": base, "dest": d["label"], "msg": msg}
+        st = self._state(target, d["id"])
+        name = target["p"].split("/")[-1]
+        if st not in OPENABLE_STATES:
+            raise ValueError("「%s」は「%s」へまだコピーが終わっていません（%s）。終わってから開いてください"
+                             % (name, d["label"], self.LABELS.get(st, "コピー待ち")))
+        path = os.path.join(base, *target["p"].split("/"))
+        if not os.path.isfile(W.long_path(path)):
+            raise ValueError("「%s」の中に「%s」が見つかりません" % (d["label"], name))
+        show = how == "show" and os.path.splitext(name)[1].lower() in SHOW_EXT
+        OPEN_FN(path, "show" if show else "file")
+        return {"ok": True, "what": "show" if show else "file", "path": path, "dest": d["label"], "name": name, "msg": msg}
+
+
 class OpHandler(W.Handler):
     server_version = "SWNasOperator/" + VERSION
 
@@ -1182,6 +1328,10 @@ class OpHandler(W.Handler):
             return self.send_page()
         if u.path == "/api/ping":
             return self.send_json({"app": APP_NAME, "version": VERSION})
+        if u.path == "/api/op/open/settings":
+            if not self.is_local():
+                return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
+            return self.send_json(self.server.opener.get())
         if u.path.startswith("/api/op/net"):
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
@@ -1194,7 +1344,7 @@ class OpHandler(W.Handler):
 
     def do_POST(self):
         u = urlparse(self.path)
-        if not u.path.startswith("/api/op/net/"):
+        if not u.path.startswith("/api/op/"):
             return super().do_POST()
         if not self.is_local() or (self.headers.get("Host") or "").lower() not in self.server.allowed_hosts:
             return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
@@ -1211,6 +1361,11 @@ class OpHandler(W.Handler):
             return self.deny(400, "bad json")
         net = self.server.net
         try:
+            if u.path == "/api/op/open":
+                return self.send_json(self.server.opener.open(str(body.get("root") or ""), str(body.get("group") or ""),
+                                                              str(body.get("rel") or ""), str(body.get("how") or "")))
+            if u.path == "/api/op/open/settings":
+                return self.send_json(self.server.opener.set(body))
             if u.path == "/api/op/net/check":
                 d = body.get("dests")
                 return self.send_json(net.check(d if isinstance(d, list) else None))
@@ -1221,8 +1376,8 @@ class OpHandler(W.Handler):
             if u.path == "/api/op/net/undo":
                 return self.send_json({"job": net.start("undo", body)})
             return self.deny(404, "not found")
-        except ValueError as e:
-            return self.deny(400, str(e))
+        except (ValueError, KeyError) as e:
+            return self.deny(400, str(e).strip("'\""))
         except Exception as e:
             return self.deny(500, "%s: %s" % (type(e).__name__, e))
 
@@ -1284,6 +1439,7 @@ def main():
     srv.allowed_hosts = {"127.0.0.1:%d" % a.port, "localhost:%d" % a.port, "[::1]:%d" % a.port}
     srv.page = build_page()
     srv.net = NetTools(mgr, data_dir)
+    srv.opener = Opener(mgr, data_dir)
     mgr.start()
 
     op = cfg["op"]
@@ -2020,6 +2176,7 @@ OP_CSS = r'''
 .nsjob{margin-top:14px;border-top:1px solid var(--border);padding-top:12px}
 .netdlg h3 button.sm{height:26px;padding:0 10px;font-size:12px;margin-left:8px;vertical-align:middle}
 .netdlg .dim{color:var(--dim)}
+table.files button.oo{height:24px;padding:0 8px;font-size:12px}
 #nsForm .no{display:none}#nsForm.noshare .so{display:none}#nsForm.noshare span.no{display:inline}
 #nsForm.noshare ul.no{display:block}
 #bNet.has{position:relative}
@@ -2168,6 +2325,60 @@ function netPoll(){clearTimeout(NET.timer);NET.timer=setTimeout(async()=>{
   try{const j=await api("/api/op/net/job");NET.job=j.job}catch(e){}
   if(NET.job&&NET.job.state==="running"){netRender();netPoll();return}
   await netLoad();if(NET.job&&NET.job.state==="done")setTimeout(netCheck,800)},1000)}
+/* ===================== 演者のスライドを開く（このPCのコピーから。NASのファイルは開かない）===================== */
+const OPEN={settings:{enabled:true,dest:"",dbl:"file"},dest:null};
+function openLoad(){return api("/api/op/open/settings").then(j=>{OPEN.settings=j.settings;OPEN.dest=j.dest}).catch(()=>{})}
+openLoad();
+async function opOpen(root,group,rel,how){
+  if(!S||!S.local){toast("開くのは、このアプリを動かしているPCでのみできます",4000);return}
+  try{const j=await api("/api/op/open",{root,group,rel:rel||"",how});
+    toast((j.what==="folder"?"フォルダを開いています（"+j.dest+"）":j.what==="show"?"スライドショーで開いています: "+j.name+"（"+j.dest+"）":"開いています: "+j.name+"（"+j.dest+"）")+(j.msg?"\n"+j.msg:""),j.msg?7000:3000)}
+  catch(e){toast(e.message,8000)}}
+/* 演者をダブルクリック → 設定に合わせて、発表ファイル（またはフォルダ）をこのPCのコピーから開く */
+openFolderOS=function(root,group){
+  if(!OPEN.settings.enabled){toast("ダブルクリックで開くには、［設定］→「演者のスライドを開く」をオンにしてください",7000);return}
+  opOpen(root,group,"",OPEN.settings.dbl==="folder"?"folder":OPEN.settings.dbl)};
+/* 設定画面に「演者のスライドを開く」 */
+const _opRC3=renderCfg;renderCfg=function(){_opRC3();
+  if($("#opOpenSet"))return;const dlg=$("#modal .dlg");if(!dlg)return;
+  const h3=[...dlg.querySelectorAll("h3")].find(x=>x.textContent.trim()==="検出");if(!h3)return;
+  const st=OPEN.settings,ds=((CFG&&CFG.op&&CFG.op.dests)||[]).filter(d=>d.id&&String(d.path||"").trim());
+  const d=document.createElement("div");d.id="opOpenSet";
+  d.innerHTML=`<h3>演者のスライドを開く</h3>
+   <p style="margin:0"><label class="lbl"><input type="checkbox" id="ooOn" ${st.enabled?"checked":""}>演者をダブルクリック・フォルダ画面の［開く］で、発表ファイルを開けるようにする</label></p>
+   <div class="grid2" style="margin-top:10px">
+    <span>開くコピー</span><span><select id="ooDest"><option value="">自動（このPCのフォルダのコピー先）</option>${ds.map(x=>`<option value="${esc(x.id)}" ${x.id===st.dest?"selected":""}>${esc(x.label)}（${esc(x.path)}）</option>`).join("")}</select></span>
+    <span>ダブルクリックしたとき</span><span class="checks" style="flex-direction:column;gap:6px;align-items:flex-start">
+     <label><input type="radio" name="ooDbl" value="file" ${st.dbl==="file"?"checked":""}>発表ファイルを開く（PowerPoint など。2つ以上あるときはフォルダを開く）</label>
+     <label><input type="radio" name="ooDbl" value="show" ${st.dbl==="show"?"checked":""}>発表ファイルをスライドショーで開く（PowerPoint のとき）</label>
+     <label><input type="radio" name="ooDbl" value="folder" ${st.dbl==="folder"?"checked":""}>演者フォルダを開く（Explorer）</label></span>
+   </div>
+   <p class="hint">開くのは、<b>このPCのコピー先にコピーが終わったファイル</b>です。NAS上のファイルは開きません（会場側の作業や、受付での差し替えに影響を出さないため）。コピー中・コピー待ちのときは開かずに知らせます。<br>コピー先を追加・変更したときは、［保存］してからもう一度開くと「開くコピー」に出ます。</p>`;
+  dlg.insertBefore(d,h3)};
+const _opSC=saveCfg;saveCfg=async function(){
+  if($("#ooOn")){try{const j=await api("/api/op/open/settings",{enabled:$("#ooOn").checked,dest:$("#ooDest").value,
+      dbl:(document.querySelector("input[name=ooDbl]:checked")||{}).value||"file"});OPEN.settings=j.settings;OPEN.dest=j.dest}
+    catch(e){const c=$("#cerr");if(c)c.textContent=e.message;else toast(e.message,5000);return}}
+  const r=await _opSC();openLoad().then(()=>{if(F)renderFolder()});return r};
+/* フォルダ画面：［このPCのコピーを開く］と、ファイルごとの［開く］［スライドショー］ */
+const _opRF=renderFolder;renderFolder=function(){_opRF();
+  const fe=foldEl();if(!fe||!F||!F.group||!OPEN.settings.enabled||!F.op)return;
+  const dest=OPEN.dest,did=dest&&dest.id;if(!did)return;
+  const acts=fe.querySelector(".fh .acts");
+  if(acts&&!acts.querySelector("[data-oo]")){const b=document.createElement("button");b.dataset.oo="folder";b.className="pri";
+    b.innerHTML=IC.folder+"フォルダを開く（"+esc(dest.label)+"）";b.title="この演者のフォルダを、このPCのコピー（"+dest.label+"）から Explorer で開きます";
+    b.onclick=()=>opOpen(F.root,F.group,"","folder");acts.insertBefore(b,acts.firstChild)}
+  const tb=fe.querySelector("table.files");if(!tb||tb.dataset.oo)return;tb.dataset.oo="1";
+  const hr=tb.querySelector("thead tr");if(hr){const th=document.createElement("th");th.textContent="開く（"+dest.label+"）";hr.appendChild(th)}
+  const rows=F.items.map(i=>Object.assign({k:sortKey(i.p,i.d)},i)).sort((a,b)=>cmpKeys(a.k,b.k));
+  const trs=[...tb.querySelectorAll("tbody tr")];if(trs.length!==rows.length)return;
+  rows.forEach((it,ix)=>{const td=document.createElement("td");td.style.whiteSpace="nowrap";
+    if(!it.d&&!it.mk){const st=it.cp&&it.cp[did]?it.cp[did][0]:"";const ok=st==="ok"||st==="edited";
+      const ext=(it.p.match(/\.[^.\/]+$/)||[""])[0].toLowerCase();const show=[".pptx",".ppsx",".pptm",".ppsm",".ppt",".pps"].includes(ext);
+      const why=ok?"":"（"+((CPL[st]||["コピー待ち"])[0])+"。コピーが終わると開けます）";
+      td.innerHTML=`<button class="ghost oo" data-oo="file" ${ok?"":"disabled"} title="このPCのコピーを開く${esc(why)}">開く</button>${show?` <button class="ghost oo" data-oo="show" ${ok?"":"disabled"} title="スライドショーで開く${esc(why)}">スライドショー</button>`:""}`;
+      td.querySelectorAll("button").forEach(b=>b.onclick=e=>{e.stopPropagation();opOpen(F.root,F.group,it.p,b.dataset.oo)})}
+    trs[ix].appendChild(td)})};
 '''
 
 if __name__ == "__main__":
