@@ -50,7 +50,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
 APP_NAME = "SW NAS WATCH"
-VERSION = "1.13.0"
+VERSION = "1.13.1"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -114,7 +114,7 @@ DEFAULT_CFG = {
     "max_depth": 12,
     "max_entries": 200000,
     # 会場オペレーターモード：自分の会場だけを監視し、受信が完了した演者フォルダをコピー先へコピーする
-    "op": {"enabled": False, "root": "", "venue": "", "dests": [], "max_mbps": 0},
+    "op": {"enabled": False, "root": "", "venue": "", "dests": [], "max_mbps": 0, "days": [], "day": "", "day_dir": True, "dsub": ""},
 }
 
 CATS = [
@@ -216,11 +216,12 @@ class ScanTooLarge(Exception):
 def scan_tree(root, ignore_re, max_depth, max_entries, only=None):
     """読み取り専用スキャン。os.scandir と stat だけを使う（ファイルは開かない）。
     戻り値: (entries, warnings, failed_dirs)   entries: rel -> DIR | (size, mtime_ns)
-    only を指定すると、最上位はその名前のフォルダだけを見る（会場オペレーターモード）。
+    only を指定すると、そのフォルダ（「DAY1/第1会場」のような相対パスも可）とその途中のフォルダだけを見る（会場オペレーターモード）。
     ルート自体が読めない場合は OSError をそのまま送出する。"""
     out = {}
     warns = []
     failed = []
+    only_segs = only.split("/") if only else None
     stack = [("", root, 0)]
     while stack:
         rel, apath, lvl = stack.pop()
@@ -236,8 +237,10 @@ def scan_tree(root, ignore_re, max_depth, max_entries, only=None):
             with it:
                 for de in it:
                     name = de.name
-                    if only is not None and not rel and name != only:
-                        continue
+                    if only_segs is not None:
+                        lv = rel.count("/") + 1 if rel else 0
+                        if lv < len(only_segs) and name != only_segs[lv]:
+                            continue
                     if ignore_re is not None and ignore_re.match(name.lower()):
                         continue
                     r = name if not rel else rel + "/" + name
@@ -374,8 +377,11 @@ def migrate_marks(raw):
     return out
 
 
+COI_MATCH_REV = "2"   # 照合のしかたを変えたら上げる（解析結果を作り直す）
+
+
 def coi_signature(words):
-    return hashlib.sha1("\n".join(words).encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha1(("r" + COI_MATCH_REV + "\n" + "\n".join(words)).encode("utf-8")).hexdigest()[:12]
 
 
 def compile_coi(words):
@@ -389,16 +395,35 @@ def compile_coi(words):
                 # COI などの短い略語は、字の間の空白・点・ハイフンも許す（「ＣＯ　Ｉ」「C.O.I」のように打たれていることがある）
                 pat = r"[\s.\-・]*".join(re.escape(c) for c in w)
             else:
-                pat = r"\s+".join(re.escape(x) for x in w.split())
+                # 「Conflicts of Interest」「Conflict-of-Interest」「Conflict of<改行>Interest」も拾う（複数形・ハイフン・改行）
+                ws = re.split(r"[\s\-]+", w)
+                sep = r"[\s\-\u2010-\u2015_・]*" if len(ws) > 1 else ""
+                pat = sep.join(re.escape(x) + ("s?" if len(ws) > 1 and x[-1:].isalpha() else "") for x in ws)
             if w[0].isalnum():
                 pat = r"(?<![A-Za-z])" + pat
-            if len(w) <= 4 and w[-1].isalnum():   # COI など短い略語は語の一部に一致させない
-                pat += r"(?![A-Za-z])"
+            if len(w) <= 4 and w[-1].isalnum():   # COI など短い略語は語の一部に一致させない（「COIs」は可）
+                pat += r"s?(?![A-Za-z])"
             asc.append(pat)
         else:
             ja.append(re.escape(re.sub(r"\s+", "", w)))
     return (re.compile("|".join(asc), re.I) if asc else None,
             re.compile("|".join(ja), re.I) if ja else None)
+
+
+def slide_texts(root):
+    """スライドの文字：段落ごと（改行 a:br は空白）＋図形・表のセルごとに段落をつないだもの
+    （「Conflict of」「Interest」や「利益」「相反」が別の行・段落に分かれていても見つけるため）"""
+    br = "{%s}br" % NS_A
+    out = []
+    for body in list(root.iter("{%s}txBody" % NS_P)) + list(root.iter("{%s}txBody" % NS_A)):
+        paras = []
+        for p in body.iter(T_A_P):
+            paras.append("".join((" " if el.tag == br else (el.text or "")) for el in p.iter() if el.tag in (T_A_T, br)))
+        paras = [x for x in paras if x.strip()]
+        out += paras
+        if len(paras) > 1:
+            out.append(" ".join(paras))
+    return out
 
 
 def _coi_find(coi, texts):
@@ -859,7 +884,7 @@ def _parse_pptx(z, path, coi, f=None):
                     pass
             if tr.get("advClick") in ("0", "false"):
                 noclick.append(n)
-        texts = ["".join(t.text or "" for t in p.iter(T_A_T)) for p in root.iter(T_A_P)]
+        texts = slide_texts(root)
         sdir = posixpath.dirname(part)
         srels = rels_of(part)
         internal = {rid for rid, _t, _g, mode in srels if mode.lower() != "external"}
@@ -908,7 +933,8 @@ def _parse_pptx(z, path, coi, f=None):
             elif t == "diagramData":   # SmartArt の文字
                 dp = _resolve(sdir, tgt)
                 if dp in names:
-                    texts += ["".join(x.text or "" for x in p.iter(T_A_T)) for p in ET.fromstring(rd(dp)).iter(T_A_P)]
+                    sa = ["".join(x.text or "" for x in p.iter(T_A_T)) for p in ET.fromstring(rd(dp)).iter(T_A_P)]
+                    texts += sa + [" ".join(x for x in sa if x.strip())]
         hit = _coi_find(coi, texts)
         if hit:
             coi_hits.append({"s": n, "kw": hit[0], "text": hit[1]})
@@ -1220,15 +1246,37 @@ def validate_cfg(raw, data_dir, old=None):
 def validate_op(op, roots, data_dir):
     """会場オペレーターモードの設定。コピー先はNAS（監視フォルダ）の外だけ。"""
     op = op if isinstance(op, dict) else {}
-    out = {"enabled": bool(op.get("enabled", False)), "root": "", "venue": "", "dests": [], "max_mbps": 0}
+    out = {"enabled": bool(op.get("enabled", False)), "root": "", "venue": "", "dests": [], "max_mbps": 0,
+           "days": [], "day": "", "day_dir": bool(op.get("day_dir", True)), "dsub": ""}
     rid = str(op.get("root") or "")
     if any(r["id"] == rid for r in roots):
         out["root"] = rid
     elif len(roots) == 1:
         out["root"] = roots[0]["id"]          # 監視フォルダが1つだけなら、それを使う（保存前の新しいフォルダでも）
-    venue = str(op.get("venue") or "").strip()
-    if venue in (".", "..") or any(c in venue for c in "/\\:") or len(venue) > 255:
-        raise ValueError("会場フォルダ名が不正です: %s" % venue)
+    venue = check_venue(op.get("venue"))
+    # 日ごとに分かれている学会（学会 → DAY1 → 会場 …）：日ごとに「この日はこのフォルダ」を指定し、いまの日を選ぶ
+    raw_days = op.get("days") or []
+    if not isinstance(raw_days, list):
+        raise ValueError("日ごとの設定の形式が不正です")
+    names = set()
+    for x in raw_days[:MAX_DAYS]:
+        if not isinstance(x, dict):
+            continue
+        lab = str(x.get("label") or "").strip()[:40]
+        v = check_venue(x.get("venue"))
+        if not lab and not v:
+            continue
+        lab = lab or v.split("/")[0]
+        if lab in names:
+            raise ValueError("日の名前が重なっています: %s" % lab)
+        names.add(lab)
+        out["days"].append({"label": lab, "venue": v})
+    if out["days"]:
+        cur = next((x for x in out["days"] if x["label"] == str(op.get("day") or "")), out["days"][0])
+        out["day"] = cur["label"]
+        venue = cur["venue"]
+        if out["day_dir"]:
+            out["dsub"] = safe_dirname(cur["label"])
     out["venue"] = venue
     try:
         out["max_mbps"] = max(0, min(1000, int(float(op.get("max_mbps") or 0))))
@@ -1268,6 +1316,37 @@ def validate_op(op, roots, data_dir):
         if not any(d["enabled"] for d in out["dests"]):
             raise ValueError("会場オペレーターモード: コピー先を1つ以上設定してください")
     return out
+
+
+MAX_DAYS = 10
+
+
+def check_venue(v):
+    """会場フォルダ（監視フォルダからの相対。日ごとに分かれているときは「DAY1/第1会場」のように2段まで）"""
+    v = str(v or "").strip().replace("\\", "/").strip("/")
+    if not v:
+        return ""
+    segs = v.split("/")
+    if len(v) > 400 or len(segs) > 3 or any(not x.strip() or x in (".", "..") or ":" in x for x in segs):
+        raise ValueError("会場フォルダ名が不正です: %s" % v)
+    return "/".join(segs)
+
+
+def safe_dirname(name):
+    """コピー先に作る日のフォルダ名（Windowsで使えない文字は「_」に）"""
+    t = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name).strip().rstrip(".")
+    return t[:60] or "DAY"
+
+
+def op_sub(op, rel):
+    """NAS上の rel（監視フォルダからの相対）→ コピー先での相対パス（会場フォルダまでを除き、日のフォルダを前に付ける）"""
+    prefix = (op["venue"] + "/") if op["venue"] else ""
+    if prefix and not rel.startswith(prefix):
+        sub = ""
+    else:
+        sub = rel[len(prefix):]
+    ds = op.get("dsub") or ""
+    return (ds + "/" + sub) if ds and sub else (ds or sub)
 
 
 def unc_host(p):
@@ -2401,9 +2480,12 @@ class Copier(threading.Thread):
         self.last_save = time.time()
 
     # ---- helpers
-    @staticmethod
-    def _dpath(root, prefix, rel):
-        return os.path.join(root, *rel[len(prefix):].split("/"))
+    def _dpath(self, root, prefix, rel):
+        sub = rel[len(prefix):]
+        ds = getattr(self, "dsub", "")
+        if ds:
+            sub = ds + "/" + sub if sub else ds
+        return os.path.join(root, *sub.split("/"))
 
     def _dest_is_nas(self, dpath, roots):
         key = (dpath, tuple(roots))
@@ -2519,6 +2601,7 @@ class Copier(threading.Thread):
             return
         self.depth = w.depth
         prefix = (op["venue"] + "/") if op["venue"] else ""
+        self.dsub = op.get("dsub") or ""
         with w.lock:
             com = dict(w.committed)
             pend = list(w.pending.items())
@@ -2798,7 +2881,8 @@ class Copier(threading.Thread):
         backup = None
         if os.path.exists(long_path(dp)):
             # 置き換える直前まで元のファイルはそのまま。旧版は「_差し替え前」に複製してから差し替える
-            backup = os.path.join(d["path"], OP_OLD_DIR, time.strftime("%Y%m%d-%H%M%S"), *rel[len(prefix):].split("/"))
+            backup = os.path.join(d["path"], OP_OLD_DIR, time.strftime("%Y%m%d-%H%M%S"),
+                                  *os.path.relpath(dp, d["path"]).replace("\\", "/").split("/"))
             if os.path.exists(long_path(backup)):
                 base_, ext_ = os.path.splitext(backup)
                 backup = "%s_%s%s" % (base_, secrets.token_hex(2), ext_)
@@ -2889,6 +2973,7 @@ class Copier(threading.Thread):
         a0 = self.active
         act = dict(a0) if a0 else None
         return {"enabled": True, "root": op["root"], "venue": op["venue"], "dests": out,
+                "day": op.get("day", ""), "days": [x["label"] for x in op.get("days") or []],
                 "queue": self.queue_n, "active": act, "max_mbps": op["max_mbps"]}
 
     def group_states(self, group):
@@ -2933,6 +3018,39 @@ class NullCopier:
 
     def file_states(self, rels):
         return {}
+
+
+MEMO_MAX = 32 * 1024     # メモ（.txt）として表示する大きさの上限（これより後ろは省略）
+MEMO_FILES = 5
+
+
+def decode_text(b):
+    """テキストファイルの文字コードを推定して読む（UTF-8 / BOM付き / UTF-16 / Shift_JIS（Windowsのメモ帳の古い既定））"""
+    if b.startswith(b"\xef\xbb\xbf"):
+        return b[3:].decode("utf-8", "replace")
+    if b.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return b.decode("utf-16", "replace")
+    for enc in ("utf-8", "cp932"):
+        try:
+            return b.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return b.decode("utf-8", "replace")
+
+
+def read_memo(path, size):
+    """演者フォルダの .txt をメモとして読む（NASは読むだけ。他の人の書き込み・削除を妨げない開き方）"""
+    with open_ro(long_path(path)) as f:
+        b = f.read(MEMO_MAX + 4)
+    trunc = size > MEMO_MAX or len(b) > MEMO_MAX
+    if trunc:
+        b = b[:MEMO_MAX]
+        if b[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            b = b[:len(b) // 2 * 2]
+    t = decode_text(b)
+    if trunc and not b.startswith((b"\xff\xfe", b"\xfe\xff")):
+        t = t.rstrip("\ufffd")
+    return t.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", ""), trunc
 
 
 class Manager:
@@ -3328,9 +3446,9 @@ class Manager:
         out = {"root": rid, "group": group, "label": w.label, "path": full, "items": items,
                "events": evs, "exists": group == "" or group in w.current, "now": time.time(),
                "track": self.track.get("%s|%s" % (rid, group))}
+        out["memo"] = self.folder_memos(full, items)
         op = self.cfg["op"]
         if op["enabled"] and op["root"] == rid:
-            prefix = (op["venue"] + "/") if op["venue"] else ""
             pre = group + "/" if group else ""
             fs = self.copier.file_states([pre + it["p"] for it in items if not it["d"]])
             for it in items:
@@ -3341,10 +3459,42 @@ class Manager:
             gs = self.copier.group_states(group)
             dl = []
             for d in op["dests"]:
-                sub = group[len(prefix):] if group.startswith(prefix) else ""
+                sub = op_sub(op, group)
                 dl.append({"id": d["id"], "label": d["label"], "enabled": d["enabled"], "state": gs.get(d["id"]),
                            "path": os.path.join(d["path"], *sub.split("/")) if sub else d["path"]})
             out["op"] = {"dests": dl}
+        return out
+
+    def folder_memos(self, full, items):
+        """演者フォルダの中の .txt（演者・受付からのメモ）。受信中のものは読まない。内容は大きさ・更新日時が変わるまで覚えておく"""
+        cache = self.__dict__.setdefault("_memo_cache", {})
+        out = []
+        txt = [it for it in items if not it["d"] and not it.get("mk") and it["p"].lower().endswith(".txt")]
+        txt.sort(key=lambda it: (it["p"].count("/"), nat_key(it["p"])))
+        for it in txt[:MEMO_FILES]:
+            m = {"p": it["p"], "s": it.get("s", 0), "m": it.get("m", 0)}
+            if it.get("st") == "pending":
+                m["pending"] = True
+                out.append(m)
+                continue
+            path = os.path.join(full, *it["p"].split("/"))
+            key = (path, it.get("s"), it.get("m"))
+            hit = cache.get(path)
+            if hit and hit[0] == key:
+                m.update(hit[1])
+            else:
+                try:
+                    t, tr = read_memo(path, it.get("s") or 0)
+                    r = {"text": t, "trunc": tr}
+                except (OSError, UnsafeOpen) as e:
+                    r = {"error": _err(e) if isinstance(e, OSError) else str(e)}
+                if len(cache) > 300:
+                    cache.clear()
+                cache[path] = (key, r)
+                m.update(r)
+            out.append(m)
+        if len(txt) > MEMO_FILES:
+            out.append({"more": len(txt) - MEMO_FILES})
         return out
 
     def list_venues(self, rid, path=None):
@@ -3635,6 +3785,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self.deny(404, "監視フォルダが見つかりません")
                 w.rebaseline = True
                 self.send_json({"ok": True})
+            elif path == "/api/opday":
+                # 会場オペレーター：日ごとに分かれている学会で「いまの日」を切り替える（その日の会場フォルダを監視・コピー）
+                with M.cfg_lock:
+                    raw = json.loads(json.dumps(M.cfg))
+                op = raw.get("op") or {}
+                day = str(body.get("day") or "")
+                if not op.get("enabled") or day not in [x["label"] for x in op.get("days") or []]:
+                    return self.deny(400, "その日は設定されていません")
+                op["day"] = day
+                cfg = validate_cfg(raw, M.store.dir, M.cfg)
+                M.apply_config(cfg)
+                self.send_json({"ok": True, "day": cfg["op"]["day"], "venue": cfg["op"]["venue"]})
             elif path == "/api/config":
                 cfg = validate_cfg(body, M.store.dir, M.cfg)
                 warns = []
@@ -3995,6 +4157,14 @@ table.files td.tm{color:var(--muted-fg);white-space:nowrap;font-variant-numeric:
 table.files tr.hl-add td.nm{color:var(--emerald)}table.files tr.hl-mod td.nm{color:var(--amber)}table.files tr.hl-ren td.nm{color:var(--violet)}
 table.files tr.pend td.nm{color:var(--amber)}
 .stl{font-size:12px;font-weight:500;white-space:nowrap}
+.memo{border:1px solid rgba(250,204,21,.35);border-radius:12px;background:rgba(250,204,21,.06);margin:0 0 10px;overflow:hidden}
+.memo .mh{display:flex;gap:10px;align-items:baseline;padding:8px 14px;border-bottom:1px solid rgba(250,204,21,.2);font-size:12.5px;color:var(--muted-fg)}
+.memo .mh b{color:#fde68a;font-weight:600;word-break:break-all}
+.memo .mb{margin:0;padding:10px 14px;font:14px/1.6 var(--sans,inherit);white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;color:var(--foreground)}
+.memo .dim,.memo-more{color:var(--dim);font-size:12.5px}
+table.optab{border-collapse:collapse;width:100%}table.optab th{text-align:left;font-weight:500;color:var(--muted-fg);font-size:12.5px;padding:2px 6px}
+table.optab td{padding:3px 6px}table.optab select{width:100%}
+.opday{display:inline-flex;align-items:center;gap:6px}.opday select{font-size:12.5px;padding:2px 6px}
 .gone{margin:20px 24px 0;padding:12px 16px;border:1px solid rgba(248,113,113,.4);border-radius:10px;color:#fecaca;background:rgba(239,68,68,.07);font-size:13.5px}
 /* log */
 .ev{margin:2px 8px;padding:10px 12px;border-radius:10px;cursor:pointer;transition:background .12s}
@@ -4403,7 +4573,7 @@ let VENUE=ls.get("venue",""),FOLLOW=ls.get("follow",true),lastInteract=0;
 function rootById(id){return S&&S.roots.find(r=>r.id===id)}
 function effVenue(){return OPON()?S.op.root+"|"+(S.op.venue||""):VENUE}
 function inVenue(root,group){const V=effVenue();if(!V)return true;const i=V.indexOf("|");if(root!==V.slice(0,i))return false;if(group==null||group===""||!V.slice(i+1))return true;
-  if(OPON()&&S.op.venue&&root===S.op.root)return group.split("/")[0]===S.op.venue;   // 会場オペレーターモードはNASの最上位フォルダ単位
+  if(OPON()&&S.op.venue&&root===S.op.root)return (group+"/").startsWith(S.op.venue+"/");   // 会場オペレーターモードはNASの最上位フォルダ単位
   const r=rootById(root);return r?fuOf(r,group)===V.slice(i+1):group.split("/")[0]===V.slice(i+1)}
 
 async function loadState(){
@@ -4527,13 +4697,18 @@ function renderRoots(){
 function renderOpBar(){
   const el=$("#opbar");if(!OPON()){el.style.display="none";el.innerHTML="";return}
   const o=S.op;let h=`<span class="opt" title="自分の会場だけを監視し、受信が完了した演者フォルダをコピー先へコピーします（NASには書き込みません）">${IC.hd}会場オペレーター <b>${esc(nfc(o.venue||"監視フォルダ全体"))}</b></span>`;
+  if((o.days||[]).length)h+=`<span class="opday" title="日ごとに分かれている学会：いまの日を選ぶと、その日の会場フォルダを監視・コピーします">いまの日 <select id="opDaySel" ${S.local?"":"disabled"}>${o.days.map(d=>`<option ${d===o.day?"selected":""}>${esc(d)}</option>`).join("")}</select></span>`;
   for(const d of opDests()){const c=d.count||{};const okn=(c.ok||0)+(c.edited||0);const bad=(c.err||0)+(c.off||0);const busy=(c.busy||0)+(c.srcbusy||0);
     const dot=d.online===false||bad?"off":(busy||c.copying||c.todo||c.wait)?"busy":d.online?"on":"";
     const txt=d.online===false?"接続できません":`コピー済み ${okn}/${d.total||0}${busy?" · 差し替え待ち "+busy:""}${bad?" · エラー "+bad:""}`;
     h+=`<span class="od ${d.online===false?"off":""}" title="${esc(d.path)}${d.error?"\n"+esc(d.error):""}"><span class="dot ${dot}"></span><span class="l">${esc(d.label)}</span><span class="m">${txt}</span><span class="p"><bdi>${esc(nfc(d.path))}</bdi></span></span>`}
   if(o.active){const pct=o.active.total?Math.floor(o.active.done*100/o.active.total):0;
     h+=`<span class="act">${IC.spin}コピー中 ${esc(nfc(o.active.rel.split("/").pop()))}<span class="bar"><i style="width:${pct}%"></i></span>${pct}%${o.queue>1?" · 残り "+(o.queue-1):""}</span>`}
+  const ae=document.activeElement;if(ae&&ae.id==="opDaySel")return;   // 選んでいる途中は描き直さない
   el.innerHTML=h;el.style.display="flex";
+  const ds=$("#opDaySel");if(ds)ds.onchange=async()=>{const v=ds.value;
+    try{const j=await api("/api/opday",{day:v});toast("いまの日を「"+v+"」にしました（"+j.venue+" を監視・コピーします）",5000);await loadState()}
+    catch(e){toast(e.message,6000)}};
 }
 function renderBanner(){
   const b=$("#banner");let h="",warn=false;
@@ -5158,6 +5333,10 @@ function renderFolder(){
       ${Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<span class="chip c-${esc(c)}">${esc(c)} ${n}</span>`).join("")}</div>
     <div class="pathline">${esc(nfc(F.path))}</div></div>`;
   if(!F.exists&&F.group!==""){h+=`<div class="gone">このフォルダは現在NAS上に見つかりません（削除・名前変更された可能性）。${F.op?"コピー先のファイルは消していません。":""}</div>`}
+  const memo=F.memo||[];
+  if(memo.length)h+=`<div class="sec"><h3>メモ<small>演者フォルダの中のテキスト（.txt）</small></h3>`+memo.map(m=>m.more?`<div class="memo-more">ほか ${m.more}個の .txt（表示を省略）</div>`:
+    `<div class="memo"><div class="mh"><b>${esc(nfc(m.p))}</b><span>${m.m?dtm(m.m):""}</span></div>${m.pending?`<div class="mb dim">受信中（受け取りが終わると表示します）</div>`:m.error!=null?`<div class="mb dim">読めませんでした：${esc(m.error)}</div>`:
+      `<pre class="mb">${esc(m.text)||'<span class="dim">（空のファイル）</span>'}</pre>${m.trunc?`<div class="mb dim">長いため途中まで表示しています</div>`:""}`}</div>`).join("")+`</div>`;
   const fd=F.op?F.op.dests.filter(d=>d.enabled):[];
   if(fd.length){
     h+=`<div class="sec"><h3>コピー先<small>受信が完了したら自動でコピーします（NASには書き込みません）</small></h3><div class="evlist">`+fd.map(d=>{
@@ -5306,8 +5485,8 @@ function renderCfg(){
   }
   const orr=$("#opRoot");
   if(orr){if(!CFG.op.root||!CFG.roots.some((r,i)=>(r.id||"#"+i)===CFG.op.root))CFG.op.root=orr.value;
-    orr.onchange=()=>{CFG.op.root=orr.value;CFG.op.venue="";loadVenues()};
-    $("#opVenue").onchange=()=>{CFG.op.venue=$("#opVenue").value};loadVenues()}
+    orr.onchange=()=>{CFG.op.root=orr.value;CFG.op.venue="";CFG.op.days=[];OPD.dirs=null;loadVenues();opDaysInit()};
+    $("#opVenue").onchange=()=>{CFG.op.venue=$("#opVenue").value};loadVenues();opDaysInit()}
 }
 function opSectionHtml(c){return `
   <h3>このPCの会場とコピー先</h3>
@@ -5315,7 +5494,14 @@ function opSectionHtml(c){return `
   <div id="opBox">
     ${c.roots.length?`<div class="grid2" style="margin-top:12px">
       <span>監視フォルダ</span><span><select id="opRoot" ${c.roots.length<2?"disabled":""}>${c.roots.map((r,i)=>`<option value="${esc(r.id||"#"+i)}" ${(r.id||"#"+i)===c.op.root?"selected":""}>${esc(r.label||r.path)}</option>`).join("")}</select></span>
-      <span>自分の会場</span><span><select id="opVenue"><option value="${esc(c.op.venue)}">${esc(c.op.venue||"読み込み中…")}</option></select></span>
+      <span>フォルダの分け方</span><span class="checks" style="flex-direction:column;gap:6px;align-items:flex-start">
+        <label><input type="radio" name="opDm" value="0" ${opDayMode(c)?"":"checked"}>学会 → 会場 → …（会場フォルダが直下にある）</label>
+        <label><input type="radio" name="opDm" value="1" ${opDayMode(c)?"checked":""}>学会 → 日（DAY1・DAY2…） → 会場 → …（日ごとに分かれている）</label></span>
+      <span class="opNoDay">自分の会場</span><span class="opNoDay"><select id="opVenue"><option value="${esc(c.op.venue)}">${esc(c.op.venue||"読み込み中…")}</option></select></span>
+      <span class="opDay">日ごとの会場</span><span class="opDay"><div id="opDays"></div>
+        <p class="hint" style="margin:6px 0 0"><button class="ghost" id="bDayAdd">${IC.plus}日を追加</button>　1つの日で会場を選ぶと、ほかの日にも同じ名前の会場があれば自動で入ります。</p>
+        <p class="hint" style="margin:8px 0 0"><label><input type="checkbox" id="opDayDir" ${c.op.day_dir!==false?"checked":""}>コピー先に日のフォルダ（DAY1 など）を作って分ける</label>（日が違う同じ名前のセッションが混ざらないように。おすすめ）</p></span>
+      <span class="opDay">いまの日</span><span class="opDay"><select id="opDay"></select><span class="hint">　メイン画面の上の帯からも切り替えられます</span></span>
       <span>速度の上限</span><span><input type="number" id="opMbps" min="0" max="1000" step="1" value="${c.op.max_mbps||0}"> MB/秒（0 = 制限なし）</span>
     </div>`:`<p class="hint">先に「監視フォルダ」に学会名フォルダを追加してください（追加すると、ここで会場を選べます）。</p>`}
     <p class="hint" style="margin-top:14px">コピー先（最大4か所。メインPC・バックアップPCなど。バックアップPCは共有フォルダのパス \\\\PC名\\共有名\\… で指定）</p>
@@ -5334,6 +5520,49 @@ function opSectionHtml(c){return `
   </div>`}
 const MKROLES=[["recv","受付済にする"],["got","会場取得済にする"],["done","発表終了にする"],["drop","取り下げ（数に入れない）"],["direct","会場直（未受付にしない）"],["warn","注意（黄色のチップ）"],["info","チップで表示するだけ"]];
 function mkRow(m){return `<tr><td><input type="text" class="mkw" value="${esc(m.w||"")}" maxlength="40" spellcheck="false" placeholder="ファイル名に入る文字（例: 動画有）"></td><td style="width:240px"><select class="mkr">${MKROLES.map(([k,l])=>`<option value="${k}" ${m.role===k?"selected":""}>${l}</option>`).join("")}</select></td><td><button class="ghost x" data-mkdel title="この行を削除">${IC.x}</button></td></tr>`}
+/* ---- 日ごとに分かれている学会（学会 → DAY1 → 会場 …）：日ごとに会場フォルダを指定する */
+const OPD={dirs:null,sub:{},root:""};
+function opDayMode(c){return !!(c.op._dm!=null?c.op._dm:(c.op.days||[]).length)}
+function opRootPath(){const rr=CFG.roots.find((r,i)=>(r.id||"#"+i)===CFG.op.root);return rr?rr.path:""}
+function opJoin(a,b){const sep=a.includes("\\")||/^[A-Za-z]:/.test(a)?"\\":"/";return a.replace(/[\\/]+$/,"")+sep+b}
+async function opList(path){return (await api("/api/venues?root=&path="+encodeURIComponent(path))).venues}
+async function opDaysInit(){
+  const box=$("#opDays");if(!box)return;
+  const dm=document.querySelector("input[name=opDm]:checked");const on=dm&&dm.value==="1";
+  document.querySelectorAll(".opDay").forEach(x=>x.style.display=on?"":"none");
+  document.querySelectorAll(".opNoDay").forEach(x=>x.style.display=on?"none":"");
+  document.querySelectorAll("input[name=opDm]").forEach(x=>x.onchange=()=>{CFG.op._dm=x.value==="1";
+    const rr=CFG.roots.find((r,i)=>(r.id||"#"+i)===CFG.op.root);
+    if(CFG.op._dm&&rr&&rr.depth<4){keepForm();CFG.op._dm=true;rr.depth=rr.depth+1;renderCfg();toast("日のフォルダが1段増えるため、監視フォルダの「階層」を "+rr.depth+" にしました",6000);return}
+    opDaysInit()});
+  if(!on)return;
+  const rp=opRootPath();if(!rp){box.innerHTML=`<span class="hint">先に監視フォルダを選んでください</span>`;return}
+  if(OPD.root!==rp){OPD.root=rp;OPD.dirs=null;OPD.sub={}}
+  if(!OPD.dirs){box.innerHTML=`<span class="hint">読み込み中…</span>`;
+    try{OPD.dirs=await opList(rp)}catch(e){box.innerHTML=`<span class="hint">${esc(e.message)}</span>`;return}}
+  if(!(CFG.op.days||[]).length){   // はじめて：日らしいフォルダ（DAY1・1日目・10月23日 など）を並べる
+    const ds=OPD.dirs.filter(n=>dayInfo(n));CFG.op.days=(ds.length?ds:OPD.dirs.slice(0,4)).map(n=>({label:n,venue:n+"/"}))}
+  await Promise.all(CFG.op.days.map(async d=>{const f=d.venue.split("/")[0];if(f&&!OPD.sub[f]){try{OPD.sub[f]=await opList(opJoin(rp,f))}catch(e){OPD.sub[f]={err:e.message}}}}));
+  opDaysRender()}
+function opDaysRender(){
+  const box=$("#opDays");if(!box)return;
+  box.innerHTML=`<table class="optab"><thead><tr><th>日のフォルダ</th><th>その日の自分の会場</th><th></th></tr></thead><tbody>`+CFG.op.days.map((d,i)=>{
+    const f=d.venue.split("/")[0],v=d.venue.split("/").slice(1).join("/");const sub=OPD.sub[f];
+    const fo=(OPD.dirs||[]).slice();if(f&&!fo.includes(f))fo.push(f);
+    const vo=Array.isArray(sub)?sub.slice():[];if(v&&!vo.includes(v))vo.push(v);
+    return `<tr data-i="${i}"><td><select data-k="f"><option value="">（選ぶ）</option>${fo.map(x=>`<option value="${esc(x)}" ${x===f?"selected":""}>${esc(nfc(x))}</option>`).join("")}</select></td>
+      <td><select data-k="v"><option value="">（選ぶ）</option>${vo.map(x=>`<option value="${esc(x)}" ${x===v?"selected":""}>${esc(nfc(x))}${Array.isArray(sub)&&!sub.includes(x)?"（現在見つかりません）":""}</option>`).join("")}${sub&&sub.err?`<option disabled>${esc(sub.err)}</option>`:""}</select></td>
+      <td><button class="ghost danger" data-del>削除</button></td></tr>`}).join("")+`</tbody></table>`;
+  const sel=$("#opDay");if(sel){const cur=CFG.op.day;sel.innerHTML=CFG.op.days.filter(d=>d.label).map(d=>`<option ${d.label===cur?"selected":""}>${esc(d.label)}</option>`).join("");sel.onchange=()=>{CFG.op.day=sel.value}}
+  box.onchange=async e=>{const tr=e.target.closest("tr");if(!tr)return;const d=CFG.op.days[+tr.dataset.i];
+    if(e.target.dataset.k==="f"){const f=e.target.value;const old=d.venue.split("/").slice(1).join("/");d.label=f;d.venue=f+"/";
+      if(f&&!OPD.sub[f]){try{OPD.sub[f]=await opList(opJoin(OPD.root,f))}catch(er){OPD.sub[f]={err:er.message}}}
+      if(old&&Array.isArray(OPD.sub[f])&&OPD.sub[f].includes(old))d.venue=f+"/"+old;opDaysRender()}
+    else{const v=e.target.value;d.venue=d.venue.split("/")[0]+"/"+v;
+      if(v)CFG.op.days.forEach(o=>{const f=o.venue.split("/")[0];if(o!==d&&f&&!o.venue.split("/")[1]&&Array.isArray(OPD.sub[f])&&OPD.sub[f].includes(v))o.venue=f+"/"+v});
+      opDaysRender()}};
+  box.onclick=e=>{const b=e.target.closest("[data-del]");if(!b)return;CFG.op.days.splice(+b.closest("tr").dataset.i,1);opDaysRender()};
+  const ba=$("#bDayAdd");if(ba)ba.onclick=()=>{CFG.op.days.push({label:"",venue:""});opDaysRender()}}
 async function loadVenues(){
   const sel=$("#opVenue");if(!sel||!CFG.op.root)return;
   const cur=CFG.op.venue,root0=CFG.op.root;let vs=[],err="";
@@ -5359,6 +5588,10 @@ function keepForm(){
   if($("#opMbps"))CFG.op.max_mbps=Math.max(0,+$("#opMbps").value||0);
   if($("#opRoot"))CFG.op.root=$("#opRoot").value;
   if($("#opVenue")&&$("#opVenue").options.length)CFG.op.venue=$("#opVenue").value;
+  const dm=document.querySelector("input[name=opDm]:checked");
+  if(dm){if(dm.value==="1"){CFG.op.days=(CFG.op.days||[]).filter(d=>d.label&&d.venue.split("/")[1]).map(d=>({label:d.label,venue:d.venue}));
+      CFG.op.day_dir=$("#opDayDir").checked;if($("#opDay")&&$("#opDay").value)CFG.op.day=$("#opDay").value}
+    else CFG.op.days=[]}
 }
 async function saveCfg(){
   keepForm();const body=Object.assign({},CFG);delete body._data;delete body._np;

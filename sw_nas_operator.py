@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS OPERATOR"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 DEFAULT_PORT = 8797
 
 
@@ -127,6 +127,16 @@ class OpManager(W.Manager):
 
     def apply_config(self, new):
         super().apply_config(force_quiet(new))
+
+    def folder_payload(self, rid, group):
+        out = super().folder_payload(rid, group)
+        if out.get("op") and group:
+            files = [it for it in out["items"] if not it["d"] and not it.get("mk")]
+            top = pres_candidates(files)
+            if len(top) > 1:
+                nw = newest_of(out["path"], top)
+                out["op"]["pres"] = {"n": len(top), "newest": nw["p"] if nw else ""}
+        return out
 
 
 def build_page():
@@ -1157,7 +1167,7 @@ def valid_password(p):
 
 
 # ---------------------------------------------------------------- 演者のスライドを開く（このPCのコピーを開く。NASのファイルは開かない）
-OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file"}
+OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest"}
 PRES_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps", ".key", ".pdf")      # 発表ファイル（この順に優先）
 SHOW_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps")                      # スライドショーで開けるもの
 OPENABLE_STATES = ("ok", "edited")                                                     # コピー済み（コピー先で編集されたものも含む）
@@ -1204,6 +1214,43 @@ def open_native(path, how):
 OPEN_FN = open_native               # テストでは差し替える
 
 
+def pres_kind(p):
+    e = os.path.splitext(p)[1].lower()
+    return 0 if e in SHOW_EXT else 1 if e == ".key" else 2 if e == ".pdf" else None
+
+
+def pres_candidates(files):
+    """開く候補の発表ファイル：PowerPoint があれば PowerPoint（.pptx/.ppt…）だけ、なければ Keynote、なければ PDF"""
+    pres = [it for it in files if pres_kind(it["p"]) is not None]
+    if not pres:
+        return []
+    best = min(pres_kind(it["p"]) for it in pres)
+    return [it for it in pres if pres_kind(it["p"]) == best]
+
+
+def arrival_time(path, fallback=0):
+    """NASにファイルが入った時刻の目安：作成日時（コピーされた時刻）と更新日時の新しいほう。属性を見るだけ"""
+    try:
+        st = os.stat(W.long_path(path))
+    except OSError:
+        return fallback
+    born = getattr(st, "st_birthtime", None)
+    if born is None and W.IS_WIN:
+        born = st.st_ctime
+    return max(born or 0, st.st_mtime)
+
+
+def newest_of(base, items):
+    """いちばん後から入ったもの。差が2秒未満で決められないときは None（フォルダを開く）"""
+    if len(items) < 2:
+        return items[0] if items else None
+    ts = sorted(((arrival_time(os.path.join(base, *it["p"].split("/")), it.get("m", 0)), it) for it in items),
+                key=lambda x: x[0], reverse=True)
+    if ts[0][0] - ts[1][0] < 2:
+        return None
+    return ts[0][1]
+
+
 class Opener:
     """演者のスライド・フォルダを、このPCのコピー先（コピー済みのもの）から開く。
     NAS上のファイルは開かない（会場側・受付の差し替えに影響を出さないため。PowerPointの鍵ファイルもNASに作らない）。"""
@@ -1222,6 +1269,7 @@ class Opener:
         dest = str(d.get("dest") or "")
         out["dest"] = dest if re.fullmatch(r"d[0-9a-f]{8}", dest) else ""
         out["dbl"] = d.get("dbl") if d.get("dbl") in ("file", "show", "folder") else OPEN_DEFAULTS["dbl"]
+        out["multi"] = d.get("multi") if d.get("multi") in ("newest", "folder") else OPEN_DEFAULTS["multi"]
         return out
 
     def dest(self):
@@ -1262,7 +1310,7 @@ class Opener:
         group = str(group or "")
         if not group or (prefix and not group.startswith(prefix)):
             raise ValueError("この会場の演者フォルダではありません")
-        sub = group[len(prefix):]
+        sub = W.op_sub(op, group)
         base = os.path.join(d["path"], *sub.split("/"))
         fp = self.mgr.folder_payload(root, group)
         files = [it for it in fp["items"] if not it.get("d") and not it.get("mk")]
@@ -1273,13 +1321,14 @@ class Opener:
             if not target:
                 raise ValueError("ファイルが見つかりません（NAS側で名前が変わった・消えた可能性）")
         elif how != "folder":
-            pres = [it for it in files if os.path.splitext(it["p"])[1].lower() in PRES_EXT]
-            if pres:
-                rank = lambda it: (PRES_EXT.index(os.path.splitext(it["p"])[1].lower()), it["p"].count("/"))   # noqa: E731
-                best = min(rank(it)[0] for it in pres)
-                top = [it for it in pres if rank(it)[0] == best]
-                if len(top) == 1:
-                    target = top[0]
+            top = pres_candidates(files)
+            if len(top) == 1:
+                target = top[0]
+            elif top:
+                nw = newest_of(fp["path"], top) if self.settings["multi"] == "newest" else None
+                if nw:
+                    target = nw
+                    msg = "発表ファイルが%d個あるため、後から入った「%s」を開きました" % (len(top), nw["p"].split("/")[-1])
                 else:
                     msg = "発表ファイルが%d個あるため、フォルダを開きました（フォルダ画面の［開く］から選べます）" % len(top)
             else:
@@ -2326,7 +2375,7 @@ function netPoll(){clearTimeout(NET.timer);NET.timer=setTimeout(async()=>{
   if(NET.job&&NET.job.state==="running"){netRender();netPoll();return}
   await netLoad();if(NET.job&&NET.job.state==="done")setTimeout(netCheck,800)},1000)}
 /* ===================== 演者のスライドを開く（このPCのコピーから。NASのファイルは開かない）===================== */
-const OPEN={settings:{enabled:true,dest:"",dbl:"file"},dest:null};
+const OPEN={settings:{enabled:true,dest:"",dbl:"file",multi:"newest"},dest:null};
 function openLoad(){return api("/api/op/open/settings").then(j=>{OPEN.settings=j.settings;OPEN.dest=j.dest}).catch(()=>{})}
 openLoad();
 async function opOpen(root,group,rel,how){
@@ -2349,15 +2398,19 @@ const _opRC3=renderCfg;renderCfg=function(){_opRC3();
    <div class="grid2" style="margin-top:10px">
     <span>開くコピー</span><span><select id="ooDest"><option value="">自動（このPCのフォルダのコピー先）</option>${ds.map(x=>`<option value="${esc(x.id)}" ${x.id===st.dest?"selected":""}>${esc(x.label)}（${esc(x.path)}）</option>`).join("")}</select></span>
     <span>ダブルクリックしたとき</span><span class="checks" style="flex-direction:column;gap:6px;align-items:flex-start">
-     <label><input type="radio" name="ooDbl" value="file" ${st.dbl==="file"?"checked":""}>発表ファイルを開く（PowerPoint など。2つ以上あるときはフォルダを開く）</label>
+     <label><input type="radio" name="ooDbl" value="file" ${st.dbl==="file"?"checked":""}>発表ファイルを開く（PowerPoint など）</label>
      <label><input type="radio" name="ooDbl" value="show" ${st.dbl==="show"?"checked":""}>発表ファイルをスライドショーで開く（PowerPoint のとき）</label>
      <label><input type="radio" name="ooDbl" value="folder" ${st.dbl==="folder"?"checked":""}>演者フォルダを開く（Explorer）</label></span>
+    <span>発表ファイルが2つ以上あるとき</span><span class="checks" style="flex-direction:column;gap:6px;align-items:flex-start">
+     <label><input type="radio" name="ooMulti" value="newest" ${st.multi!=="folder"?"checked":""}>後から入ったほうを開く（差し替え版が後から届いたとき用。どちらか決められないときはフォルダ）</label>
+     <label><input type="radio" name="ooMulti" value="folder" ${st.multi==="folder"?"checked":""}>フォルダを開く（どれを使うか目で選ぶ）</label></span>
    </div>
    <p class="hint">開くのは、<b>このPCのコピー先にコピーが終わったファイル</b>です。NAS上のファイルは開きません（会場側の作業や、受付での差し替えに影響を出さないため）。コピー中・コピー待ちのときは開かずに知らせます。<br>コピー先を追加・変更したときは、［保存］してからもう一度開くと「開くコピー」に出ます。</p>`;
   dlg.insertBefore(d,h3)};
 const _opSC=saveCfg;saveCfg=async function(){
   if($("#ooOn")){try{const j=await api("/api/op/open/settings",{enabled:$("#ooOn").checked,dest:$("#ooDest").value,
-      dbl:(document.querySelector("input[name=ooDbl]:checked")||{}).value||"file"});OPEN.settings=j.settings;OPEN.dest=j.dest}
+      dbl:(document.querySelector("input[name=ooDbl]:checked")||{}).value||"file",
+      multi:(document.querySelector("input[name=ooMulti]:checked")||{}).value||"newest"});OPEN.settings=j.settings;OPEN.dest=j.dest}
     catch(e){const c=$("#cerr");if(c)c.textContent=e.message;else toast(e.message,5000);return}}
   const r=await _opSC();openLoad().then(()=>{if(F)renderFolder()});return r};
 /* フォルダ画面：［このPCのコピーを開く］と、ファイルごとの［開く］［スライドショー］ */
@@ -2377,7 +2430,8 @@ const _opRF=renderFolder;renderFolder=function(){_opRF();
       const ext=(it.p.match(/\.[^.\/]+$/)||[""])[0].toLowerCase();const show=[".pptx",".ppsx",".pptm",".ppsm",".ppt",".pps"].includes(ext);
       const why=ok?"":"（"+((CPL[st]||["コピー待ち"])[0])+"。コピーが終わると開けます）";
       td.innerHTML=`<button class="ghost oo" data-oo="file" ${ok?"":"disabled"} title="このPCのコピーを開く${esc(why)}">開く</button>${show?` <button class="ghost oo" data-oo="show" ${ok?"":"disabled"} title="スライドショーで開く${esc(why)}">スライドショー</button>`:""}`;
-      td.querySelectorAll("button").forEach(b=>b.onclick=e=>{e.stopPropagation();opOpen(F.root,F.group,it.p,b.dataset.oo)})}
+      td.querySelectorAll("button").forEach(b=>b.onclick=e=>{e.stopPropagation();opOpen(F.root,F.group,it.p,b.dataset.oo)});
+      const pr=F.op.pres;if(pr&&pr.newest===it.p){const nm=trs[ix].querySelector("td.nm");if(nm)nm.insertAdjacentHTML("beforeend",` <span class="tag t-info" title="発表ファイルが${pr.n}個あります。これがいちばん後からNASに入ったものです${OPEN.settings.multi!=="folder"?"（ダブルクリックで開くのはこれ）":""}">後から入った</span>`)}}
     trs[ix].appendChild(td)})};
 '''
 
