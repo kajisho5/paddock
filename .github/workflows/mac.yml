@@ -96,3 +96,37 @@ jobs:
       entitlements: mac/entitlements.plist
       readme: mac/README_MAC.txt
     secrets: inherit
+
+  # 署名・公証した .dmg のアプリを、Mac で開けるか（Gatekeeper）・動くかを確かめる
+  verify:
+    needs: release
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*_Mac-notarized"
+          path: dmg
+          merge-multiple: true
+      - name: dmg から取り出す
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for f in dmg/*.dmg; do
+            echo "== $f"
+            spctl -a -t open --context context:primary-signature -vv "$f"
+            xcrun stapler validate "$f"
+            mp=$(hdiutil attach -nobrowse -readonly "$f" | tail -n1 | sed 's/.*\t//')
+            cp -R "$mp"/*.app dist/
+            hdiutil detach "$mp" -quiet
+          done
+          for a in dist/*.app; do spctl -a -vv "$a"; codesign -d --entitlements - "$a" 2>/dev/null | head -20; done
+      - name: 起動の確認
+        run: bash mac/smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-verify
+          path: smoke/
+          retention-days: 7

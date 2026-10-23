@@ -37,6 +37,7 @@ done
 # GATE の Mac での開き方（PowerPoint・Keynote が無いランナーでは、スライドショーは「見つからない」と知らせること）
 cd ..
 PY="$PWD/build/mac-python/bin/python3.13"
+[ -x "$PY" ] || { echo "（Python が無いため、GATE の開き方の確認は省きます）"; exit $fail; }
 "$PY" - <<'PY' || fail=1
 import os, sys, tempfile
 sys.path.insert(0, os.getcwd())
