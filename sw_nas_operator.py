@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.8.3"
+VERSION = "1.8.4"
 DEFAULT_PORT = 8797
 
 
@@ -1272,9 +1272,17 @@ class Stage:
         self.lock = threading.Lock()
         d = mgr.store.read_json(self.NAME, None)
         st = d.get("st") if isinstance(d, dict) else None
-        now = time.time()
-        self.st = {k: v for k, v in (st or {}).items()
-                   if isinstance(k, str) and isinstance(v, dict) and v.get("st") in ("now", "done") and now - float(v.get("ts") or 0) < self.KEEP}
+        self.st = self._prune(st if isinstance(st, dict) else {})
+
+    def _prune(self, st):
+        now = time.time(); out = {}
+        for k, v in st.items():   # 壊れた行・古い行は読み飛ばす（起動できなくならないように）
+            try:
+                if isinstance(k, str) and isinstance(v, dict) and v.get("st") in ("now", "done") and now - float(v.get("ts") or 0) < self.KEEP:
+                    out[k] = {"st": v["st"], "ts": float(v.get("ts") or 0)}
+            except (TypeError, ValueError):
+                continue
+        return out
 
     def get(self):
         with self.lock:
@@ -1288,16 +1296,18 @@ class Stage:
         key = root + "|" + group
         now = time.time()
         with self.lock:
+            n = self._prune(self.st)   # 書けたときだけ入れ替える（保存に失敗したら前のまま）
             if st == "now":   # 発表中は1人だけ。前の人は発表済みにする
-                for k, v in self.st.items():
+                for k, v in list(n.items()):
                     if v["st"] == "now" and k != key:
-                        self.st[k] = {"st": "done", "ts": now}
+                        n[k] = {"st": "done", "ts": now}
             if st:
-                self.st[key] = {"st": st, "ts": now}
+                n[key] = {"st": st, "ts": now}
             else:
-                self.st.pop(key, None)
-            self.mgr.store.write_json(self.NAME, {"v": 1, "st": self.st})
-            return {"st": dict(self.st)}
+                n.pop(key, None)
+            self.mgr.store.write_json(self.NAME, {"v": 1, "st": n})
+            self.st = n
+            return {"st": dict(n)}
 
 
 class Opener:

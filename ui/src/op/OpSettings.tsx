@@ -83,6 +83,12 @@ export function OpSection({ c, up, part }: { c: Config; up: () => void; part: "v
     up();
   };
   const vl = venues && venues.root === rp ? venues : null;
+  // 学会フォルダのすぐ下が DAY1・DAY2…（日のフォルダ）なら、はじめての設定のときは自動で「日ごと」にする
+  useEffect(() => {
+    if (part !== "venue" || !vl || op._dm || op.venue || (op.days || []).length) return;
+    const ds = vl.list.filter((n) => dayInfo(n));
+    if (ds.length && ds.length * 2 >= vl.list.length) { setMode(true); toast("学会フォルダの下に日のフォルダ（" + ds.slice(0, 3).map(nfc).join("・") + (ds.length > 3 ? "…" : "") + "）があるので、「日ごとに分かれている」にしました", 7000); }
+  }, [vl]);
   if (part === "adv") return <>
     <h3>コピーの速度</h3>
     <div className="grid2"><span>速度の上限</span><span><input type="number" id="opMbps" min={0} max={1000} step={1} value={op.max_mbps || 0} onChange={(e) => { op.max_mbps = Math.max(0, +e.target.value || 0); up(); }} /> MB/秒（0 = 制限なし）</span></div>
@@ -136,8 +142,8 @@ export function OpSection({ c, up, part }: { c: Config; up: () => void; part: "v
           })}</tbody></table>}</div>
           <p className="hint" style={{ margin: "6px 0 0" }}><button className="ghost" id="bDayAdd" onClick={() => { op.days = [...days, { label: "", venue: "" }]; up(); }}><Icon n="plus" />日を追加</button>　1つの日で会場を選ぶと、ほかの日にも同じ名前の会場があれば自動で入ります。</p>
           <p className="hint" style={{ margin: "8px 0 0" }}><label><input type="checkbox" id="opDayDir" checked={op.day_dir !== false} onChange={(e) => { op.day_dir = e.target.checked; up(); }} />コピー先に日のフォルダ（DAY1 など）を作って分ける</label>（おすすめ）</p></span>
-        <span>いまの日</span><span><select id="opDay" value={op.day || ""} onChange={(e) => { op.day = e.target.value; up(); }}>{days.filter((d) => d.label).map((d) => <option key={d.label} value={d.label}>{d.label}</option>)}</select><span className="hint">　メイン画面の上の帯からも切り替えられます</span></span>
+        <span>いまの日</span><span><select id="opDay" value={op.day || ""} onChange={(e) => { op.day = e.target.value; up(); }}>{days.filter((d) => d.label).map((d) => <option key={d.label} value={d.label}>{d.label}</option>)}</select><span className="hint">　メイン画面の左上の DAY タブからも切り替えられます</span></span>
       </>}
-    </div> : <p className="hint" style={{ margin: 0 }}>先に ① で学会フォルダを追加してください（追加すると、ここで会場を選べます）。</p>}
+    </div> : <p className="hint" style={{ margin: 0 }}>先に ① で学会フォルダを追加してください（追加すると、ここで会場を選べます）。DAY1・DAY2… のように日ごとに分かれている学会も、追加したあとここで「日ごと」を選べます（日のフォルダがあれば自動で選びます）。</p>}
   </>;
 }

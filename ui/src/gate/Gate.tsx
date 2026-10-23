@@ -22,14 +22,23 @@ import "./gate.css";
 /* ---------------------------------------------------------------- 発表中・発表済み（このPCの記録） */
 type Stage = "now" | "done";
 const STG: { st: Record<string, { st: Stage; ts: number }>; loaded: boolean } = { st: {}, loaded: false };
-async function stageLoad() { try { const j: any = await api("/api/op/stage"); STG.st = j.st || {}; STG.loaded = true; store.emit(); } catch { /* 古いサーバー */ } }
-export async function setStage(root: string, group: string, st: Stage | "") {
-  const prev = STG.st; const k = root + "|" + group; const n = { ...prev };
+/* 保存は1つずつ順番に送る（速く続けて押しても、サーバーで順番が入れ替わらない）。送っている間は読み直しの結果で上書きしない */
+let stQ: Promise<void> = Promise.resolve(); let stPending = 0;
+async function stageLoad() {
+  if (stPending) return;
+  try { const j: any = await api("/api/op/stage"); if (stPending) return; STG.st = j.st || {}; STG.loaded = true; store.emit(); } catch { /* 古いサーバー */ }
+}
+export function setStage(root: string, group: string, st: Stage | "") {
+  const k = root + "|" + group; const n = { ...STG.st };
   if (st === "now") for (const x of Object.keys(n)) if (n[x].st === "now" && x !== k) n[x] = { st: "done", ts: Date.now() / 1000 };
   if (st) n[k] = { st, ts: Date.now() / 1000 }; else delete n[k];
   STG.st = n; store.emit();   // 先に画面を変えて、保存はあとから
-  try { const j: any = await api("/api/op/stage", { root, group, st }); STG.st = j.st || n; store.emit(); }
-  catch (e: any) { STG.st = prev; store.emit(); toast("発表の状態を保存できませんでした：" + e.message, 6000); }
+  stPending++;
+  stQ = stQ.then(async () => {
+    try { const j: any = await api("/api/op/stage", { root, group, st }); if (stPending === 1 && j.st) { STG.st = j.st; store.emit(); } }
+    catch (e: any) { toast("発表の状態を保存できませんでした：" + e.message, 6000); stPending--; await stageLoad(); stPending++; }
+    finally { stPending--; }
+  });
 }
 const stageOf = (root: string, g: string): Stage | "" => STG.st[root + "|" + g]?.st || (rootById(root)?.groups || []).find((x) => x.key === g)?.mk_done && "done" || "";
 
@@ -51,11 +60,13 @@ function build(): Model | null {
     if (!m.has(k)) m.set(k, { key: k, name: p.ses || k.split("/").pop() || "（セッションなし）", day: p.day, t: sesTime(p.ses), list: [] });
     m.get(k)!.list.push(g);
   }
-  const sessions = [...m.values()].sort((a, b) => cmpDay(a.day, b.day) || (a.t && b.t ? a.t.s - b.t.s : 0) || cmpPath(a.name, b.name));
+  // 並び：全部に時刻があれば時刻順、時刻のないセッションが混じるときは名前順（S01・S02… の番号順）
+  const all = [...m.values()]; const timed = all.every((x) => x.t);
+  const sessions = all.sort((a, b) => cmpDay(a.day, b.day) || (timed ? a.t!.s - b.t!.s : 0) || cmpPath(a.name, b.name));
   sessions.forEach((x) => x.list.sort((a, b) => cmpPath(a.key, b.key)));
   // 進行中・次：選んでいる日が「今日」のときだけ（日付の名前でなければ、選んでいる日を今日とみなす）
   const today = dayMode === "op" ? (days.find(isTodayLabel) || day) : todayDay(days, day);
-  const tl = !days.length || day === today ? sesStatus(sessions.filter((x) => x.t).map((x) => ({ key: x.key, t: x.t! }))) : new Map<string, SStat>();
+  const tl = !days.length || day === today ? sesStatus(sessions.filter((x) => x.t).map((x) => ({ key: x.key, t: x.t! })).sort((a, b) => a.t.s - b.t.s)) : new Map<string, SStat>();
   return { r, days, day, dayMode, sessions, tl };
 }
 /* セッション名から時刻（0900-1030 / 9:00〜10:30 など）を除いた表示名。時刻は別に出す */
@@ -96,7 +107,7 @@ function RIcon({ k }: { k: RC | "done" | "live" | "progress" }) {
 const mainDest = () => OPEN.dest?.id || opDests()[0]?.id || "";
 function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: string; pct?: number } {
   const S = store.S!; const a = S.op.active;
-  if (a && a.rel.startsWith(g.key + "/")) { const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; return { k: "run", t: "コピー中 " + pct + "%", pct }; }
+  if (a && a.rel.startsWith(g.key + "/") && (!a.dests || a.dests.includes(mainDest()))) { const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; return { k: "run", t: "コピー中 " + pct + "%", pct }; }
   if (g.pending) {   // NASへ書き込み中：受信済みサイズ・速度・経過時間
     const r = rootById(S.op.root || ""); const v = r ? rateOf(r.id, g) : 0;
     return { k: "run", t: "NASに受信中" + (g.pbytes ? " " + fmtSize(g.pbytes) : "") + (v ? " · " + fmtSize(v) + "/s" : "") + (g.pstart ? " · " + mss(Date.now() / 1000 + store.SKEW - g.pstart) : "") };
@@ -109,6 +120,9 @@ function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: strin
   if (st === "err" || st === "off") return { k: "bad", t: CPL[st][0] };
   return { k: "wait", t: CPL[st]?.[0] || st };
 }
+
+/* このPCのコピーから開けるか：メインのコピー先の状態だけで決める（バックアップへのコピー中・差し替えの受信中でも、前の版は開ける） */
+const canOpen = (g: Group) => { const st = g.cp?.[mainDest()]; return g.files > 0 && (st === "ok" || st === "edited" || st === "busy"); };
 
 /* ほかのコピー先（バックアップPCなど）の状態：小さな点で */
 function OtherDests({ g }: { g: Group }) {
@@ -161,16 +175,18 @@ export function GateApp() {
   useEffect(() => { stageLoad(); const t = window.setInterval(stageLoad, 15000); return () => clearInterval(t); }, []);
   const ses = M ? curSes(M) : null;
   const [menu, setMenu] = useState<{ x: number; y: number; g: string } | null>(null);
+  useEffect(() => { setMenu(null); }, [ses?.key, M?.day]);
   /* キーボード：N＝次の人へ、Enter＝選んでいる人を発表中に、↑↓＝選ぶ、Esc＝メニュー・ログを閉じる */
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (store.modal || (e.target as HTMLElement).closest("input,textarea,select")) return;
-      if (e.key === "Escape") { if (menu) { setMenu(null); e.preventDefault(); } return; }
+      if (e.key === "Escape") { if (menu) { setMenu(null); e.preventDefault(); } else if (store.q) { store.q = ""; store.emit(); e.preventDefault(); } return; }
+      if (e.repeat) return;   // 押しっぱなしで何人も進めない
       if (!M || !ses || e.ctrlKey || e.metaKey || e.altKey) return;
       const sel = store.SEL && store.SEL.root === M.r.id ? ses.list.findIndex((g) => g.key === store.SEL!.group) : -1;
-      if (e.key === "n" || e.key === "N") { e.preventDefault(); nextUp(M.r, ses); }
-      else if (e.key === "Enter" && sel >= 0 && !menu) { e.preventDefault(); setStage(M.r.id, ses.list[sel].key, "now"); }
-      else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (e.key === "n" || e.key === "N") { e.preventDefault(); if (Date.now() - lastN > 400) { lastN = Date.now(); nextUp(M.r, ses); } }
+      else if (e.key === "Enter" && sel >= 0 && !menu && !store.q && !(e.target as HTMLElement).closest("button,a,[role=menu],[role=tab]")) { e.preventDefault(); setStage(M.r.id, ses.list[sel].key, "now"); }
+      else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !store.q && !menu) {
         e.preventDefault(); const n = Math.max(0, Math.min(ses.list.length - 1, sel + (e.key === "ArrowDown" ? 1 : -1)));
         if (ses.list[n]) selectGroup(M.r.id, ses.list[n].key);
       }
@@ -193,6 +209,7 @@ export function GateApp() {
   </div>;
 }
 
+let lastN = 0;
 function nextUp(r: Root, ses: Ses) {
   const L = ses.list.filter((g) => !g.mk_drop);
   const i = L.findIndex((g) => stageOf(r.id, g.key) === "now");
@@ -338,8 +355,9 @@ function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: n
   const curKey = ses.list.find((g) => stageOf(M.r.id, g.key) === "now")?.key || "";
   useLayoutEffect(() => {   // 発表中の帯：行から行へすべって移動する
     const el = curKey ? box.current?.querySelector<HTMLElement>(`.grow[data-g="${CSS.escape(curKey)}"]`) : null;
-    setInd(el ? { y: el.offsetTop, h: el.offsetHeight } : null);
-  }, [curKey, ses.key, ses.list.length]);
+    const v = el ? { y: el.offsetTop, h: el.offsetHeight } : null;
+    setInd((o) => (o && v && o.y === v.y && o.h === v.h) || (!o && !v) ? o : v);
+  });
   const L = ses.list.filter((g) => !g.mk_drop);
   const cnt = { r: L.filter((g) => ["received", "got", "direct"].includes(rcOf(g))).length, p: L.filter((g) => rcOf(g) === "pending").length, e: L.filter((g) => rcOf(g) === "error").length };
   return <div className="glist scroll" id="groups" ref={box}>
@@ -411,7 +429,10 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
   const g = (M.r.groups || []).find((x) => x.key === at.g); const st = stageOf(M.r.id, at.g);
   useLayoutEffect(() => {   // 画面からはみ出さないように
     const el = ref.current; if (!el) return; const w = el.offsetWidth, h = el.offsetHeight;
-    setPos({ x: Math.min(at.x, window.innerWidth - w - 8), y: Math.min(at.y, window.innerHeight - h - 8) });
+    // 画面が広いと .gate を 1.08 倍にしているので、座標を倍率で割って合わせる
+    const z = parseFloat(getComputedStyle(el.closest(".gate") || el).zoom || "1") || 1;
+    const W = window.innerWidth / z, H = window.innerHeight / z;
+    setPos({ x: Math.max(8, Math.min(at.x / z, W - w - 8)), y: Math.max(8, Math.min(at.y / z, H - h - 8)) });
     el.querySelector<HTMLElement>("button")?.focus();
   }, [at.x, at.y]);
   useEffect(() => {
@@ -420,8 +441,9 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
     document.addEventListener("mousedown", c); window.addEventListener("blur", w); window.addEventListener("resize", w);
     return () => { document.removeEventListener("mousedown", c); window.removeEventListener("blur", w); window.removeEventListener("resize", w); };
   }, []);
+  useEffect(() => { if (!g) close(); }, [g]);
   if (!g) return null;
-  const has = g.files > 0; const ok = copyOf(g).k === "ok";
+  const has = g.files > 0; const ok = canOpen(g);
   const it = (label: React.ReactNode, f: () => void, opt: { k?: string; dis?: boolean; ic?: React.ReactNode; id?: string } = {}) =>
     <button className="it" id={opt.id} disabled={opt.dis} onClick={() => { close(); f(); }}>{opt.ic}{label}{opt.k && <kbd>{opt.k}</kbd>}</button>;
   const onKey = (e: React.KeyboardEvent) => {
@@ -488,7 +510,7 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
   const ws = warnsOf(F); const memo = (F.memo || []).filter((m) => !m.more);
   const fl = g.fl || []; const ops = fl.filter((f) => f[1] === "op"); const oth = fl.filter((f) => f[1] !== "op");
   const pres = F.op?.pres; const d = F.op?.dests.find((x) => x.id === mainDest()) || F.op?.dests[0];
-  const cp = copyOf(g); const on = OPEN.settings.enabled; const canShow = on && cp.k === "ok" && g.files > 0;
+  const cp = copyOf(g); const on = OPEN.settings.enabled; const canShow = on && canOpen(g);
   const ana = F.items.filter((i) => i.a);
   const shows = F.items.filter((i) => !i.d && !i.mk && PRESX.test(i.p)).sort((a, b) => cmpPath(a.p, b.p));
   const presFile = pres && pres.newest ? pres.newest : shows.length === 1 ? shows[0].p : "";
