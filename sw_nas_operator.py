@@ -1330,9 +1330,104 @@ def _bring_front(hint, show, before, gen, timeout=12.0):
         pass   # 前に出せなくても、開くことはできている
 
 
+PPT_PS = r"""
+$ErrorActionPreference = 'Stop'
+$e = [Console]::OutputEncoding
+function Out($o) { [Console]::OutputEncoding = [Text.Encoding]::UTF8; [Console]::Out.Write((ConvertTo-Json -InputObject $o -Compress)); [Console]::OutputEncoding = $e }
+try {
+  $req = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:SWNAS_PPTREQ)) | ConvertFrom-Json
+  $path = [IO.Path]::GetFullPath($req.path)
+  $name = [IO.Path]::GetFileName($path)
+  try { $pp = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application') } catch { $pp = New-Object -ComObject PowerPoint.Application }
+  try { $pp.Visible = -1 } catch {}
+  $pres = $null
+  foreach ($p in @($pp.Presentations)) {
+    $full = ''
+    try { $full = [IO.Path]::GetFullPath($p.FullName) } catch { $full = $p.FullName }
+    if ($full -ieq $path) { $pres = $p; break }
+    if ($p.Name -ieq $name) { Out @{ err = 'samename'; other = $p.FullName }; exit 0 }
+  }
+  if ($pres -eq $null) { $pres = $pp.Presentations.Open($path, 0, 0, -1) }
+  if ($req.show) {
+    $w = $null
+    foreach ($sw in @($pp.SlideShowWindows)) { if ($sw.Presentation.FullName -ieq $pres.FullName) { $w = $sw } }
+    if ($w -eq $null) { $w = $pres.SlideShowSettings.Run() }
+    Out @{ ok = 1; hwnd = [int64]$w.HWND }
+  } else {
+    try { $pres.Windows.Item(1).Activate() } catch {}
+    Out @{ ok = 1; hwnd = [int64]$pp.HWND }
+  }
+} catch { Out @{ err = 'com'; msg = $_.Exception.Message } }
+"""
+
+
+def ppt_open_com(path, show):
+    """PowerPoint に直接「このファイルを開いて（スライドショーを始めて）」と頼み、できたウィンドウを返してもらう（Windows）。
+    どのウィンドウが今の演者のものか、名前で探さなくてよくなる。PowerPoint は同じ名前のファイルを2つ同時に開けないので、
+    別の演者の同じ名前のファイルが開いていれば、開かずに知らせる（前の人のスライドは閉じない）。
+    戻り値：hwnd（int）／PowerPoint で頼めないとき None（そのときは従来の開き方にする）"""
+    ps = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    env = dict(os.environ, SWNAS_PPTREQ=base64.b64encode(json.dumps({"path": path, "show": bool(show)}, ensure_ascii=False).encode("utf-8")).decode("ascii"))
+    enc = base64.b64encode(PPT_PS.encode("utf-16-le")).decode("ascii")
+    try:
+        r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
+                           capture_output=True, timeout=40, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    txt = r.stdout.decode("utf-8", "replace").lstrip("\ufeff").strip()
+    try:
+        data = json.loads(txt[txt.index("{"):]) if "{" in txt else {}
+    except ValueError:
+        return None
+    if data.get("err") == "samename":
+        other = str(data.get("other") or "")
+        raise ValueError("PowerPoint で同じ名前のファイル「%s」が開いています（%s）。PowerPoint は同じ名前のファイルを2つ同時に開けないため、"
+                         "前のスライドを閉じてから、もう一度開いてください" % (os.path.basename(path), other or "別の演者のもの"))
+    if data.get("ok") and data.get("hwnd"):
+        return int(data["hwnd"])
+    return None
+
+
+def _front_hwnd(h, timeout=3.0):
+    """決まったウィンドウを手前に出す（Windows）"""
+    try:
+        _ctypes, wt, u, k = _win_api()
+        hw = wt.HWND(h)
+        end = time.time() + timeout
+        while time.time() < end:
+            if u.GetForegroundWindow() == hw.value:
+                return
+            fg = u.GetForegroundWindow()
+            me = k.GetCurrentThreadId()
+            ft = u.GetWindowThreadProcessId(fg, None) if fg else 0
+            att = bool(ft and ft != me and u.AttachThreadInput(me, ft, True))
+            try:
+                u.keybd_event(0x12, 0, 0, 0)
+                u.keybd_event(0x12, 0, 2, 0)
+                if u.IsIconic(hw):
+                    u.ShowWindow(hw, 9)
+                u.BringWindowToTop(hw)
+                u.SetForegroundWindow(hw)
+            finally:
+                if att:
+                    u.AttachThreadInput(me, ft, False)
+            time.sleep(0.3)
+    except Exception:
+        pass
+
+
+PPT_COM = ppt_open_com              # テストでは差し替える
+
+
 def open_native(path, how):
     """ファイル・フォルダを、このPCの既定のアプリで開く（how="show" は PowerPoint のスライドショー）。開いたウィンドウは手前に出す。"""
     if W.IS_WIN:
+        if how in ("show", "file") and os.path.splitext(path)[1].lower() in SHOW_EXT:
+            h = PPT_COM(path, how == "show")      # PowerPoint：直接頼んで、そのウィンドウを前へ（同じ名前のファイルが開いていれば知らせる）
+            if h:
+                _FRONT_GEN[0] += 1
+                threading.Thread(target=_front_hwnd, args=(h,), daemon=True).start()
+                return
         hint = _front_hint(path, how)
         before = _snapshot(hint)
         _FRONT_GEN[0] += 1
