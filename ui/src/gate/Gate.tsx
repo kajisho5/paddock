@@ -116,7 +116,7 @@ function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: strin
     const r = rootById(S.op.root || ""); const v = r ? rateOf(r.id, g) : 0;
     return { k: "run", t: "NASに受信中" + (g.pbytes ? " " + fmtSize(g.pbytes) : "") + (v ? " · " + fmtSize(v) + "/s" : "") + (g.pstart ? " · " + mss(Date.now() / 1000 + store.SKEW - g.pstart) : "") };
   }
-  if (!g.files) return { k: "none", t: isBYO(g) ? "PC持込（データなし）" : "データなし" };
+  if (!hasData(g)) return { k: "none", t: isBYO(g) ? "PC持込（データなし）" : g.files ? "データなし（メモだけ）" : "データなし" };
   const st: CpState | undefined = g.cp?.[mainDest()];
   if (!st) return { k: "wait", t: "確認中" };
   if (st === "ok" || st === "edited") return { k: "ok", t: isBYO(g) ? "DL済（バックアップ）" : "DL済" };
@@ -126,7 +126,9 @@ function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: strin
 }
 
 /* このPCのコピーから開けるか：メインのコピー先の状態だけで決める（バックアップへのコピー中・差し替えの受信中でも、前の版は開ける） */
-const canOpen = (g: Group) => { const st = g.cp?.[mainDest()]; return g.files > 0 && (st === "ok" || st === "edited"); };
+const canOpen = (g: Group) => { const st = g.cp?.[mainDest()]; return hasData(g) && (st === "ok" || st === "edited"); };
+/* 発表に使うデータがあるか（メモの .txt などだけなら「データなし」） */
+const hasData = (g: Group) => g.files > 0 && Object.keys(g.cats || {}).some((c) => c !== "他");
 /* PC持込（本人のPCで発表）：入っているデータは「バックアップ」として扱う */
 const isBYO = (g: Group) => (g.fl || []).some((f) => /持込/.test(nfc(f[0])));
 
@@ -284,8 +286,8 @@ function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
     <span className="sp" />
     {ds.map((d) => {
       if (d.online === false) return <button key={d.id} className="gchip bad btn" title={d.path + (d.error ? "\n" + d.error : "") + "\nクリックで原因を調べます（つながったら自動でコピーします）"} onClick={() => netOpen()}><RIcon k="error" />{d.label}<b>接続できません</b><span className="lnk">原因を調べる</span></button>;
-      const has = L; const ok = L.filter((g) => g.files > 0 && (g.cp?.[d.id] === "ok" || g.cp?.[d.id] === "edited")).length;   // 分母は演者の人数（データのない人も数える）
-      const nod = L.filter((g) => !g.files).length;
+      const has = L; const ok = L.filter((g) => hasData(g) && (g.cp?.[d.id] === "ok" || g.cp?.[d.id] === "edited")).length;   // 分母は演者の人数（データのない人も数える）
+      const nod = L.filter((g) => !hasData(g)).length;
       const c = d.count || {}; const busy = (c.busy || 0) + (c.srcbusy || 0); const bad = c.err || 0;
       return <span key={d.id} className={cx("gchip", has.length && ok === has.length && "full", bad && "bad")}
         title={d.path + `\nこのセッション：DL済 ${ok}/${has.length}人` + (nod ? `（データなし ${nod}人）` : "") + `\n会場全体：コピー済み ${(c.ok || 0) + (c.edited || 0)}/${d.total || 0}` + (busy ? `\n差し替え待ち ${busy}（コピー先で開かれているため、閉じたら差し替えます）` : "") + (bad ? `\nエラー ${bad}` : "")}>
@@ -479,7 +481,7 @@ function FileTable({ F }: { F: Folder }) {
   return <table className="gft"><tbody>{rows.map((i) => {
     const c = i.cp?.[mainDest()]?.[0]; const ok = on && !i.mk && (c === "ok" || c === "edited");
     return <tr key={i.p} className={cx(i.st === "pending" && "pend")}>
-      <td className="fn" title={nfc(i.p)}>{nfc(i.p)}{i.mk && <span className="gt" data-k="info">目印</span>}{i.st && i.st !== "pending" && <span className="gt" data-k="repl">{i.st === "add" ? "追加" : i.st === "mod" ? "更新" : "名前変更"}</span>}{i.st === "pending" && <span className="gt" data-k="warn">受信中</span>}</td>
+      <td className="fn" title={nfc(i.p)}>{nfc(i.p)}{i.mk && <span className="gt" data-k="info">{i.mk === "meta" ? "付帯情報" : "目印"}</span>}{i.st && i.st !== "pending" && <span className="gt" data-k="repl">{i.st === "add" ? "追加" : i.st === "mod" ? "更新" : "名前変更"}</span>}{i.st === "pending" && <span className="gt" data-k="warn">受信中</span>}</td>
       <td className="num">{i.mk ? "" : fmtSize(i.s)}</td><td className="tm">{i.m ? dtm(i.m) : ""}</td>
       <td className="cps">{!i.mk && ds.map((d) => { const x = i.cp?.[d.id]; const y = x ? CPL[x[0]] : null; const k = !y ? "wait" : y[1] === "ok" ? "ok" : y[1] === "run" ? "run" : y[1] === "bad" ? "bad" : "wait";
         return <i key={d.id} className={"pc " + k} title={d.label + "：" + (y ? y[0] : "確認中") + (x && x[1] ? " — " + x[1] : "")} />; })}</td>
@@ -526,12 +528,12 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
       <div className="no">{nm.no}{st === "now" && <span className="pill now">発表中</span>}{st === "done" && <span className="pill">発表済み</span>}</div>
       <h2 id="gdName">{nm.name}</h2><div className="by">{sesLabel({ name: ses, t: sesTime(ses) })}</div>
       <div className="go">
-        <button className="gb pri" id="bShow" disabled={!canShow} onClick={() => opOpen(F.root, F.group, "", "show")} title={!on ? "［設定］→「演者のスライドを開く」がオフです" : !canShow ? (g.files ? "このPCへのコピーが終わると開けます" : "データがありません") : byo ? "PC持込の演者です。本人のPCが使えないときに、入っているデータ（バックアップ）をスライドショーで開きます" : "発表ファイルをスライドショーで開きます（このPCのコピーから）"}><Icon n="play" />{byo && g.files ? "バックアップを開く" : "スライドショー"}</button>
+        <button className="gb pri" id="bShow" disabled={!canShow} onClick={() => opOpen(F.root, F.group, "", "show")} title={!on ? "［設定］→「演者のスライドを開く」がオフです" : !canShow ? (g.files ? "このPCへのコピーが終わると開けます" : "データがありません") : byo ? "PC持込の演者です。本人のPCが使えないときに、入っているデータ（バックアップ）をスライドショーで開きます" : "発表ファイルをスライドショーで開きます（このPCのコピーから）"}><Icon n="play" />{byo && hasData(g) ? "バックアップを開く" : "スライドショー"}</button>
         <button className="gb" id="bOpenF" disabled={!canShow} onClick={() => opOpen(F.root, F.group, "", "file")} title="発表ファイルを開く（PowerPoint など）"><Icon n="file" /></button>
         <button className="gb" id="bFold" disabled={!on || !g.files} onClick={() => opOpen(F.root, F.group, "", "folder")} title="この演者のフォルダを開く（このPCのコピー）"><Icon n="folder" /></button>
       </div>
     </div>
-    {byo && <div className="gbyo"><b>PC持込</b><span>{g.files ? "本人のPCで発表します。入っているデータはバックアップです（本人のPCが使えないときに［バックアップを開く］）。" : "本人のPCで発表します。バックアップのデータは入っていません。"}</span></div>}
+    {byo && <div className="gbyo"><b>PC持込</b><span>{hasData(g) ? "本人のPCで発表します。入っているデータはバックアップです（本人のPCが使えないときに［バックアップを開く］）。" : "本人のPCで発表します。バックアップのデータは入っていません。"}</span></div>}
     {!F.exists && <div className="gwarn" role="alert"><RIcon k="error" /><div><div><b>NAS にこのフォルダが見つかりません</b><span>削除・名前変更された可能性があります。このPCにコピーしたファイルは消していません。</span></div></div></div>}
     {ws.length > 0 && <div className="gwarn" role="alert"><RIcon k="error" /><div>{ws.map((w, i) => <div key={i}><b>{w[0]}</b><span>{w[1]}</span></div>)}</div></div>}
     {memo.length > 0 && <><div className="sec">メモ</div>{memo.map((m, i) => <div key={i} className="gmemo"><small>{nfc(m.p)}</small>

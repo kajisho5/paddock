@@ -20,8 +20,8 @@ export const CPL: Record<string, [string, string]> = {
   ok: ["コピー済み", "ok"], todo: ["コピー待ち", "dim"], copying: ["コピー中", "run"], wait: ["受信完了待ち", "dim"], srcbusy: ["NAS側で使用中", "warn"],
   busy: ["差し替え待ち", "warn"], edited: ["コピー先で変更あり", "warn"], err: ["エラー", "bad"], off: ["接続できません", "bad"],
 };
-export const MKC: Record<string, string> = { recv: "ok", got: "got", done: "done", drop: "drop", direct: "direct", warn: "warn", info: "dim" };
-export const MKR: Record<string, string> = { recv: "受付済", got: "会場取得済", done: "発表終了", drop: "演題取り下げ", direct: "会場直", warn: "注意", info: "表示だけ" };
+export const MKC: Record<string, string> = { recv: "ok", got: "got", done: "done", drop: "drop", direct: "direct", warn: "warn", info: "dim", meta: "dim" };
+export const MKR: Record<string, string> = { recv: "受付済", got: "会場取得済", done: "発表終了", drop: "演題取り下げ", direct: "会場直", warn: "注意", info: "表示だけ", meta: "受付システムの付帯情報（データに数えない）" };
 export const ST: Record<string, [string, string]> = { add: ["追加", "add"], mod: ["更新", "mod"], ren: ["名前変更", "ren"], pending: ["コピー中…", "mod"] };
 
 export function Tag({ t, children, title, className }: { t: string; children: React.ReactNode; title?: string; className?: string }) {
