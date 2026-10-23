@@ -23,6 +23,9 @@
 #define BUF 32768
 
 /* アプリごとの名前（受付アプリなどは -D で上書きしてビルドする。既定は PADDOCK SCOUT） */
+#ifndef APP_CORE
+#define APP_CORE L"PADDOCK_SCOUT_core.exe"
+#endif
 #ifndef APP_TITLE
 #define APP_TITLE L"PADDOCK SCOUT"
 #endif
@@ -134,7 +137,11 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
     slash = wcsrchr(g_dir, L'\\');
     if (slash) *slash = 0;
 
-    _snwprintf(py, BUF, L"%ls\\runtime\\python\\python.exe", g_dir);
+    /* アプリ名のついた Python 本体（タスクマネージャー・通知領域の一覧にアプリ名が出る）。無ければ python.exe */
+    _snwprintf(py, BUF, L"%ls\\runtime\\python\\%ls", g_dir, APP_CORE);
+    py[BUF - 1] = 0;
+    if (!exists_file(py))
+        _snwprintf(py, BUF, L"%ls\\runtime\\python\\python.exe", g_dir);
     _snwprintf(app, BUF, L"%ls\\runtime\\app\\%ls", g_dir, APP_PYC);
     _snwprintf(logp, BUF, L"%ls\\runtime\\last_run.log", g_dir);
     py[BUF - 1] = app[BUF - 1] = logp[BUF - 1] = 0;

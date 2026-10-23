@@ -89,6 +89,7 @@ def build(kind, emb, outdir):
         pyc_w = compile_to(build_protected.transform(open(SRC_W, encoding="utf-8").read()), "sw_nas_watch", work)
         pyc_a = compile_to(transform_app(src, app["blocks"]), app["mod"], work)
         exe = build_launcher.build(os.path.join(work, v["exe"]), version, v)
+        core = build_launcher.build_core(os.path.join(work, build_launcher.core_name(v)), version, v, emb)
         lic = open(os.path.join(HERE, "LICENSE.txt"), encoding="utf-8").read()
         if "PADDOCK SCOUT 利用条件" not in lic:
             raise SystemExit("LICENSE.txt の見出しが想定と違います")
@@ -101,6 +102,7 @@ def build(kind, emb, outdir):
                 zi.external_attr = (stat.S_IFREG | mode) << 16
                 z.writestr(zi, data)
             add(v["exe"], open(exe, "rb").read(), 0o755)
+            add("runtime/python/" + build_launcher.core_name(v), open(core, "rb").read(), 0o755)
             add("runtime/app/" + v["pyc"], open(pyc_a, "rb").read())
             add("runtime/app/sw_nas_watch.pyc", open(pyc_w, "rb").read())
             add("README.md", open(os.path.join(HERE, app["readme"]), "rb").read())

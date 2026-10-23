@@ -52,7 +52,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 APP_NAME = "PADDOCK SCOUT"
-VERSION = "1.16.12"
+VERSION = "1.16.13"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -4191,6 +4191,8 @@ class Tray:
 
     def _icon_path(self):
         c = []
+        if os.path.basename(sys.executable).lower().endswith("_core.exe"):   # アプリ名のついた Python 本体（アイコン入り）
+            c.append(os.path.abspath(sys.executable))
         for k in ("SW_NAS_WATCH_HOME", "SW_NAS_RECEPTION_HOME", "SW_NAS_OPERATOR_HOME"):
             if os.environ.get(k):
                 c.append(os.path.join(os.environ[k], self.exe))

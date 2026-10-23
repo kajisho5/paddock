@@ -52,6 +52,7 @@ def main():
         py_compile.compile(tmp, cfile=pyc, dfile="sw_nas_watch", optimize=2, doraise=True,
                            invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
     exe = build_launcher.build(os.path.join(outdir, "PADDOCK_SCOUT.exe"), version)
+    core = build_launcher.build_core(os.path.join(outdir, build_launcher.core_name(build_launcher.WATCH)), version, None, emb)
     out = os.path.join(outdir, "PADDOCK_SCOUT_v%s_Windows.zip" % version)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         def add(name, data, mode=0o644):
@@ -60,6 +61,7 @@ def main():
             zi.external_attr = (stat.S_IFREG | mode) << 16
             z.writestr(zi, data)
         add("PADDOCK_SCOUT.exe", open(exe, "rb").read(), 0o755)
+        add("runtime/python/" + build_launcher.core_name(build_launcher.WATCH), open(core, "rb").read(), 0o755)
         add("runtime/app/sw_nas_watch.pyc", open(pyc, "rb").read())
         add("README.md", open(os.path.join(HERE, "README.md"), "rb").read())
         add("LICENSE.txt", open(os.path.join(HERE, "LICENSE.txt"), "rb").read())

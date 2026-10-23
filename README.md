@@ -1,4 +1,4 @@
-# PADDOCK SCOUT v1.16.12
+# PADDOCK SCOUT v1.16.13
 
 > **名前が変わりました（v1.15.0〜）**：旧名 **SW NAS WATCH** → **PADDOCK SCOUT**。PADDOCK（競馬の下見所）シリーズとして、PADDOCK SCOUT（下見＝監視）・PADDOCK SADDLE（装鞍＝受付で整える）・PADDOCK GATE（ゲート＝会場で発走）の3本になりました。中身・使い方は同じです。新しいZIPを前のフォルダと同じ場所に展開すると、最初の起動で前の設定を引き継ぎます（前のフォルダは変更しません）。
 
@@ -280,6 +280,10 @@ PADDOCK_SCOUT.exe --legacy-ui          # 前の画面（v1.13 まで）で表示
 ```
 
 二重に起動した場合は、起動中の画面が開くだけです。
+
+## v1.16.13 の変更
+
+- タスクマネージャーや「その他のシステムトレイアイコン」の一覧に「Python」ではなくアプリ名とアイコンが出るように（runtime\python\<アプリ名>_core.exe で動かします）。PADDOCK SADDLE・PADDOCK GATE も同じです。
 
 ## v1.16.12 の変更
 
