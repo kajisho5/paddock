@@ -4,7 +4,7 @@ import { api, enc } from "../api";
 import type { Config } from "../types";
 import { dayInfo } from "../lib/layout";
 import { copyText, nfc } from "../lib/util";
-import { OPON, toast } from "../store";
+import { OPON, store, toast } from "../store";
 import { Icon } from "../components/Icons";
 import { netOpen } from "./Net";
 
@@ -43,7 +43,7 @@ function PairSettings() {
       <span>合言葉</span><span><input type="text" id="pairCode" value={code} placeholder={p.code_set ? "（設定済み。変えるときだけ入れる）" : "6文字以上。2台で同じもの"} onChange={(e) => setCode(e.target.value)} /></span>
       <span /><span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button className="pri" id="pairSave" disabled={!!busy} onClick={() => save()}>連携を保存</button>
-        <button id="pairFw" disabled={!!busy} onClick={fw} title="相手のPCからの知らせを受け付けるよう、Windows ファイアウォールに許可を足します（管理者の確認が出ます。1回だけ）">ファイアウォールの許可を追加…</button></span>
+        {store.S?.os === "win" && <button id="pairFw" disabled={!!busy} onClick={fw} title="相手のPCからの知らせを受け付けるよう、Windows ファイアウォールに許可を足します（管理者の確認が出ます。1回だけ）">ファイアウォールの許可を追加…</button>}</span>
       <span>状態</span><span id="pairSt" className={ok ? "" : "dim"}>{!p.enabled ? "使っていません" : ok ? "連携中（" + p.rx_from + " から届いています）" : "相手のPCから届いていません" + (p.err ? "：" + p.err : "（相手のPCでも設定し、両方でファイアウォールの許可を追加してください）")}{p.fw === "ok" ? "　· ファイアウォール許可済み" : ""}</span>
     </div></>;
 }

@@ -1,0 +1,98 @@
+# Mac 版（.app）のビルドと起動確認。署名・公証した .dmg は runway（kajisho5/runway）の mac-notarize で作る。
+#   ・push（アプリ・Mac 版の部分を変えたとき）：署名なしでビルドし、macOS で起動・メニューバー・終了を確かめる
+#   ・Actions → mac → Run workflow で「sign」をオン：確認のあと、3つのアプリをそれぞれ署名・公証して .dmg にする
+#     （runway の repos.txt に kajisho5/paddock があり、Secrets が配られていること）
+name: mac
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sw_nas_*.py"
+      - "build_app.py"
+      - "build_protected.py"
+      - "mac/**"
+      - "brand/icons/**"
+      - ".github/workflows/mac.yml"
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: "署名・公証して .dmg を作る（runway の Secrets が必要）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build（署名なし）
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash mac/build.sh watch reception operator
+      - name: 起動の確認
+        run: bash mac/smoke.sh
+      - name: まとめる
+        if: always()
+        run: |
+          mkdir -p out
+          cd dist && for a in *.app; do ditto -c -k --keepParent "$a" "../out/${a%.app}-unsigned.zip"; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-test
+          path: |
+            smoke/
+            out/
+          retention-days: 7
+
+  versions:
+    if: github.event_name == 'workflow_dispatch' && inputs.sign
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      watch: ${{ steps.v.outputs.watch }}
+      reception: ${{ steps.v.outputs.reception }}
+      operator: ${{ steps.v.outputs.operator }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          for k in watch:sw_nas_watch.py reception:sw_nas_reception.py operator:sw_nas_operator.py; do
+            v=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' "${k#*:}" | head -n1)
+            echo "${k%%:*}=$v" >> "$GITHUB_OUTPUT"
+          done
+
+  release:
+    needs: versions
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: watch
+            name: PADDOCK_SCOUT_Mac
+            product: dist/PADDOCK SCOUT.app
+          - kind: reception
+            name: PADDOCK_SADDLE_Mac
+            product: dist/PADDOCK SADDLE.app
+          - kind: operator
+            name: PADDOCK_GATE_Mac
+            product: dist/PADDOCK GATE.app
+    uses: kajisho5/runway/.github/workflows/mac-notarize.yml@main
+    with:
+      name: ${{ matrix.name }}
+      version: ${{ needs.versions.outputs[matrix.kind] }}
+      build: bash mac/build.sh ${{ matrix.kind }}
+      products: ${{ matrix.product }}
+      package: dmg
+      entitlements: mac/entitlements.plist
+      readme: mac/README_MAC.txt
+    secrets: inherit

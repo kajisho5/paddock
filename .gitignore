@@ -3,3 +3,5 @@ ui/dist/
 __pycache__/
 *.pyc
 ui/dist-design/
+build/
+dist/

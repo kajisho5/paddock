@@ -1412,7 +1412,7 @@ def main():
     if not a.no_browser:
         threading.Timer(0.6, W.open_ui, args=(url, data_dir, a.browser)).start()
     try:
-        srv.serve_forever(poll_interval=0.5)
+        W.serve(srv, tray)
     except KeyboardInterrupt:
         print("\n終了します…")
     finally:

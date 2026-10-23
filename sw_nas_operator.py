@@ -1456,9 +1456,58 @@ def open_native(path, how):
         threading.Thread(target=_bring_front, args=(hint, how == "show", before, gen), daemon=True).start()
         return
     if W.IS_MAC:
-        subprocess.Popen(["open", path])
+        mac_open(path, how)
     else:
         subprocess.Popen(["xdg-open", path])
+
+
+# Mac：スライドショーは PowerPoint・Keynote に AppleScript で頼む（パスは引数で渡す）
+MAC_PPT_SHOW = """on run argv
+  set f to POSIX file (item 1 of argv)
+  tell application "Microsoft PowerPoint"
+    activate
+    open f
+    delay 0.5
+    run slide show (slide show settings of active presentation)
+  end tell
+end run"""
+MAC_KEY_SHOW = """on run argv
+  set f to POSIX file (item 1 of argv)
+  tell application "Keynote"
+    activate
+    set d to open f
+    start d from first slide of d
+  end tell
+end run"""
+
+
+def _mac_app(name):
+    return any(os.path.isdir(os.path.join(d, name + ".app")) for d in ("/Applications", os.path.expanduser("~/Applications")))
+
+
+def mac_open(path, how):
+    """Mac で開く。開いたアプリは前に出る（open・activate）"""
+    ext = os.path.splitext(path)[1].lower()
+    if how == "show" and (ext in SHOW_EXT or ext == ".key"):
+        if ext == ".key" or not _mac_app("Microsoft PowerPoint"):
+            if not _mac_app("Keynote"):
+                raise ValueError("PowerPoint も Keynote も見つからないため、スライドショーで開けません（［開く］で開いてください）")
+            script = MAC_KEY_SHOW
+        else:
+            script = MAC_PPT_SHOW
+        with _PPT_LOCK:
+            try:
+                r = subprocess.run(["osascript", "-e", script, path], capture_output=True, text=True, timeout=45)
+            except subprocess.TimeoutExpired:
+                raise ValueError("スライドショーの開始に時間がかかっています。画面を確かめてください")
+        if r.returncode != 0:
+            err = (r.stderr or "").strip()
+            if "-1743" in err:   # 操作の許可がない
+                raise ValueError("このアプリから PowerPoint・Keynote を操作する許可がありません。"
+                                 "システム設定 → プライバシーとセキュリティ → オートメーション で許可してください")
+            raise ValueError("スライドショーで開けませんでした（%s）。［開く］で開いてください" % (err.splitlines()[-1] if err else r.returncode))
+        return
+    subprocess.Popen(["open", path])
 
 
 OPEN_FN = open_native               # テストでは差し替える
@@ -1959,7 +2008,7 @@ class Opener:
             raise ValueError("「%s」の中に「%s」が見つかりません" % (d["label"], name))
         if st not in ("ok", "edited", None):   # 前にコピーした版を開く（新しい版はまだ）
             msg = ((msg + "\n") if msg else "") + "前の版を開きました。新しい版はまだこのPCにありません（%s）" % self.LABELS.get(st, "コピー待ち")
-        show = how == "show" and os.path.splitext(name)[1].lower() in SHOW_EXT
+        show = how == "show" and os.path.splitext(name)[1].lower() in (SHOW_EXT + ((".key",) if W.IS_MAC else ()))
         OPEN_FN(path, "show" if show else "file")
         return {"ok": True, "what": "show" if show else "file", "path": path, "dest": d["label"], "name": name, "msg": msg}
 
@@ -2188,7 +2237,7 @@ def main():
     if not a.no_browser:
         threading.Timer(0.6, W.open_ui, args=(url, data_dir, a.browser)).start()
     try:
-        srv.serve_forever(poll_interval=0.5)
+        W.serve(srv, tray)
     except KeyboardInterrupt:
         print("\n終了します…")
     finally:
