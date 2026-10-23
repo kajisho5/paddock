@@ -13,8 +13,8 @@ export const KIND: Record<string, [string, string]> = {
   copied: ["コピー完了", "add"], copy_err: ["コピー要確認", "del"],
 };
 export const OPS: Record<string, [string, string, string]> = {
-  add: ["＋", "add", "追加"], mod: ["✎", "mod", "更新"], rename: ["↔", "ren", "名前変更"], del: ["−", "del", "削除"], dir_add: ["＋", "add", "フォルダ追加"],
-  dir_del: ["−", "del", "フォルダ削除"], folder_rename: ["↔", "ren", "フォルダ名変更"], copy: ["⇢", "add", "コピー"],
+  add: ["plus", "add", "追加"], mod: ["pen", "mod", "更新"], rename: ["swap", "ren", "名前変更"], del: ["minus", "del", "削除"], dir_add: ["plus", "add", "フォルダ追加"],
+  dir_del: ["minus", "del", "フォルダ削除"], folder_rename: ["swap", "ren", "フォルダ名変更"], copy: ["arrowr", "add", "コピー"],
 };
 export const CPL: Record<string, [string, string]> = {
   ok: ["コピー済み", "ok"], todo: ["コピー待ち", "dim"], copying: ["コピー中", "run"], wait: ["受信完了待ち", "dim"], srcbusy: ["NAS側で使用中", "warn"],
@@ -43,12 +43,12 @@ export function AnaChips({ a }: { a?: AnaSum }) {
     {a.done < a.n && <Tag t="dim">解析中</Tag>}
     {!!a.err && <Tag t="bad">解析不可</Tag>}
     {!!a.video && <>
-      {!!a.vwarn && <Tag t="bad">外部動画⚠</Tag>}
+      {!!a.vwarn && <Tag t="bad">外部動画</Tag>}
       {a.vfbad ? <Tag t="bad" title="会場のWindows PCで再生できない可能性が高い形式の動画があります">動画形式NG</Tag>
         : a.vfwarn ? <Tag t="warn" title="形式の確認が必要な動画があります（試写推奨）">動画要試写</Tag> : null}
       {!a.vwarn && !a.vfbad && !a.vfwarn && <Tag t="info">動画あり</Tag>}
     </>}
-    {!!a.abad && <Tag t="bad" title="リンクされた音声ファイルが見つからない、または発表者PCの場所を指しています">音声リンク⚠</Tag>}
+    {!!a.abad && <Tag t="bad" title="リンクされた音声ファイルが見つからない、または発表者PCの場所を指しています">音声リンク</Tag>}
     {!!a.links && <Tag t="info">リンクあり</Tag>}
     {a.done === a.n && a.done > a.err && (a.coi ? <Tag t="ok">COI</Tag> : <Tag t="warn">COIなし</Tag>)}
     {!!a.auto && <Tag t="warn">自動送り</Tag>}

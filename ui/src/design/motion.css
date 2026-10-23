@@ -66,8 +66,14 @@ button:active:not(:disabled){transform:scale(.97)}
 .seg.has-ind button{position:relative;z-index:1;background:transparent!important;box-shadow:none!important}
 .seg.has-ind button[aria-selected=true]{color:var(--fg)}
 
-/* ---- 動きを減らす設定 ---- */
+/* ---- 動きを減らす設定：動き（移動・拡大・波紋・光）は止め、出入りは短いフェードだけ残す（状態が変わったことは分かる） ---- */
 @media (prefers-reduced-motion: reduce){
-  *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important}
+  .modal .dlg,.app.v-board .center,.app.showlog .log,.rootpop,.fswap,.ev:nth-child(-n+3),.toast.on,
+  .animate-fade-up,.animate-pop,.animate-slide-left{animation:fade-in 140ms linear both!important}
+  .toast.on{transform:translateX(-50%)}
+  button:active:not(:disabled),.bp:active{transform:none}
+  .seg .seg-ind,.bar i,.tbar i,.rbar:not(.ind) i,.chev,.switch .track,.switch .thumb{transition-duration:1ms}
   .dot.on::after,.dot.busy::after,.bp.st-copying::before{display:none}
+  .rbar.ind i{animation:none;left:32%!important}
+  .flash::after,.flashh::after{animation-duration:1600ms;animation-timing-function:steps(2,jump-none)}
 }

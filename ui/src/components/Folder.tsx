@@ -89,9 +89,9 @@ function FolderBody() {
       return <div key={e.id} className={cx("evc", e.u && "u")}><div className="top"><KindPill k={e.kind} />{e.repl ? <span className="kind k-repl">差し替え {e.repl}回目</span> : null}
         <span className="t">{dtm(e.ts)} ({ago(e.ts)})</span>{e.while_stopped && <span className="ws">停止中の変更</span>}<span style={{ fontSize: 12 }}>{e.summary}</span></div>
         {(items.length > 0 || (e.n_items || 0) > 30) && <ul>{items.map((it, i) => {
-          const o = OPS[it.op] || ["·", "", ""];
+          const o = OPS[it.op] || ["", "", ""];
           const sz = it.op === "mod" && it.old_size != null ? `${fmtSize(it.old_size)} → ${fmtSize(it.size)}` : it.size != null ? fmtSize(it.size) : "";
-          return <li key={i}><span className={"op o-" + o[1]} title={o[2]}>{o[0]}</span><span className="fn">{it.op === "rename" || it.op === "folder_rename" ? <>{nfc(it.path)} <span className="x">→</span> {nfc(it.to)}</> : nfc(it.path)}</span><span className="x">{sz}</span></li>;
+          return <li key={i}><span className={"op o-" + o[1]} title={o[2]} aria-label={o[2]}>{o[0] && <Icon n={o[0]} />}</span><span className="fn">{it.op === "rename" || it.op === "folder_rename" ? <>{nfc(it.path)} <span className="x">→</span> {nfc(it.to)}</> : nfc(it.path)}</span><span className="x">{sz}</span></li>;
         })}{(e.n_items || 0) > 30 && <li><span className="op" /><span className="x">ほか {(e.n_items || 0) - 30} 件</span></li>}</ul>}</div>;
     })}</div></div>}
     <div className="sec"><h3>ファイル<small>{files.length}件{nmk ? `（ほかに目印 ${nmk}）` : ""}</small></h3>

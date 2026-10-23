@@ -12,7 +12,7 @@
 :root[data-theme="light"]{
   color-scheme:light;
   --bg:#f3f3f1;--bg2:#ebebe8;--card:#ffffff;--card2:#f7f7f5;--hover:#f2f2ef;--sel:#eef2ff;
-  --border:#e4e4e0;--border2:#d6d6d1;--fg:#18181b;--fg2:#3f3f46;--muted:#71717a;--dim:#a1a1aa;
+  --border:#e4e4e0;--border2:#d6d6d1;--fg:#18181b;--fg2:#3f3f46;--muted:#67676f;--dim:#74747c;
   --accent:#18181b;--accent-fg:#ffffff;--ring:#6366f1;
   --ok:#16a34a;--ok-bg:#dcfce7;--ok-fg:#15803d;
   --got:#0284c7;--got-bg:#e0f2fe;--got-fg:#0369a1;
@@ -24,11 +24,13 @@
   --memo-bg:#fffbeb;--memo-bd:#fde68a;--memo-fg:#a16207;
   --shadow:0 1px 2px rgba(0,0,0,.04),0 6px 20px rgba(0,0,0,.04);
   --hdr:#ffffff;
+  --on-solid:#ffffff;--on-ok:#ffffff;   /* 濃い状態色の上の文字 */
+  --cat-ppt:#ea580c;--cat-key:#0284c7;--cat-pdf:#dc2626;--cat-video:#7c3aed;--cat-audio:#059669;--cat-image:#ca8a04;--cat-word:#2563eb;--cat-excel:#16a34a;   /* ファイルの種類 */
 }
 :root[data-theme="dark"]{
   color-scheme:dark;
   --bg:#0b0e12;--bg2:#080a0d;--card:#11161c;--card2:#151b22;--hover:#18202a;--sel:#1b2633;
-  --border:#1e2731;--border2:#2a3542;--fg:#e3e9f0;--fg2:#c4cfdb;--muted:#8fa0b2;--dim:#5b6b7b;
+  --border:#1e2731;--border2:#2a3542;--fg:#e3e9f0;--fg2:#c4cfdb;--muted:#8fa0b2;--dim:#808f9f;
   --accent:#e3e9f0;--accent-fg:#0b0e12;--ring:#38bdf8;
   --ok:#2bb868;--ok-bg:rgba(43,184,104,.15);--ok-fg:#5fd896;   /* 芝の緑（少しだけ深め） */
   --got:#38bdf8;--got-bg:rgba(56,189,248,.14);--got-fg:#7dd3fc;
@@ -40,6 +42,8 @@
   --memo-bg:#1d1a0f;--memo-bd:#5c4a12;--memo-fg:#fde68a;
   --shadow:0 1px 2px rgba(0,0,0,.4);
   --hdr:#11161c;
+  --on-solid:#ffffff;--on-ok:#04210f;
+  --cat-ppt:#fdba74;--cat-key:#7dd3fc;--cat-pdf:#fca5a5;--cat-video:#c4b5fd;--cat-audio:#6ee7b7;--cat-image:#fde68a;--cat-word:#93c5fd;--cat-excel:#86efac;
 }
 
 /* ---- 動き（モーション）：速さとカーブ。動かすのは transform と opacity だけ ---- */

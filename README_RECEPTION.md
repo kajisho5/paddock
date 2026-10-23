@@ -1,4 +1,4 @@
-# PADDOCK SADDLE v1.5.1
+# PADDOCK SADDLE v1.5.2
 
 > **名前が変わりました（v1.4.0〜）**：旧名 **SW NAS RECEPTION** → **PADDOCK SADDLE**。PADDOCK（競馬の下見所）シリーズとして、PADDOCK SCOUT（下見＝監視）・PADDOCK SADDLE（装鞍＝受付で整える）・PADDOCK GATE（ゲート＝会場で発走）の3本になりました。中身・使い方は同じです。新しいZIPを前のフォルダと同じ場所に展開すると、最初の起動で前の設定を引き継ぎます（前のフォルダは変更しません）。
 

@@ -157,7 +157,7 @@ function NetBody() {
     </div>
     {job && <div className="nsjob">{job.msg && <p className={job.state === "error" || job.state === "canceled" ? "err" : "hint"} style={{ marginTop: 0 }}>{job.msg}</p>}
       {(job.steps || []).map((x, i) => <StepRow key={i} s={x} />)}
-      {job.state === "done" && <p className="hint">{job.ok ? "✓ 終わりました。" : "一部うまくいきませんでした（✕の項目を確認してください）。"}{job.action === "setup" && job.elevate ? "ほかのPCでも同じように押してから、① の［もう一度確認］でつながるか確かめてください。" : ""}</p>}</div>}
+      {job.state === "done" && <p className="hint">{job.ok ? "終わりました。" : "一部うまくいきませんでした（✕の項目を確認してください）。"}{job.action === "setup" && job.elevate ? "ほかのPCでも同じように押してから、① の［もう一度確認］でつながるか確かめてください。" : ""}</p>}</div>}
   </div>;
 }
 function CredBox({ host, init, supported }: { host: string; init: { user: string; password: string }; supported: boolean }) {

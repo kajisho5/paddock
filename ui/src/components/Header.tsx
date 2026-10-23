@@ -45,7 +45,7 @@ function Roots() {
     const tip = nfc(r.label) + "　" + st[1] + (m ? "\n" + m : "") + "\n" + r.path + (r.error ? "\n" + r.error : "") + (r.n_warns ? "\n読めないフォルダ " + r.n_warns + "件" : "");
     return <span key={r.id} className={cx("rchip", many && "compact", r.online === false && "off")} title={tip}>
       <span className={"dot " + st[0]} /><span className="t"><b>{nfc(r.label)}</b>{!many && " " + st[1]}</span>
-      <span className="m">{many ? (r.online === false ? "接続できません" : r.online ? (r.count || 0).toLocaleString() + "件" : st[1]) : m}{r.n_warns ? " · ⚠" + r.n_warns : ""}</span></span>;
+      <span className="m">{many ? (r.online === false ? "接続できません" : r.online ? (r.count || 0).toLocaleString() + "件" : st[1]) : m}{r.n_warns ? " · 注意 " + r.n_warns : ""}</span></span>;
   };
   let body: React.ReactNode;
   if (!S.roots.length) body = <span className="rchip"><span className="dot" />監視フォルダ未設定</span>;
@@ -136,7 +136,7 @@ export function Banner() {
     if (off.length) { body.unshift(<span key="o">{off.map((r) => `${nfc(r.label)}: ${r.error}`).join("　")}</span>); cls = "bad"; }
   } else if (IS_RX) {
     if (!S.roots.length) body.push(<span key="n">受付先のNASフォルダ（学会名フォルダ）がまだ設定されていません。<button className="pri" onClick={() => openCfg()}>設定を開く</button></span>);
-    if (off.length) { body.unshift(<span key="o">{off.map((r) => `⚠ ${nfc(r.label)}: ${r.error}`).join("　")}</span>); cls = "bad"; }
+    if (off.length) { body.unshift(<span key="o">{off.map((r) => `${nfc(r.label)}: ${r.error}`).join("　")}</span>); cls = "bad"; }
   } else {
     let warn = false;
     if (!S.roots.length) body.push(<span key="n">監視するNASのフォルダがまだ設定されていません。<button className="pri" onClick={() => openCfg()}>設定を開く</button></span>);
@@ -145,8 +145,8 @@ export function Banner() {
     else if (Notification.permission === "denied") { body.push(<span key="n">デスクトップ通知がブロックされています。Chrome / Edge のサイト設定で 127.0.0.1 の「通知」を許可してください（音とログ表示は動作します）</span>); warn = true; }
     else if (!S.local) { body.push(<span key="n">閲覧専用で表示中（別端末）。既読・設定などの操作は監視PC側で行ってください。</span>); warn = true; }
     if (S.op_moved) { body.unshift(<span key="m">このPCでは「会場オペレーターモード」（発表PCへのコピー）を使っていました。コピーは <b>PADDOCK GATE</b> に分かれたため、このアプリではコピーしません。発表PCでは PADDOCK GATE を使ってください（このアプリと同じ場所にZIPを展開すれば、はじめて起動したときに会場・コピー先の設定を引き継ぎます）。</span>); warn = true; }
-    if (offd.length) { body.unshift(<span key="d">{offd.map((d) => `⚠ コピー先「${d.label}」に接続できません（つながったら自動でコピーします）`).join("　")}</span>); warn = true; }
-    if (off.length) { body.unshift(<span key="o">{off.map((r) => `⚠ ${nfc(r.label)}: ${r.error}`).join("　")}</span>); }
+    if (offd.length) { body.unshift(<span key="d">{offd.map((d) => `コピー先「${d.label}」に接続できません（つながったら自動でコピーします）`).join("　")}</span>); warn = true; }
+    if (off.length) { body.unshift(<span key="o">{off.map((r) => `${nfc(r.label)}: ${r.error}`).join("　")}</span>); }
     cls = off.length ? "bad" : warn ? "warn" : "";
   }
   if (!body.length) return null;

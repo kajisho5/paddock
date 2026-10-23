@@ -77,7 +77,7 @@ function RxTray() {
   const t = RX.tray; const sel = rxSel()!;
   const [to, setTo] = useState("");
   if (!t) return <div className="rxtray"><div className="th"><span className="x">読み込み中…</span></div></div>;
-  if (!t.files.length) return t.warn && t.warn.length ? <ul className="rxwarn">{t.warn.map((w, i) => <li key={i} className={w.lv}>{w.msg}</li>)}</ul> : null;
+  if (!t.files.length) return t.warn && t.warn.length ? <ul className="rxwarn">{t.warn.map((w, i) => <li key={i} className={w.lv}>{w.lv !== "info" && <Icon n="alert" />}{w.msg}</li>)}</ul> : null;
   const strip = !!(t.top && RX.strip); const busy = rxBusy() || !!t.busy; const miss = !!t.missing;
   const inc = t.files.filter((f) => !RX.excl.has(f.rel)); const size = inc.reduce((a, f) => a + f.size, 0);
   const rep = inc.filter((f) => (strip ? f.exists_strip : f.exists)).length;
@@ -93,7 +93,7 @@ function RxTray() {
         <td className="tg"><RxChips f={f} />{ex && <Tag t="repl" title="NASに同じ名前のファイルがあります。前の版をこのPCに保存してから置き換えます（同じ内容なら書き込みません）">差し替え</Tag>}</td>
         <td style={{ width: 34 }}><button className="ghost rm icon" title="トレイから外す" disabled={busy} onClick={async () => { try { await api("/api/rx/remove", { root: sel.root, group: sel.group, rels: [f.rel] }); RX.excl.delete(f.rel); await rxLoad(); } catch (e: any) { toast(e.message, 5000); } }}><Icon n="x" /></button></td></tr>;
     })}</tbody></table>
-    {t.warn && t.warn.length > 0 && <ul className="rxwarn">{t.warn.map((w, i) => <li key={i} className={w.lv}>{w.lv === "bad" ? "⚠ " : w.lv === "warn" ? "! " : "・"}{w.msg}</li>)}</ul>}
+    {t.warn && t.warn.length > 0 && <ul className="rxwarn">{t.warn.map((w, i) => <li key={i} className={w.lv}>{w.msg}</li>)}</ul>}
     {miss ? <div className="rxgo"><select id="rxMoveTo" style={{ maxWidth: 420 }} value={to} onChange={(e) => setTo(e.target.value)}><option value="">移す先の演者を選ぶ…</option>
       {(r && r.groups || []).filter((g) => g.key && g.key !== sel.group).sort((a, b) => cmpPath(a.key, b.key)).map((g) => <option key={g.key} value={g.key}>{nfc(g.key.split("/").join(" › "))}</option>)}</select>
       <button disabled={busy} onClick={async () => { if (!to) { toast("移す先の演者を選んでください"); return; } try { await api("/api/rx/move", { root: sel.root, group: sel.group, to }); toast("移しました", 3000); selectGroup(sel.root, to); } catch (e: any) { toast(e.message, 6000); } }}>別の演者へ移す</button></div>
