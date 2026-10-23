@@ -2,43 +2,7 @@
    ライト：受付・監視（明るい受付デスク向け、白いカード）
    ダーク：OPERATOR（会場の発表PC。放送卓のタリー風に、状態をはっきりした色で） */
 
-:root{
-  --sans:"Inter","Segoe UI Variable Text","Segoe UI","Noto Sans JP","Noto Sans CJK JP","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;
-  --mono:"JetBrains Mono","Cascadia Mono","Consolas","DejaVu Sans Mono",ui-monospace,monospace;
-  --r:12px;--r2:16px;
-}
-:root[data-theme="light"]{
-  color-scheme:light;
-  --bg:#f3f3f1;--bg2:#ebebe8;--card:#ffffff;--card2:#f7f7f5;--hover:#f2f2ef;--sel:#eef2ff;
-  --border:#e4e4e0;--border2:#d6d6d1;--fg:#18181b;--fg2:#3f3f46;--muted:#71717a;--dim:#a1a1aa;
-  --accent:#18181b;--accent-fg:#ffffff;--ring:#6366f1;
-  --ok:#16a34a;--ok-bg:#dcfce7;--ok-fg:#15803d;
-  --got:#0284c7;--got-bg:#e0f2fe;--got-fg:#0369a1;
-  --warn:#d97706;--warn-bg:#fef3c7;--warn-fg:#a16207;
-  --bad:#dc2626;--bad-bg:#fee2e2;--bad-fg:#b91c1c;
-  --vio:#7c3aed;--vio-bg:#ede9fe;--vio-fg:#6d28d9;
-  --info:#0891b2;--info-bg:#cffafe;--info-fg:#0e7490;
-  --none:#a1a1aa;--none-bg:#f4f4f5;
-  --memo-bg:#fffbeb;--memo-bd:#fde68a;--memo-fg:#a16207;
-  --shadow:0 1px 2px rgba(0,0,0,.04),0 6px 20px rgba(0,0,0,.04);
-  --hdr:#ffffff;
-}
-:root[data-theme="dark"]{
-  color-scheme:dark;
-  --bg:#0b0e12;--bg2:#080a0d;--card:#11161c;--card2:#151b22;--hover:#18202a;--sel:#1b2633;
-  --border:#1e2731;--border2:#2a3542;--fg:#e3e9f0;--fg2:#c4cfdb;--muted:#8fa0b2;--dim:#5b6b7b;
-  --accent:#e3e9f0;--accent-fg:#0b0e12;--ring:#38bdf8;
-  --ok:#2bb868;--ok-bg:rgba(43,184,104,.15);--ok-fg:#5fd896;   /* 芝の緑（少しだけ深め） */
-  --got:#38bdf8;--got-bg:rgba(56,189,248,.14);--got-fg:#7dd3fc;
-  --warn:#f59e0b;--warn-bg:rgba(245,158,11,.14);--warn-fg:#fbbf24;
-  --bad:#ef4444;--bad-bg:rgba(239,68,68,.15);--bad-fg:#f87171;
-  --vio:#a78bfa;--vio-bg:rgba(167,139,250,.15);--vio-fg:#c4b5fd;
-  --info:#22d3ee;--info-bg:rgba(34,211,238,.12);--info-fg:#67e8f9;
-  --none:#ef4444;--none-bg:rgba(239,68,68,.08);
-  --memo-bg:#1d1a0f;--memo-bd:#5c4a12;--memo-fg:#fde68a;
-  --shadow:0 1px 2px rgba(0,0,0,.4);
-  --hdr:#11161c;
-}
+/* 色・文字・角丸などのトークンは design/tokens.css */
 *{box-sizing:border-box}
 html,body,#root{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;overflow:hidden}
@@ -104,7 +68,7 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 .switch input{display:none}
 .switch .track{width:30px;height:18px;border-radius:99px;background:var(--border2);position:relative;transition:.15s}
 .switch .thumb{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 2px rgba(0,0,0,.3)}
-.switch input:checked+.track{background:var(--ok)}.switch input:checked+.track .thumb{left:14px}
+.switch input:checked+.track{background:var(--ok)}.switch input:checked+.track .thumb{transform:translateX(12px)}
 #bNet.has{position:relative}#bNet.has::after{content:"";position:absolute;top:5px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--warn)}
 
 /* 会場オペレーターの帯 */

@@ -1,4 +1,5 @@
 /* 会場ボード：全会場を横に並べて受付状況を一覧（演者をクリックすると右に中身） */
+import { Bar, EmptyState } from "../design/ui";
 import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
 import type { Group, Root } from "../types";
 import { actv, cmpDay, dayOK, fmtDur, fmtT, isRecv, isTodo, lay, parts, recvState, sesStatus, sesTime, STL, todayDay, type STime } from "../lib/layout";
@@ -50,7 +51,7 @@ export function BoardPane() {
 
   return <section id="boardpane" className="pane board">
     <div className="bbar">
-      <span className="st" id="bTot">全体 <b>受付 {n}/{t}</b><span className={cx("prog", t && n === t ? "done" : n ? "" : "zero")}><span className="bar"><i style={{ width: pct + "%" }} /></span>{pct}%</span></span>
+      <span className="st" id="bTot">全体 <b>受付 {n}/{t}</b><span className={cx("prog", t && n === t ? "done" : n ? "" : "zero")}><Bar pct={pct} />{pct}%</span></span>
       <span className="st scp" id="bCp">コピー中 <b>{cpn}</b></span>
       <span className="st sun" id="bUn">未確認 <b>{unn}</b></span>
       <div className="flt">
@@ -68,8 +69,8 @@ export function BoardPane() {
     <div className="bleg"><span><i className="sw recv" />受付済み</span><span><i className="sw got" />会場取得済</span><span><i className="sw copying" />コピー中</span><span><i className="sw none" />未受付</span><span><i className="sw direct" />会場直</span><span style={{ opacity: .6 }}><i className="sw done" />発表終了</span><span style={{ opacity: .7, textDecoration: "line-through" }}>取り下げ</span><span><i className="sw unread" />未確認（新着）</span><span className="dim">演者をクリックすると中身と解析結果を表示</span></div>
     <Nav cols={real} boardRef={boardRef} navRef={navRef} />
     <div className="boardcols" id="board" ref={boardRef}>
-      {!S.roots.length ? <div className="empty"><div className="ico"><Icon n="shoe" /></div><b>監視フォルダがありません</b>［設定］から学会名フォルダを追加してください。</div>
-        : !cols.length ? <div className="empty"><div className="ico"><Icon n="search" /></div><b>該当なし</b>検索の文字や絞り込みを変えてください。</div>
+      {!S.roots.length ? <EmptyState title="監視フォルダがありません">［設定］から学会名フォルダを追加してください。</EmptyState>
+        : !cols.length ? <EmptyState icon="search" title="該当なし">検索の文字や絞り込みを変えてください。</EmptyState>
           : cols.map((c) => "empty" in c
             ? <section key={"e" + c.r.id} className="col" data-col={c.r.id + "|"} style={{ ["--vc" as any]: VPAL_[c.ri % VPAL_.length] }}><div className="vh"><div className="n"><Icon n="building" /><span className="vn">{nfc(c.r.label)}</span></div></div>
               <div className="list"><div className="empty">{c.r.online === false ? "接続できません" : c.r.online == null ? "確認中…" : "演者フォルダがありません"}</div></div></section>
@@ -106,7 +107,7 @@ function Column({ c, filtering, DAYS, TD, sesKeysAll }: { c: Col; filtering: boo
         <span className="sn">{label.split("/").map((t, i) => <Fragment key={i}>{i > 0 && <span className="sep"> › </span>}{nfc(t)}</Fragment>)}</span>
         {x.all.some((g) => g.pending) && <span className="pdot" title="コピー中" />}{sun > 0 && <span className="badge" title="未確認の演者">{sun}</span>}<Prog list={x.all} />
         {tt && <span className="tl"><TimeChip t={tt} /><SesStatus st={st} list={x.all} /></span>}
-        {st && st.st === "live" && st.pct != null && <span className="tbar"><i style={{ width: st.pct.toFixed(1) + "%" }} /></span>}</div>);
+        {st && st.st === "live" && st.pct != null && <Bar className="tbar" pct={st.pct} />}</div>);
       if (sf) continue;
     }
     x.vis.forEach((g) => body.push(<BRow key={r.id + "|" + g.key} r={r} g={g} />));

@@ -6,6 +6,7 @@ import { APP_SUB, APP_TITLE, IS_OP, IS_RX } from "../boot";
 import { hms, nfc, cx } from "../lib/util";
 import { askPerm, loadState, quitApp, markAllSeen, OPON, opDests, setFollow, setView, testNotify, toast, useApp } from "../store";
 import { Icon } from "./Icons";
+import { Bar, Segmented } from "../design/ui";
 import { openCfg } from "./Settings";
 import { netBadge, netOpen } from "../op/Net";
 
@@ -72,10 +73,10 @@ export function Header() {
     <div className="logo"><img className="mark" src={APP_ICON} alt="" width={34} height={34} />
       <span className="lt">{APP_TITLE}<small>SEVENTHWELL · {APP_SUB}</small></span></div>
     {IS_OP && OPON() ? <div className="rootsw">{!s.conn && <span className="conn">再接続中…</span>}</div> : <Roots />}
-    <div className="seg" role="tablist" aria-label="表示の切り替え">
-      <button type="button" role="tab" id="vList" aria-selected={s.view === "list"} onClick={() => setView("list")} title="会場・セッション・演者の一覧と、フォルダの中身"><Icon n="list" /><span className="lb">リスト</span></button>
-      <button type="button" role="tab" id="vBoard" aria-selected={s.view === "board"} onClick={() => setView("board")} title="全会場を横に並べて受付状況を一覧"><Icon n="cols" /><span className="lb">会場ボード</span></button>
-    </div>
+    <Segmented label="表示の切り替え" value={s.view} onChange={(v) => setView(v)} items={[
+      { v: "list", id: "vList", title: "会場・セッション・演者の一覧と、フォルダの中身", label: <><Icon n="list" /><span className="lb">リスト</span></> },
+      { v: "board", id: "vBoard", title: "全会場を横に並べて受付状況を一覧", label: <><Icon n="cols" /><span className="lb">会場ボード</span></> },
+    ]} />
     <div className="hbtns">
       {!IS_OP && !IS_RX && <label className="switch" title="更新があったフォルダを自動で表示（操作中の15秒間は切り替えない）">
         <input type="checkbox" id="swFollow" checked={s.FOLLOW} onChange={(e) => setFollow(e.target.checked)} /><span className="track"><span className="thumb" /></span>自動表示</label>}
@@ -119,7 +120,7 @@ export function OpStrip() {
     })}
     {o.active && (() => {
       const pct = o.active!.total ? Math.floor((o.active!.done * 100) / o.active!.total) : 0;
-      return <span className="act"><Icon n="spin" className="spin" />コピー中 {nfc(o.active!.rel.split("/").pop())}<span className="bar"><i style={{ width: pct + "%" }} /></span>{pct}%{(o.queue || 0) > 1 ? " · 残り " + ((o.queue || 0) - 1) : ""}</span>;
+      return <span className="act"><Icon n="spin" className="spin" />コピー中 {nfc(o.active!.rel.split("/").pop())}<Bar pct={pct} />{pct}%{(o.queue || 0) > 1 ? " · 残り " + ((o.queue || 0) - 1) : ""}</span>;
     })()}
   </div>;
 }

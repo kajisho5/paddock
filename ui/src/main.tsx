@@ -2,7 +2,10 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { KIND } from "./boot";
 import { startApp } from "./store";
+import "./design/tailwind.css";
+import "./design/tokens.css";
 import "./styles.css";
+import "./design/motion.css";
 import { setFavicon } from "./lib/appIcon";
 
 /* 見た目：受付・監視は明るいテーマ、会場の発表PC（OPERATOR）は暗いテーマ */

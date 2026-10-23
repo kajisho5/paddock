@@ -1,4 +1,5 @@
 /* リスト表示（左）：監視フォルダ → 会場 → （日）→ セッション → 演者 のツリー */
+import { EmptyState } from "../design/ui";
 import { Fragment, useEffect, useRef } from "react";
 import type { Group, Root } from "../types";
 import { cmpDay, dayOK, isTodayLabel, isTodo, lay, parts, recvState, sesStatus, sesTime, todayDay, type SStat } from "../lib/layout";
@@ -51,7 +52,7 @@ export function ListPane() {
 
 function Groups() {
   const s = useApp(); const S = s.S!;
-  if (!S.roots.length) return <div className="empty"><div className="ico"><Icon n="shoe" /></div><b>監視フォルダがありません</b>［設定］から学会名フォルダを追加してください。<br /><span className="mono" style={{ fontSize: 11.5, color: "var(--dim)" }}>例: \\192.168.0.10\share\学会名</span></div>;
+  if (!S.roots.length) return <EmptyState title="監視フォルダがありません">［設定］から学会名フォルダを追加してください。<br /><span className="mono" style={{ fontSize: 11.5, color: "var(--dim)" }}>例: \\192.168.0.10\share\学会名</span></EmptyState>;
   const q = nfc(s.q).toLowerCase().trim(); const filtering = !!(q || s.onlyU || s.onlyN); const out: React.ReactNode[] = [];
   const EV = effVenue(); const ED = effDay();
   for (const r of S.roots) {

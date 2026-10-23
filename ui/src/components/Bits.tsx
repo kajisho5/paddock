@@ -1,4 +1,5 @@
 /* 小さな部品：状態のチップ・進み具合・コピー状況など（一覧・会場ボード・演者画面で共通） */
+import { Bar } from "../design/ui";
 import { useEffect, useState } from "react";
 import type { AnaSum, CpState, Group, Root } from "../types";
 import { Icon } from "./Icons";
@@ -70,7 +71,7 @@ export function ReplTag({ g }: { g?: Group }) {
 export function Prog({ list, suffix }: { list: Group[]; suffix?: string }) {
   const l = actv(list); const t = l.length, n = l.filter(isRecv).length; const pct = t ? Math.round((n * 100) / t) : 0;
   return <span className={cx("prog", t && n === t ? "done" : n ? "" : "zero")} title={`受付 ${n}/${t}`}>
-    <span className="bar"><i style={{ width: pct + "%" }} /></span>{n}/{t}{suffix || ""}</span>;
+    <Bar pct={pct} />{n}/{t}{suffix || ""}</span>;
 }
 export function GotProg({ list }: { list: Group[] }) {
   const anyGot = !!store.S?.roots.some((r) => (r.groups || []).some((g) => g.mk_got || g.mk_done));
@@ -95,7 +96,7 @@ export function RowProg({ r, g }: { r: Root; g: Group }) {
     {a && (() => {
       const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0;
       const lb = (S.op.dests || []).filter((d) => (a.dests || []).includes(d.id)).map((d) => d.label).join("・");
-      return <div className="rx op" title={nfc(a.rel)}><span className="rbar"><i style={{ width: pct + "%" }} /></span>
+      return <div className="rx op" title={nfc(a.rel)}><Bar className="rbar" pct={pct} />
         <span className="rt">{lb}へコピー {pct}% · {nfc(a.rel.split("/").pop())}</span></div>;
     })()}
   </>;

@@ -6,6 +6,7 @@ import type { Config, Mark } from "../types";
 import { refresh, store, toast, useApp } from "../store";
 import { Icon } from "./Icons";
 import { Modal } from "./Modal";
+import { Segmented } from "../design/ui";
 import { OpSection, opPrepare, opReady, OpSetupGuide } from "../op/OpSettings";
 import { OpenSettings, openSettingsSave } from "../op/Opener";
 import { RxSettings, rxSettingsSave } from "../rx/RxSettings";
@@ -164,11 +165,8 @@ function SettingsBody() {
       </>;
       if (!IS_OP) return <><h3>監視フォルダ</h3>{rootsMain}{rootsHint}{rest}</>;
       return <>
-        <div className="seg cfgtabs" role="tablist" aria-label="設定の切り替え">
-          <button type="button" role="tab" id="tBase" aria-selected={tab === "base"} onClick={() => setTab("base")}>① 会場とコピー先</button>
-          <button type="button" role="tab" id="tOpen" aria-selected={tab === "open"} onClick={() => setTab("open")}>スライドを開く</button>
-          <button type="button" role="tab" id="tAdv" aria-selected={tab === "adv"} onClick={() => setTab("adv")}>詳細</button>
-        </div>
+        <Segmented className="cfgtabs" label="設定の切り替え" value={tab} onChange={setTab} items={[
+          { v: "base", id: "tBase", label: "① 会場とコピー先" }, { v: "open", id: "tOpen", label: "スライドを開く" }, { v: "adv", id: "tAdv", label: "詳細" }]} />
         <div className="tabpane" hidden={tab !== "base"}>
           {!opReady() && <OpSetupGuide />}
           <section className="stepcard"><h3><span className="stepn">1</span>NASの学会フォルダ</h3>

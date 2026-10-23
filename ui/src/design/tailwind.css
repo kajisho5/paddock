@@ -1,0 +1,50 @@
+/* Tailwind（v4）：トークンを Tailwind のクラス名で使えるようにする。
+   preflight（ブラウザ標準の見た目のリセット）は読み込まない＝既存の見た目を壊さない。
+   例：bg-card text-muted border-line rounded-card shadow-elev-2 animate-fade-up duration-2 ease-out */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@source "../";
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg2: var(--bg2);
+  --color-card: var(--card);
+  --color-card2: var(--card2);
+  --color-hover: var(--hover);
+  --color-sel: var(--sel);
+  --color-line: var(--border);
+  --color-line2: var(--border2);
+  --color-fg: var(--fg);
+  --color-fg2: var(--fg2);
+  --color-muted: var(--muted);
+  --color-dim: var(--dim);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-ring: var(--ring);
+  --color-ok: var(--ok);         --color-ok-bg: var(--ok-bg);     --color-ok-fg: var(--ok-fg);
+  --color-got: var(--got);       --color-got-bg: var(--got-bg);   --color-got-fg: var(--got-fg);
+  --color-warn: var(--warn);     --color-warn-bg: var(--warn-bg); --color-warn-fg: var(--warn-fg);
+  --color-bad: var(--bad);       --color-bad-bg: var(--bad-bg);   --color-bad-fg: var(--bad-fg);
+  --color-vio: var(--vio);       --color-vio-bg: var(--vio-bg);   --color-vio-fg: var(--vio-fg);
+  --color-info: var(--info);     --color-info-bg: var(--info-bg); --color-info-fg: var(--info-fg);
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-card: var(--r);
+  --radius-pane: var(--r2);
+  --radius-dlg: var(--r-xl);
+  --shadow-elev-1: var(--elev-1);
+  --shadow-elev-2: var(--elev-2);
+  --shadow-elev-3: var(--elev-3);
+  --ease-out: var(--ease-out);
+  --ease-in: var(--ease-in);
+  --ease-inout: var(--ease-inout);
+  --ease-spring: var(--ease-spring);
+  --animate-fade-in: fade-in var(--dur-2) var(--ease-out) both;
+  --animate-fade-up: fade-up var(--dur-3) var(--ease-out) both;
+  --animate-pop: pop var(--dur-2) var(--ease-spring) both;
+  --animate-slide-left: slide-left var(--dur-3) var(--ease-out) both;
+  --animate-ping-soft: ping-soft 2.4s var(--ease-out) infinite;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+}

@@ -1,4 +1,5 @@
 /* 演者フォルダの中身：見出し・状態・メモ・コピー先・PowerPoint解析・最近の変更・ファイル一覧 */
+import { EmptyState } from "../design/ui";
 import { useEffect, useRef, useState } from "react";
 import type { Analysis, FolderItem, VideoInfo } from "../types";
 import { IS_OP, IS_RX } from "../boot";
@@ -18,7 +19,7 @@ export function CenterPane() {
     {s.view === "board" && <div id="dhead"><span className="t">フォルダの中身</span><button className="ghost" id="bDClose" title="閉じる（Esc）" onClick={closeDrawer}><Icon n="x" />閉じる</button></div>}
     <div className="scroll" id="fold" ref={ref}>
       {IS_RX && <RxPanel />}
-      <div id="foldbody"><FolderBody /></div>
+      <div id="foldbody"><div className="fswap" key={s.SEL ? s.SEL.root + "|" + s.SEL.group : "-"}><FolderBody /></div></div>
     </div>
   </section>;
 }
@@ -26,7 +27,7 @@ export function CenterPane() {
 function FolderBody() {
   const s = store; const S = s.S; const F = s.F;
   if (s.folderErr && !F) return <div className="empty">{s.folderErr}</div>;
-  if (!s.SEL || !S) return IS_RX ? null : <div className="empty" style={{ paddingTop: 90 }}><div className="ico"><Icon n="shoe" /></div><b>演者フォルダを選択</b>左の一覧か通知をクリックすると、<br />その演者フォルダの中身と解析結果がここに表示されます。<br /><br /><span className="dim" style={{ fontSize: 12.5 }}>NAS上のファイルは書き換えません（一覧・属性の取得と、PowerPoint解析のための読み取りのみ）</span></div>;
+  if (!s.SEL || !S) return IS_RX ? null : <EmptyState style={{ paddingTop: 90 }} title="演者フォルダを選択">左の一覧か通知をクリックすると、<br />その演者フォルダの中身と解析結果がここに表示されます。<br /><br /><span className="dim" style={{ fontSize: 12.5 }}>NAS上のファイルは書き換えません（一覧・属性の取得と、PowerPoint解析のための読み取りのみ）</span></EmptyState>;
   if (!F) return <div className="empty">読み込み中…</div>;
   const segs = F.group.split("/"); const r = rootById(F.root);
   const name = F.group === "" ? (r && r.depth > 1 ? "（演者フォルダより上のファイル）" : "（直下のファイル）") : segs[segs.length - 1];

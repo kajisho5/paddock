@@ -8,6 +8,7 @@ import { AnaChips, FlagChips, StateTag, Tag } from "../components/Bits";
 import { Icon } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { collectDrop, RX, rxBusy, rxLoad, rxSel, rxStart, rxSync, rxUpload, type TrayFile } from "./rxState";
+import { Bar } from "../design/ui";
 
 export function RxPanel() {
   useApp();
@@ -59,13 +60,13 @@ function RxProg() {
   if (RX.up) {
     const u = RX.up; const pct = u.total ? Math.floor((u.done * 100) / u.total) : 0;
     return <div className="rxprog"><div className="l1"><Icon n="spin" className="spin" /><span className="t">このPCへ受け取り中 {u.i}/{u.n}：{nfc(u.cur)}</span><button className="ghost" onClick={cancel}>中止</button></div>
-      <div className="bar"><i style={{ width: pct + "%" }} /></div><div className="l2">{fmtSize(u.done)} / {fmtSize(u.total)}（{pct}%）{u.who !== RX.key ? " · 受付先: " + nfc(u.who.split("/").pop()) : ""}</div></div>;
+      <Bar pct={pct} className="bar block" /><div className="l2">{fmtSize(u.done)} / {fmtSize(u.total)}（{pct}%）{u.who !== RX.key ? " · 受付先: " + nfc(u.who.split("/").pop()) : ""}</div></div>;
   }
   const j = RX.job; if (!j || j.state !== "run") return null; const pct = j.total ? Math.floor((j.done * 100) / j.total) : 0;
   const what = j.kind === "commit" ? "NASの演者フォルダへ書き込み中" : "USB・ドライブから受け取り中";
   const el = Date.now() / 1000 - j.t0; const sp = el > 1 ? fmtSize(j.done / Math.max(1, el)) + "/s" : "";
   return <div className="rxprog"><div className="l1"><Icon n="spin" className="spin" /><span className="t">{what} {j.i}/{j.n}：{nfc(j.cur)}</span><button className="ghost" onClick={cancel}>中止</button></div>
-    <div className="bar"><i style={{ width: pct + "%" }} /></div><div className="l2">{fmtSize(j.done)} / {fmtSize(j.total)}（{pct}%）{sp ? " · " + sp : ""}</div></div>;
+    <Bar pct={pct} className="bar block" /><div className="l2">{fmtSize(j.done)} / {fmtSize(j.total)}（{pct}%）{sp ? " · " + sp : ""}</div></div>;
 }
 function RxChips({ f }: { f: TrayFile }) {
   if (f.na) return <Tag t="dim">{f.na}</Tag>; const s = f.sum; if (!s) return null;

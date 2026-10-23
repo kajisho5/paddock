@@ -1,0 +1,73 @@
+/* ============================================================
+   動き（アニメーション）
+   ・動かすのは transform と opacity だけ（発表PCでもカクつかない・レイアウトをやり直さない）
+   ・OS の「視差効果を減らす／アニメーションを減らす」がオンなら止める（最後に指定）
+   ============================================================ */
+@keyframes fade-in{from{opacity:0}}
+@keyframes fade-up{from{opacity:0;transform:translateY(8px)}}
+@keyframes pop{from{opacity:0;transform:scale(.94)}}
+@keyframes slide-left{from{opacity:0;transform:translateX(28px)}}
+@keyframes slide-down{from{opacity:0;transform:translateY(-6px)}}
+@keyframes ping-soft{0%{transform:scale(1);opacity:.55}80%,100%{transform:scale(2.6);opacity:0}}
+@keyframes shimmer{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+@keyframes flash-o{0%{opacity:1}100%{opacity:0}}
+@keyframes ind-t{from{transform:translateX(-100%)}to{transform:translateX(290%)}}
+@keyframes toast-in{from{opacity:0;transform:translate(-50%,14px) scale(.97)}}
+
+/* ---- 押した感触・ホバー ---- */
+button{transition:background-color var(--dur-1) var(--ease-out),border-color var(--dur-1) var(--ease-out),transform var(--dur-1) var(--ease-out),opacity var(--dur-1)}
+button:active:not(:disabled){transform:scale(.97)}
+.seg button:active:not(:disabled){transform:none}
+.grp,.ev,.bp{transition:background-color var(--dur-1) var(--ease-out),transform var(--dur-1) var(--ease-out)}
+.bp:active{transform:scale(.985)}
+
+/* ---- ダイアログ・ドロワー・ポップオーバー・トースト ---- */
+.modal{animation:fade-in var(--dur-2) var(--ease-out) both}
+.modal .dlg{animation:dlg-in var(--dur-3) var(--ease-out) both}
+@keyframes dlg-in{from{opacity:0;transform:translateY(12px) scale(.985)}}
+.app.v-board .center{animation:slide-left var(--dur-3) var(--ease-out) both}
+.app.showlog .log{animation:slide-left var(--dur-3) var(--ease-out) both}
+.rootpop{animation:slide-down var(--dur-2) var(--ease-out) both;transform-origin:top left}
+.toast.on{animation:toast-in var(--dur-2) var(--ease-spring) both}
+
+/* ---- 中身の切り替え（演者を選んだとき・設定のタブ） ---- */
+.fswap{animation:fade-up var(--dur-2) var(--ease-out) both}
+.tabpane:not([hidden]){animation:fade-in var(--dur-2) var(--ease-out) both}
+
+/* ---- 新しいログが上に入ってくる ---- */
+.ev:nth-child(-n+3){animation:fade-up var(--dur-3) var(--ease-out) both}
+
+/* ---- 更新した行が一瞬光る（背景の色そのものは動かさず、重ねた層の透明度だけ変える） ---- */
+.flash,.flashh{animation:none;position:relative}
+.flash::after,.flashh::after{content:"";position:absolute;inset:0;background:var(--warn-bg);border-radius:inherit;pointer-events:none;animation:flash-o var(--dur-4) var(--ease-out) both}
+.vhead.flashh::after,.shead.flashh::after{z-index:0}
+
+/* ---- 状態の点：監視中はゆっくり波紋 ---- */
+.dot{position:relative}
+.dot.on::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--ok);animation:ping-soft 2.4s var(--ease-out) infinite}
+.dot.busy::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--warn);animation:ping-soft 1.4s var(--ease-out) infinite}
+
+/* ---- 進捗バー：幅ではなく横の拡大率で動かす（Bar 部品が --p を渡す） ---- */
+.bar i,.tbar i,.rbar:not(.ind) i{width:100%!important;transform:scaleX(var(--p,0));transform-origin:left center;transition:transform var(--dur-3) var(--ease-out)}
+.rbar.ind i{left:0!important;animation:ind-t 1.2s var(--ease-inout) infinite}
+/* コピー中の演者：うっすら光が流れる */
+.bp.st-copying{overflow:hidden}
+.bp.st-copying::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.18),transparent);animation:shimmer 1.8s linear infinite;pointer-events:none}
+:root[data-theme="dark"] .bp.st-copying::before{background:linear-gradient(90deg,transparent,rgba(255,255,255,.06),transparent)}
+
+/* ---- 開閉の矢印・スイッチ ---- */
+.chev{transition:transform var(--dur-2) var(--ease-out)}
+.switch .track,.switch .thumb{transition:transform var(--dur-2) var(--ease-spring),background-color var(--dur-2) var(--ease-out)}
+
+/* ---- タブ（Segmented）の動く下地 ---- */
+.seg{position:relative}
+.seg .seg-ind{position:absolute;top:3px;bottom:3px;left:0;border-radius:8px;background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.08);transition:transform var(--dur-3) var(--ease-inout);pointer-events:none;z-index:0}
+:root[data-theme="dark"] .seg .seg-ind{background:var(--border2)}
+.seg.has-ind button{position:relative;z-index:1;background:transparent!important;box-shadow:none!important}
+.seg.has-ind button[aria-selected=true]{color:var(--fg)}
+
+/* ---- 動きを減らす設定 ---- */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important}
+  .dot.on::after,.dot.busy::after,.bp.st-copying::before{display:none}
+}

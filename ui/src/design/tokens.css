@@ -1,0 +1,61 @@
+/* ============================================================
+   PADDOCK デザイントークン（SCOUT / SADDLE / GATE 共通）
+   - 色は意味で名前を付ける（ok=受付済・正常、got=会場取得、warn=注意・コピー中、bad=未着・エラー、vio=会場直…）
+   - テーマ：light（SCOUT・SADDLE）／dark（GATE：会場の発表PC）。data-theme で切り替え
+   - 値を直接書かず、必ずこの変数（または Tailwind の色名）を使う
+   ============================================================ */
+:root{
+  --sans:"Inter","Segoe UI Variable Text","Segoe UI","Noto Sans JP","Noto Sans CJK JP","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;
+  --mono:"JetBrains Mono","Cascadia Mono","Consolas","DejaVu Sans Mono",ui-monospace,monospace;
+  --r:12px;--r2:16px;
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --bg:#f3f3f1;--bg2:#ebebe8;--card:#ffffff;--card2:#f7f7f5;--hover:#f2f2ef;--sel:#eef2ff;
+  --border:#e4e4e0;--border2:#d6d6d1;--fg:#18181b;--fg2:#3f3f46;--muted:#71717a;--dim:#a1a1aa;
+  --accent:#18181b;--accent-fg:#ffffff;--ring:#6366f1;
+  --ok:#16a34a;--ok-bg:#dcfce7;--ok-fg:#15803d;
+  --got:#0284c7;--got-bg:#e0f2fe;--got-fg:#0369a1;
+  --warn:#d97706;--warn-bg:#fef3c7;--warn-fg:#a16207;
+  --bad:#dc2626;--bad-bg:#fee2e2;--bad-fg:#b91c1c;
+  --vio:#7c3aed;--vio-bg:#ede9fe;--vio-fg:#6d28d9;
+  --info:#0891b2;--info-bg:#cffafe;--info-fg:#0e7490;
+  --none:#a1a1aa;--none-bg:#f4f4f5;
+  --memo-bg:#fffbeb;--memo-bd:#fde68a;--memo-fg:#a16207;
+  --shadow:0 1px 2px rgba(0,0,0,.04),0 6px 20px rgba(0,0,0,.04);
+  --hdr:#ffffff;
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0b0e12;--bg2:#080a0d;--card:#11161c;--card2:#151b22;--hover:#18202a;--sel:#1b2633;
+  --border:#1e2731;--border2:#2a3542;--fg:#e3e9f0;--fg2:#c4cfdb;--muted:#8fa0b2;--dim:#5b6b7b;
+  --accent:#e3e9f0;--accent-fg:#0b0e12;--ring:#38bdf8;
+  --ok:#2bb868;--ok-bg:rgba(43,184,104,.15);--ok-fg:#5fd896;   /* 芝の緑（少しだけ深め） */
+  --got:#38bdf8;--got-bg:rgba(56,189,248,.14);--got-fg:#7dd3fc;
+  --warn:#f59e0b;--warn-bg:rgba(245,158,11,.14);--warn-fg:#fbbf24;
+  --bad:#ef4444;--bad-bg:rgba(239,68,68,.15);--bad-fg:#f87171;
+  --vio:#a78bfa;--vio-bg:rgba(167,139,250,.15);--vio-fg:#c4b5fd;
+  --info:#22d3ee;--info-bg:rgba(34,211,238,.12);--info-fg:#67e8f9;
+  --none:#ef4444;--none-bg:rgba(239,68,68,.08);
+  --memo-bg:#1d1a0f;--memo-bd:#5c4a12;--memo-fg:#fde68a;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+  --hdr:#11161c;
+}
+
+/* ---- 動き（モーション）：速さとカーブ。動かすのは transform と opacity だけ ---- */
+:root{
+  --dur-1:120ms;   /* 押した反応・ホバー */
+  --dur-2:200ms;   /* 小さな出入り（トースト・ポップオーバー・タブ） */
+  --dur-3:320ms;   /* 大きな出入り（ダイアログ・ドロワー）・進捗バー */
+  --dur-4:2400ms;  /* 更新した行が光って消えるまで */
+  --ease-out:cubic-bezier(.22,1,.36,1);      /* 入ってくる動き（速く始まり、なめらかに止まる） */
+  --ease-in:cubic-bezier(.55,0,1,.45);       /* 出ていく動き */
+  --ease-inout:cubic-bezier(.65,0,.35,1);    /* 位置の移動（タブの下線など） */
+  --ease-spring:cubic-bezier(.34,1.4,.64,1); /* 少しだけ弾む（トースト・チップ） */
+  /* 角丸・影 */
+  --r-sm:7px;--r-md:9px;--r:12px;--r2:16px;--r-xl:18px;--r-full:999px;
+  --elev-1:var(--shadow);
+  --elev-2:0 12px 40px rgba(0,0,0,.18);
+  --elev-3:0 30px 80px rgba(0,0,0,.3);
+}
+:root[data-theme="dark"]{--elev-2:0 12px 40px rgba(0,0,0,.55);--elev-3:0 30px 80px rgba(0,0,0,.65)}
