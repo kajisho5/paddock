@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS OPERATOR  v1.3.0  —  SEVENTHWELL
+PADDOCK GATE  v1.3.0  —  SEVENTHWELL
 
 学会の各会場の発表PC（オペレーターPC）用。自分の会場の演者フォルダをNASから読み、NASへの受信が完了したものを
 この発表PC・バックアップPCなどのコピー先へコピーする。NASには一切書き込まない（読むだけ）。
-一覧・会場ボード・PowerPoint解析・目印の表示は SW NAS WATCH をそのまま使う（sw_nas_watch を部品として読み込む）。
+一覧・会場ボード・PowerPoint解析・目印の表示は PADDOCK SCOUT をそのまま使う（sw_nas_watch を部品として読み込む）。
 スライドショーをしているPCで使うので、通知も音も出さない。
 
 起動:
@@ -32,8 +32,8 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Pythonでも隣の sw_nas_watch を読めるように
 import sw_nas_watch as W  # noqa: E402
 
-APP_NAME = "SW NAS OPERATOR"
-VERSION = "1.5.3"
+APP_NAME = "PADDOCK GATE"
+VERSION = "1.6.0"
 DEFAULT_PORT = 8797
 
 
@@ -60,7 +60,7 @@ def force_quiet(cfg):
 
 
 def watch_data_candidates(data_dir):
-    """SW NAS WATCH の保存先（会場オペレーターモードの設定の引き継ぎ元）の候補。"""
+    """PADDOCK SCOUT（旧 SW NAS WATCH）の保存先（会場オペレーターモードの設定の引き継ぎ元）の候補。"""
     home = os.path.abspath(os.environ.get("SW_NAS_OPERATOR_HOME", "") or os.path.dirname(os.path.abspath(__file__)))
     cands = [os.path.join(home, "sw_nas_watch_data")]
     # ZIPを同じ場所に展開した場合：…\SW_NAS_WATCH\sw_nas_watch_data
@@ -70,11 +70,13 @@ def watch_data_candidates(data_dir):
         if not base or W.is_remote_path(base):
             continue
         try:
-            names = sorted(e.name for e in os.scandir(base) if e.name.upper().startswith("SW_NAS_WATCH") and e.is_dir())
+            names = sorted(e.name for e in os.scandir(base)
+                           if e.name.upper().startswith(("PADDOCK_SCOUT", "SW_NAS_WATCH")) and e.is_dir())
         except OSError:
             continue
         for n in names[:20]:
             cands.append(os.path.join(base, n, "sw_nas_watch_data"))
+            cands.append(os.path.join(base, n, "PADDOCK_SCOUT", "sw_nas_watch_data"))
             cands.append(os.path.join(base, n, "SW_NAS_WATCH", "sw_nas_watch_data"))
     la = os.environ.get("LOCALAPPDATA", "")
     if la:
@@ -91,7 +93,7 @@ def watch_data_candidates(data_dir):
 
 
 def import_from_watch(data_dir):
-    """初回起動時：SW NAS WATCH で会場オペレーターモードを使っていたら、その設定と「コピー済み」の記録を引き継ぐ。
+    """初回起動時：PADDOCK SCOUT で会場オペレーターモードを使っていたら、その設定と「コピー済み」の記録を引き継ぐ。
     （引き継ぎ元のファイルは読むだけで、変更しない）"""
     found = []
     for d in watch_data_candidates(data_dir):
@@ -156,11 +158,11 @@ def build_page():
         if h.count(old) != 1:
             raise RuntimeError("画面の組み立てに失敗しました: %r" % old[:40])
         h = h.replace(old, new)
-    sub("<title>SW NAS WATCH</title>", "<title>SW NAS OPERATOR</title>")
-    sub('+"SW NAS WATCH";if(ret)return t;', '+"SW NAS OPERATOR";if(ret)return t;')
-    sub("SW NAS WATCH<small>SEVENTHWELL · READ ONLY</small>", "SW NAS OPERATOR<small>SEVENTHWELL · 会場</small>")
-    sub("SW NAS WATCH v__VERSION__ · © SEVENTHWELL",
-        "SW NAS OPERATOR v%s（SW NAS WATCH v__VERSION__ ベース） · © SEVENTHWELL" % VERSION)
+    sub("<title>PADDOCK SCOUT</title>", "<title>PADDOCK GATE</title>")
+    sub('+"PADDOCK SCOUT";if(ret)return t;', '+"PADDOCK GATE";if(ret)return t;')
+    sub("PADDOCK SCOUT<small>SEVENTHWELL · READ ONLY</small>", "PADDOCK GATE<small>SEVENTHWELL · 会場</small>")
+    sub("PADDOCK SCOUT v__VERSION__ · © SEVENTHWELL",
+        "PADDOCK GATE v%s（PADDOCK SCOUT v__VERSION__ ベース） · © SEVENTHWELL" % VERSION)
     sub("</style>\n</head>", OP_CSS + "\n</style>\n</head>")
     sub("</script>\n</body>", OP_JS + "\n</script>\n</body>")
     return h
@@ -184,7 +186,7 @@ def _nfc(s):
 
 def share_record_dir():
     base = os.environ.get("ProgramData") or r"C:\ProgramData"
-    return os.path.join(base, "SEVENTHWELL", "SW_NAS_OPERATOR")
+    return os.path.join(base, "SEVENTHWELL", "PADDOCK_GATE")
 
 
 def read_share_record():
@@ -1458,13 +1460,16 @@ def main():
 
     data_dir = a.data_dir or pick_data_dir()
     os.makedirs(data_dir, exist_ok=True)
+    moved = None if a.data_dir else W.carry_over_renamed(data_dir, "SW_NAS_OPERATOR_HOME", "sw_nas_operator_data", "SW_NAS_OPERATOR")
+    if moved:
+        print("前の名前（SW NAS OPERATOR）のフォルダから設定を引き継ぎました: %s" % moved)
     store = W.LocalStore(data_dir)
     raw = store.read_json("config.json", None)
     imported = None
     if raw is None:
         raw, src, n = import_from_watch(data_dir)
         if raw is not None:
-            imported = "SW NAS WATCH の会場オペレーターモードの設定を引き継ぎました（%s、コピーの記録 %d件）" % (src, n)
+            imported = "PADDOCK SCOUT の会場オペレーターモードの設定を引き継ぎました（%s、コピーの記録 %d件）" % (src, n)
     cfg, cfg_msg = W.startup_config(store, data_dir, raw)
     if cfg_msg:
         print(cfg_msg)
@@ -2190,9 +2195,9 @@ function Invoke-Main([string]$Json, [string]$File) {
 if ($ParamJson) { Invoke-Main $ParamJson $ParamFile }
 '''
 
-# ---------------------------------------------------------------- UI（SW NAS WATCH の画面に足す部分）
+# ---------------------------------------------------------------- UI（PADDOCK SCOUT の画面に足す部分）
 OP_CSS = r'''
-/* ===== SW NAS OPERATOR ===== */
+/* ===== PADDOCK GATE ===== */
 .opsetup{border:1px solid rgba(139,92,246,.45);background:rgba(139,92,246,.08);border-radius:12px;padding:12px 14px;margin:0 0 14px;font-size:13px;line-height:1.7}
 .opsetup b{color:var(--foreground)}
 .opsetup ol{margin:4px 0 0;padding-left:20px}
@@ -2236,7 +2241,7 @@ table.files button.oo{height:24px;padding:0 8px;font-size:12px}
 '''
 
 OP_JS = r'''
-/* ===================== SW NAS OPERATOR（会場の発表PC）===================== */
+/* ===================== PADDOCK GATE（会場の発表PC）===================== */
 /* 通知・音・自動表示・テスト通知は使わない（スライドショーの邪魔をしないため） */
 FOLLOW=false;
 (()=>{const s=$("#swFollow");if(s)s.closest("label").style.display="none";const t=$("#bTest");if(t)t.style.display="none"})();

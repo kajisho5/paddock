@@ -2,13 +2,13 @@
 
   python3 build_protected.py <embeddable-python.zip> <出力先フォルダ>
 
-・起動は SW_NAS_WATCH.exe（exe/ のランチャーを zig でクロスコンパイル。pip install ziglang が必要）
+・起動は PADDOCK_SCOUT.exe（exe/ のランチャーを zig でクロスコンパイル。pip install ziglang が必要）
 ・sw_nas_watch.py → 同梱Python(3.13)専用のバイトコード runtime/app/sw_nas_watch.pyc（説明文・assertを除去）
 ・画面（HTML/JS/CSS）は圧縮＋符号化して、テキストとしては読めない形で埋め込む
 ・同梱Pythonと同じバージョン（3.13.x）のPythonで実行すること（.pyc はバージョン固有）
 
 配布ZIPの中身:
-  SW_NAS_WATCH/SW_NAS_WATCH.exe, README.md, LICENSE.txt, runtime/app/sw_nas_watch.pyc, runtime/python/*
+  PADDOCK_SCOUT/PADDOCK_SCOUT.exe, README.md, LICENSE.txt, runtime/app/sw_nas_watch.pyc, runtime/python/*
 """
 import base64
 import os
@@ -51,15 +51,15 @@ def main():
         pyc = os.path.join(outdir, "sw_nas_watch.pyc")
         py_compile.compile(tmp, cfile=pyc, dfile="sw_nas_watch", optimize=2, doraise=True,
                            invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
-    exe = build_launcher.build(os.path.join(outdir, "SW_NAS_WATCH.exe"), version)
-    out = os.path.join(outdir, "SW_NAS_WATCH_v%s_Windows.zip" % version)
+    exe = build_launcher.build(os.path.join(outdir, "PADDOCK_SCOUT.exe"), version)
+    out = os.path.join(outdir, "PADDOCK_SCOUT_v%s_Windows.zip" % version)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         def add(name, data, mode=0o644):
-            zi = zipfile.ZipInfo("SW_NAS_WATCH/" + name, date_time=(2026, 10, 10, 12, 0, 0))
+            zi = zipfile.ZipInfo("PADDOCK_SCOUT/" + name, date_time=(2026, 10, 10, 12, 0, 0))
             zi.compress_type = zipfile.ZIP_DEFLATED
             zi.external_attr = (stat.S_IFREG | mode) << 16
             z.writestr(zi, data)
-        add("SW_NAS_WATCH.exe", open(exe, "rb").read(), 0o755)
+        add("PADDOCK_SCOUT.exe", open(exe, "rb").read(), 0o755)
         add("runtime/app/sw_nas_watch.pyc", open(pyc, "rb").read())
         add("README.md", open(os.path.join(HERE, "README.md"), "rb").read())
         add("LICENSE.txt", open(os.path.join(HERE, "LICENSE.txt"), "rb").read())

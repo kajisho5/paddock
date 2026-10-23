@@ -1,4 +1,4 @@
-"""会場オペレーターアプリ（SW NAS OPERATOR）の配布用ビルド（SEVENTHWELL 社内用）
+"""会場オペレーターアプリ（PADDOCK GATE）の配布用ビルド（SEVENTHWELL 社内用）
 
   python3 build_operator.py <embeddable-python.zip> <出力先フォルダ>
 

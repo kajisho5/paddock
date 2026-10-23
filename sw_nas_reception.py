@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-SW NAS RECEPTION  v1.2.1  —  SEVENTHWELL
+PADDOCK SADDLE  v1.2.1  —  SEVENTHWELL
 
 学会の受付PC用。演者のデータ（USB・ドラッグ＆ドロップ）を受け取り、NAS上の演者フォルダへ入れる。
-監視・解析・一覧・会場ボードは SW NAS WATCH をそのまま使う（sw_nas_watch を部品として読み込む）。
-SW NAS WATCH 本体には書き込みの処理は一切ない。NASへ書くのはこのアプリだけ。
+監視・解析・一覧・会場ボードは PADDOCK SCOUT をそのまま使う（sw_nas_watch を部品として読み込む）。
+PADDOCK SCOUT 本体には書き込みの処理は一切ない。NASへ書くのはこのアプリだけ。
 
 受付の流れ
   1. 演者を選ぶ → ファイル・フォルダをドロップ／USBから取り込む
@@ -44,10 +44,10 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Pythonでも隣の sw_nas_watch を読めるように
 import sw_nas_watch as W  # noqa: E402
 
-APP_NAME = "SW NAS RECEPTION"
-VERSION = "1.3.3"
+APP_NAME = "PADDOCK SADDLE"
+VERSION = "1.4.0"
 DEFAULT_PORT = 8795
-RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（SW NAS WATCH は常に無視する）
+RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（PADDOCK SCOUT は常に無視する）
 CHUNK = 1 << 20
 JUNK = W.compile_ignore(W.DEFAULT_IGNORE)
 BAD_CHARS = set('<>:"/\\|?*')
@@ -848,7 +848,7 @@ class Rx:
 
     # ---- 目印画像（現場で使っている 00_受付済.jpg などを、そのままコピーして入れる）
     def flag_templates(self):
-        """目印画像のフォルダにある画像の一覧。SW NAS WATCH が目印として認識するものだけ使える。"""
+        """目印画像のフォルダにある画像の一覧。PADDOCK SCOUT が目印として認識するものだけ使える。"""
         fd = self.settings.get("flag_dir") or ""
         out = {"dir": fd, "templates": [], "error": ""}
         if not fd:
@@ -1162,7 +1162,7 @@ class Rx:
 # ---------------------------------------------------------------- manager / http
 class RxManager(W.Manager):
     def apply_config(self, new):
-        new["op"] = dict(new.get("op") or {}, enabled=False)   # 受付アプリではコピーしない（SW NAS OPERATOR の役目）
+        new["op"] = dict(new.get("op") or {}, enabled=False)   # 受付アプリではコピーしない（PADDOCK GATE の役目）
         super().apply_config(new)
 
 
@@ -1176,11 +1176,11 @@ def build_page():
         if h.count(old) != 1:
             raise RuntimeError("画面の組み立てに失敗しました: %r" % old[:40])
         h = h.replace(old, new)
-    sub("<title>SW NAS WATCH</title>", "<title>SW NAS RECEPTION</title>")
-    sub('+"SW NAS WATCH";if(ret)return t;', '+"SW NAS RECEPTION";if(ret)return t;')
-    sub("SW NAS WATCH<small>SEVENTHWELL · READ ONLY</small>", "SW NAS RECEPTION<small>SEVENTHWELL · 受付</small>")
-    sub("SW NAS WATCH v__VERSION__ · © SEVENTHWELL",
-        "SW NAS RECEPTION v%s（SW NAS WATCH v__VERSION__ ベース） · © SEVENTHWELL" % VERSION)
+    sub("<title>PADDOCK SCOUT</title>", "<title>PADDOCK SADDLE</title>")
+    sub('+"PADDOCK SCOUT";if(ret)return t;', '+"PADDOCK SADDLE";if(ret)return t;')
+    sub("PADDOCK SCOUT<small>SEVENTHWELL · READ ONLY</small>", "PADDOCK SADDLE<small>SEVENTHWELL · 受付</small>")
+    sub("PADDOCK SCOUT v__VERSION__ · © SEVENTHWELL",
+        "PADDOCK SADDLE v%s（PADDOCK SCOUT v__VERSION__ ベース） · © SEVENTHWELL" % VERSION)
     sub("</style>\n</head>", RX_CSS + "\n</style>\n</head>")
     sub("</script>\n</body>", RX_JS + "\n</script>\n</body>")
     return h
@@ -1355,6 +1355,9 @@ def main():
 
     data_dir = a.data_dir or pick_data_dir()
     os.makedirs(data_dir, exist_ok=True)
+    moved = None if a.data_dir else W.carry_over_renamed(data_dir, "SW_NAS_RECEPTION_HOME", "sw_nas_reception_data", "SW_NAS_RECEPTION")
+    if moved:
+        print("前の名前（SW NAS RECEPTION）のフォルダから設定を引き継ぎました: %s" % moved)
     store = W.LocalStore(data_dir)
     raw = store.read_json("config.json", None)
     first = raw is None
@@ -1415,9 +1418,9 @@ def main():
         srv.server_close()
 
 
-# ---------------------------------------------------------------- UI（SW NAS WATCH の画面に足す部分）
+# ---------------------------------------------------------------- UI（PADDOCK SCOUT の画面に足す部分）
 RX_CSS = r'''
-/* ===== SW NAS RECEPTION ===== */
+/* ===== PADDOCK SADDLE ===== */
 #rxpane{padding:16px 24px 0}
 .rxbox{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:16px 16px 14px;box-shadow:0 1px 2px rgba(0,0,0,.3)}
 .rxh{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;min-width:0}
@@ -1511,7 +1514,7 @@ RX_CSS = r'''
 '''
 
 RX_JS = r'''
-/* ===================== SW NAS RECEPTION（受付）===================== */
+/* ===================== PADDOCK SADDLE（受付）===================== */
 const RX={key:"",tray:null,job:null,poll:0,up:null,strip:true,excl:new Set(),hist:[],res:null,lastJob:"",mine:{},settings:null,data:"",pendSel:null,
   usb:{path:"",parent:null,items:[],sel:new Set(),drives:[]}};
 const enc=encodeURIComponent;
@@ -1745,7 +1748,7 @@ async function rxAddOpen(){if(!S||!S.roots.length){toast("先に［設定］で�
   $("#rxaGo").onclick=async()=>{const name=$("#rxaName").value.trim();if(!name){toast("フォルダ名を入れてください");return}
     try{const j=await api("/api/rx/mkdir",{root:rid,parent:$("#rxaSes").value,name});closeCfg();toast("作成しました: "+name,4000);RX.pendSel={root:rid,group:j.group};refresh()}
     catch(e){toast(e.message,6000)}}}
-/* ---- 設定：受付の設定を足す（会場オペレーターの設定は SW NAS OPERATOR だけに出る） */
+/* ---- 設定：受付の設定を足す（会場オペレーターの設定は PADDOCK GATE だけに出る） */
 api("/api/rx/settings").then(j=>{RX.settings=j.settings;RX.data=j.data_dir}).catch(()=>{});
 const _rcfg=renderCfg;renderCfg=function(){_rcfg();
   const foot=$("#modal .foot");const st=RX.settings||{verify:true,keep_local:true,pc_name:"",flag_dir:"",auto_recv:true};

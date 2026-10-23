@@ -54,7 +54,7 @@ function SettingsBody() {
     c.coi_keywords = coi.split("\n").map((x) => x.trim()).filter(Boolean);
     c.marks = (c.marks || []).map((m) => ({ w: m.w.trim(), role: m.role })).filter((m) => m.w);
     delete (c as any).mark_recv; delete (c as any).mark_got;
-    // コピーするのは SW NAS OPERATOR だけ。コピー先が1つ以上あれば有効
+    // コピーするのは PADDOCK GATE だけ。コピー先が1つ以上あれば有効
     c.op.enabled = IS_OP && c.op.dests.some((d) => d.enabled && String(d.path || "").trim());
     if (IS_OP && c.op._dm) {   // 日ごとに分かれているとき：会場を選んでいない日があると保存しない（全体をコピーしてしまわないように）
       const days = (c.op.days || []).filter((d) => d.label || d.venue);
@@ -157,7 +157,7 @@ function SettingsBody() {
     <textarea id="ig" spellCheck={false} value={ig} onChange={(e) => setIg(e.target.value)} />
     <p className="hint"><button className="ghost" onClick={() => setIg((DEF?.ignore || []).join("\n"))}>初期値に戻す</button>　設定の保存先: <span className="mono">{DATA}</span></p>
     <div className="err" id="cerr">{err}</div>
-    <div className="foot"><span className="hint" style={{ margin: 0 }}>{APP_TITLE} v{store.appVersion}{IS_OP || IS_RX ? `（SW NAS WATCH v${BASE_VERSION} ベース）` : ""} · © SEVENTHWELL</span>
+    <div className="foot"><span className="hint" style={{ margin: 0 }}>{APP_TITLE} v{store.appVersion}{IS_OP || IS_RX ? `（PADDOCK SCOUT v${BASE_VERSION} ベース）` : ""} · © SEVENTHWELL</span>
       <span style={{ display: "flex", gap: 8 }}><button id="bCancel" onClick={closeModal}>キャンセル</button><button className="pri" id="bSave" disabled={busy} onClick={save}>保存</button></span></div>
   </div>;
 }

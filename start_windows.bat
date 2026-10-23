@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title SW NAS WATCH
+title PADDOCK SCOUT
 set "PYEXE="
 rem 1) bundled portable Python (no install needed)
 if exist "%~dp0runtime\python\python.exe" set "PYEXE="%~dp0runtime\python\python.exe""
@@ -14,7 +14,7 @@ if not defined PYEXE (
 )
 if not defined PYEXE (
   echo.
-  echo  [SW NAS WATCH] runtime\python was not found.
+  echo  [PADDOCK SCOUT] runtime\python was not found.
   echo  Please extract the whole ZIP file first, then run this file again.
   echo.
   pause

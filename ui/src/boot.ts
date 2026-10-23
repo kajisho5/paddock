@@ -11,5 +11,5 @@ export const KIND: AppKind = k === "operator" || k === "reception" ? k : "watch"
 export const BASE_VERSION = real(B.base, "");
 export const IS_OP = KIND === "operator";
 export const IS_RX = KIND === "reception";
-export const APP_TITLE = IS_OP ? "SW NAS OPERATOR" : IS_RX ? "SW NAS RECEPTION" : "SW NAS WATCH";
+export const APP_TITLE = IS_OP ? "PADDOCK GATE" : IS_RX ? "PADDOCK SADDLE" : "PADDOCK SCOUT";
 export const APP_SUB = IS_OP ? "会場" : IS_RX ? "受付" : "READ ONLY";

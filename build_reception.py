@@ -1,4 +1,4 @@
-"""受付アプリ（SW NAS RECEPTION）の配布用ビルド（SEVENTHWELL 社内用）
+"""受付アプリ（PADDOCK SADDLE）の配布用ビルド（SEVENTHWELL 社内用）
 
   python3 build_reception.py <embeddable-python.zip> <出力先フォルダ>
 

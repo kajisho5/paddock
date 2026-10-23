@@ -1,4 +1,4 @@
-"""SW_NAS_WATCH.exe（起動用ランチャー）をビルドする（SEVENTHWELL 社内用）
+"""PADDOCK_SCOUT.exe（起動用ランチャー）をビルドする（SEVENTHWELL 社内用）
 
   python3 exe/build_launcher.py <出力先.exe> <バージョン 例 1.5.0>
 
@@ -15,9 +15,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-# 別アプリ（受付アプリなど）のときに差し替える名前。既定（variant=None）は SW NAS WATCH のまま
-WATCH = {"title": "SW NAS WATCH", "exe": "SW_NAS_WATCH.exe", "pyc": "sw_nas_watch.pyc",
-         "home_env": "SW_NAS_WATCH_HOME", "internal": "SW_NAS_WATCH", "ident": "SEVENTHWELL.SWNASWATCH", "icon": "watch.ico"}
+# 別アプリ（受付アプリなど）のときに差し替える名前。既定（variant=None）は PADDOCK SCOUT のまま
+WATCH = {"title": "PADDOCK SCOUT", "exe": "PADDOCK_SCOUT.exe", "pyc": "sw_nas_watch.pyc",
+         "home_env": "SW_NAS_WATCH_HOME", "internal": "PADDOCK_SCOUT", "ident": "SEVENTHWELL.SWNASWATCH", "icon": "watch.ico"}
 
 
 def build(out, version, variant=None):
@@ -38,20 +38,20 @@ def build(out, version, variant=None):
             if not re.fullmatch(r"[A-Za-z0-9 ._-]+", v[k]):
                 raise SystemExit("名前に使えない文字があります: %r" % v[k])
         if variant:
-            rc = (rc.replace('"SW_NAS_WATCH.exe"', '"%s"' % v["exe"]).replace('"SW_NAS_WATCH"', '"%s"' % v["internal"])
-                    .replace('"SW NAS WATCH"', '"%s"' % v["title"]))
+            rc = (rc.replace('"PADDOCK_SCOUT.exe"', '"%s"' % v["exe"]).replace('"PADDOCK_SCOUT"', '"%s"' % v["internal"])
+                    .replace('"PADDOCK SCOUT"', '"%s"' % v["title"]))
         man = open(os.path.join(td, "app.manifest"), encoding="utf-8").read()
         man, k = re.subn(r'(<assemblyIdentity\b[^>]*?\bversion=")[\d.]+(")', r"\g<1>%s.0\g<2>" % version, man, count=1)
         if variant:
             man = man.replace('name="SEVENTHWELL.SWNASWATCH"', 'name="%s"' % v["ident"]).replace(
-                "<description>SW NAS WATCH</description>", "<description>%s</description>" % v["title"])
+                "<description>PADDOCK SCOUT</description>", "<description>%s</description>" % v["title"])
         if k != 1 or not man.startswith('<?xml version="1.0"'):
             raise SystemExit("manifest のバージョン置換に失敗しました")
         import xml.dom.minidom
         xml.dom.minidom.parseString(man.encode("utf-8"))   # 壊れた manifest だと Windows で起動できないため検査
         open(os.path.join(td, "app.manifest"), "w", encoding="utf-8").write(man)
         open(os.path.join(td, "launcher.rc"), "w", encoding="ascii").write(rc)
-        tmp_out = os.path.join(td, "SW_NAS_WATCH.exe")
+        tmp_out = os.path.join(td, "PADDOCK_SCOUT.exe")
         defs = [] if not variant else [
             '-DAPP_TITLE=L"%s"' % v["title"], '-DAPP_PYC=L"%s"' % v["pyc"],
             '-DAPP_EXE=L"%s"' % v["exe"], '-DHOME_ENV=L"%s"' % v["home_env"]]

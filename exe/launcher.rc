@@ -17,12 +17,12 @@ BEGIN
     BLOCK "041104b0"
     BEGIN
       VALUE "CompanyName",      "SEVENTHWELL"
-      VALUE "FileDescription",  "SW NAS WATCH"
+      VALUE "FileDescription",  "PADDOCK SCOUT"
       VALUE "FileVersion",      "@VER@"
-      VALUE "InternalName",     "SW_NAS_WATCH"
+      VALUE "InternalName",     "PADDOCK_SCOUT"
       VALUE "LegalCopyright",   "Copyright (c) 2026 SEVENTHWELL. All rights reserved."
-      VALUE "OriginalFilename", "SW_NAS_WATCH.exe"
-      VALUE "ProductName",      "SW NAS WATCH"
+      VALUE "OriginalFilename", "PADDOCK_SCOUT.exe"
+      VALUE "ProductName",      "PADDOCK SCOUT"
       VALUE "ProductVersion",   "@VER@"
     END
   END

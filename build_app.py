@@ -1,16 +1,16 @@
-"""SW NAS WATCH を部品にして動く別アプリ（受付・会場オペレーター）の配布用ビルド（SEVENTHWELL 社内用）
+"""PADDOCK SCOUT を部品にして動く別アプリ（受付・会場オペレーター）の配布用ビルド（SEVENTHWELL 社内用）
 
   python3 build_app.py reception <embeddable-python.zip> <出力先フォルダ>
   python3 build_app.py operator  <embeddable-python.zip> <出力先フォルダ>
   （build_reception.py / build_operator.py からも呼べる）
 
-・ソースを含めない保護版の zip を作る。起動は各アプリの exe（SW NAS WATCH と同じランチャーを、名前だけ変えてビルド）
+・ソースを含めない保護版の zip を作る。起動は各アプリの exe（PADDOCK SCOUT と同じランチャーを、名前だけ変えてビルド）
 ・<アプリ>.py      → runtime/app/<アプリ>.pyc（画面に足す部分は圧縮＋符号化）
-・sw_nas_watch.py → runtime/app/sw_nas_watch.pyc（部品として読み込む。SW NAS WATCH の配布版と同じ作り方）
+・sw_nas_watch.py → runtime/app/sw_nas_watch.pyc（部品として読み込む。PADDOCK SCOUT の配布版と同じ作り方）
 ・同梱Pythonと同じバージョン（3.13.x）のPythonで実行すること（.pyc はバージョン固有）
 
 配布ZIPの中身（例：受付）:
-  SW_NAS_RECEPTION/SW_NAS_RECEPTION.exe, README.md, LICENSE.txt,
+  PADDOCK_SADDLE/PADDOCK_SADDLE.exe, README.md, LICENSE.txt,
   runtime/app/sw_nas_reception.pyc, runtime/app/sw_nas_watch.pyc, runtime/python/*
 """
 import base64
@@ -34,15 +34,15 @@ APPS = {
     "reception": {
         "src": "sw_nas_reception.py", "mod": "sw_nas_reception", "blocks": ("RX_CSS", "RX_JS"),
         "readme": "README_RECEPTION.md",
-        "variant": {"title": "SW NAS RECEPTION", "exe": "SW_NAS_RECEPTION.exe", "pyc": "sw_nas_reception.pyc",
-                    "home_env": "SW_NAS_RECEPTION_HOME", "internal": "SW_NAS_RECEPTION",
+        "variant": {"title": "PADDOCK SADDLE", "exe": "PADDOCK_SADDLE.exe", "pyc": "sw_nas_reception.pyc",
+                    "home_env": "SW_NAS_RECEPTION_HOME", "internal": "PADDOCK_SADDLE",
                     "ident": "SEVENTHWELL.SWNASRECEPTION", "icon": "reception.ico"},
     },
     "operator": {
         "src": "sw_nas_operator.py", "mod": "sw_nas_operator", "blocks": ("OP_CSS", "OP_JS", "SHARE_PS"),
         "readme": "README_OPERATOR.md",
-        "variant": {"title": "SW NAS OPERATOR", "exe": "SW_NAS_OPERATOR.exe", "pyc": "sw_nas_operator.pyc",
-                    "home_env": "SW_NAS_OPERATOR_HOME", "internal": "SW_NAS_OPERATOR",
+        "variant": {"title": "PADDOCK GATE", "exe": "PADDOCK_GATE.exe", "pyc": "sw_nas_operator.pyc",
+                    "home_env": "SW_NAS_OPERATOR_HOME", "internal": "PADDOCK_GATE",
                     "ident": "SEVENTHWELL.SWNASOPERATOR", "icon": "operator.ico"},
     },
 }
@@ -90,9 +90,9 @@ def build(kind, emb, outdir):
         pyc_a = compile_to(transform_app(src, app["blocks"]), app["mod"], work)
         exe = build_launcher.build(os.path.join(work, v["exe"]), version, v)
         lic = open(os.path.join(HERE, "LICENSE.txt"), encoding="utf-8").read()
-        if "SW NAS WATCH 利用条件" not in lic:
+        if "PADDOCK SCOUT 利用条件" not in lic:
             raise SystemExit("LICENSE.txt の見出しが想定と違います")
-        lic = lic.replace("SW NAS WATCH 利用条件", "%s 利用条件" % v["title"], 1)
+        lic = lic.replace("PADDOCK SCOUT 利用条件", "%s 利用条件" % v["title"], 1)
         out = os.path.join(outdir, "%s_v%s_Windows.zip" % (top, version))
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
             def add(name, data, mode=0o644):

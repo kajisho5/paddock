@@ -1,4 +1,4 @@
-/* SW NAS WATCH launcher (SW_NAS_WATCH.exe)
+/* PADDOCK SCOUT launcher (PADDOCK_SCOUT.exe)
  *
  * Copyright (c) 2026 SEVENTHWELL. All rights reserved.
  *
@@ -22,15 +22,15 @@
 
 #define BUF 32768
 
-/* アプリごとの名前（受付アプリなどは -D で上書きしてビルドする。既定は SW NAS WATCH） */
+/* アプリごとの名前（受付アプリなどは -D で上書きしてビルドする。既定は PADDOCK SCOUT） */
 #ifndef APP_TITLE
-#define APP_TITLE L"SW NAS WATCH"
+#define APP_TITLE L"PADDOCK SCOUT"
 #endif
 #ifndef APP_PYC
 #define APP_PYC L"sw_nas_watch.pyc"
 #endif
 #ifndef APP_EXE
-#define APP_EXE L"SW_NAS_WATCH.exe"
+#define APP_EXE L"PADDOCK_SCOUT.exe"
 #endif
 #ifndef HOME_ENV
 #define HOME_ENV L"SW_NAS_WATCH_HOME"

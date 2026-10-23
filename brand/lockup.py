@@ -16,7 +16,7 @@ def outline(text, size, x0, base, track=-0.01):
     return pen.getCommands(), b.bounds
 def lockup(icon_png, name, out, fg, sub):
     I=200; gap=48
-    p1,b1=outline('SW NAS', 52, I+gap, 96)
+    p1,b1=outline('PADDOCK', 52, I+gap, 96)
     p2,b2=outline(name, 104, I+gap, 196)
     w=int(max(b1[2],b2[2]))+8; h=I
     img=base64.b64encode(open(icon_png,'rb').read()).decode()
