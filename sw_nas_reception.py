@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK SADDLE"
-VERSION = "1.5.11"
+VERSION = "1.5.12"
 DEFAULT_PORT = 8795
 RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（PADDOCK SCOUT は常に無視する）
 CHUNK = 1 << 20
@@ -1396,6 +1396,8 @@ def main():
                               if any(j.get("state") == "run" for j in list(srv.rx.jobs.values())) else "")
     mgr.start()
     W.start_autoquit(srv, enabled=False)
+    tray = W.Tray(srv, APP_NAME, VERSION, "PADDOCK_SADDLE.exe", lambda: W.open_ui(url, data_dir, a.browser if a.browser != "none" else "app"),
+                  quit_confirm="%s を終了しますか？" % APP_NAME).start()
 
     print("=" * 64)
     print(" %s v%s   (受付：NASの演者フォルダへ書き込みます)" % (APP_NAME, VERSION))
@@ -1415,8 +1417,10 @@ def main():
         print("\n終了します…")
     finally:
         srv.stopping = True
+        tray.stop()
         mgr.stop()
         srv.server_close()
+        srv.closed = True
 
 
 # ---------------------------------------------------------------- UI（PADDOCK SCOUT の画面に足す部分）

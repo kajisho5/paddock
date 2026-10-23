@@ -174,6 +174,7 @@ function connect() {
     if (store.S) for (const r of st.roots) { const x = rootById(r.id); if (x) Object.assign(x, r); }
     if (st.ver !== store.lastVer) { store.lastVer = st.ver; refresh(); } else store.emit();
   });
+  es.addEventListener("bye", () => { if (store.quit) return; store.quit = true; es.close(); store.emit(); setTimeout(() => { try { window.close(); } catch { /* */ } }, 800); });
   es.onerror = () => { store.conn = false; if (store.quit) es.close(); store.emit(); };
 }
 function onIncoming(x: any) {

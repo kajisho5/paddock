@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.10.2"
+VERSION = "1.10.3"
 DEFAULT_PORT = 8797
 
 
@@ -2152,6 +2152,16 @@ def main():
     mgr.start()
     W.start_autoquit(srv, enabled=False)
 
+    def tray_status():
+        a = mgr.copier.active
+        q = getattr(mgr.copier, "queue_n", 0) or 0
+        if a:
+            return "コピー中 %s%s" % (os.path.basename(str(a.get("rel") or "")), "（残り %d）" % (q - 1) if q > 1 else "")
+        return "コピー待機中（ウィンドウを閉じてもコピーを続けます）"
+    tray = W.Tray(srv, APP_NAME, VERSION, "PADDOCK_GATE.exe", lambda: W.open_ui(url, data_dir, a.browser if a.browser != "none" else "app"),
+                  quit_confirm="%s を終了しますか？\nコピーも止まります（コピー中のファイルは次に起動したときにやり直します）。" % APP_NAME,
+                  status_fn=tray_status).start()
+
     op = cfg["op"]
     print("=" * 64)
     print(" %s v%s   (会場の発表PC用：NASは読むだけ・コピー先へコピーします)" % (APP_NAME, VERSION))
@@ -2183,8 +2193,10 @@ def main():
         print("\n終了します…")
     finally:
         srv.stopping = True
+        tray.stop()
         mgr.stop()
         srv.server_close()
+        srv.closed = True
 
 
 # ---------------------------------------------------------------- 共有のワンボタン設定（管理者として実行する PowerShell）
