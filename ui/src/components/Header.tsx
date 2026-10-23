@@ -1,3 +1,4 @@
+import { APP_ICON } from "../lib/appIcon";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Root } from "../types";
@@ -68,7 +69,7 @@ function Roots() {
 export function Header() {
   const s = useApp();
   return <header className="hdr">
-    <div className="logo"><span className="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" /></svg></span>
+    <div className="logo"><img className="mark" src={APP_ICON} alt="" width={34} height={34} />
       <span className="lt">{APP_TITLE}<small>SEVENTHWELL · {APP_SUB}</small></span></div>
     {IS_OP && OPON() ? <div className="rootsw">{!s.conn && <span className="conn">再接続中…</span>}</div> : <Roots />}
     <div className="seg" role="tablist" aria-label="表示の切り替え">

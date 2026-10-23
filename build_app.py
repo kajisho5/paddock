@@ -36,14 +36,14 @@ APPS = {
         "readme": "README_RECEPTION.md",
         "variant": {"title": "SW NAS RECEPTION", "exe": "SW_NAS_RECEPTION.exe", "pyc": "sw_nas_reception.pyc",
                     "home_env": "SW_NAS_RECEPTION_HOME", "internal": "SW_NAS_RECEPTION",
-                    "ident": "SEVENTHWELL.SWNASRECEPTION"},
+                    "ident": "SEVENTHWELL.SWNASRECEPTION", "icon": "reception.ico"},
     },
     "operator": {
         "src": "sw_nas_operator.py", "mod": "sw_nas_operator", "blocks": ("OP_CSS", "OP_JS", "SHARE_PS"),
         "readme": "README_OPERATOR.md",
         "variant": {"title": "SW NAS OPERATOR", "exe": "SW_NAS_OPERATOR.exe", "pyc": "sw_nas_operator.pyc",
                     "home_env": "SW_NAS_OPERATOR_HOME", "internal": "SW_NAS_OPERATOR",
-                    "ident": "SEVENTHWELL.SWNASOPERATOR"},
+                    "ident": "SEVENTHWELL.SWNASOPERATOR", "icon": "operator.ico"},
     },
 }
 

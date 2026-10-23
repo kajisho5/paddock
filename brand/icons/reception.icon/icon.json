@@ -1,0 +1,106 @@
+{
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "tray.svg",
+          "name" : "2 Glyph",
+          "fill-specializations" : [
+            {
+              "value" : {
+                "linear-gradient" : [
+                  "srgb:0.08627,0.69020,0.41569,1.00000",
+                  "srgb:0.02745,0.45490,0.24706,1.00000"
+                ]
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "linear-gradient" : [
+                  "srgb:0.35294,0.35294,0.35294,1.00000",
+                  "srgb:0.18039,0.18039,0.18039,1.00000"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "name" : "Glyph",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.3
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
+      }
+    },
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "folder.svg",
+          "name" : "1 Folder",
+          "fill-specializations" : [
+            {
+              "value" : {
+                "linear-gradient" : [
+                  "srgb:1.00000,1.00000,1.00000,1.00000",
+                  "srgb:0.90196,0.92549,0.96078,1.00000"
+                ]
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "linear-gradient" : [
+                  "srgb:1.00000,1.00000,1.00000,1.00000",
+                  "srgb:0.84706,0.84706,0.84706,1.00000"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "name" : "Folder",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.45
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.1
+      },
+      "blur-material" : 0.2
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  },
+  "fill-specializations" : [
+    {
+      "value" : {
+        "linear-gradient" : [
+          "srgb:0.24314,0.85882,0.59216,1.00000",
+          "srgb:0.03922,0.57255,0.34510,1.00000"
+        ]
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "linear-gradient" : [
+          "srgb:0.08627,0.29020,0.20000,1.00000",
+          "srgb:0.02353,0.10196,0.07059,1.00000"
+        ]
+      }
+    }
+  ]
+}

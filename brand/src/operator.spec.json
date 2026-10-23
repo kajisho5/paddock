@@ -1,0 +1,65 @@
+{
+ "background": "gradient:#343D50,#0B0E14",
+ "darkBackground": "gradient:#1E2430,#05070A",
+ "groups": [
+  {
+   "name": "Glyph",
+   "props": {
+    "translucency": {
+     "enabled": false,
+     "value": 0
+    },
+    "specular": true,
+    "shadow": {
+     "kind": "neutral",
+     "opacity": 0.3
+    }
+   },
+   "layers": [
+    {
+     "file": "play.svg",
+     "name": "2 Glyph",
+     "props": {
+      "glass": true,
+      "fill": {
+       "linear-gradient": [
+        "#2EDB74",
+        "#0FA24C"
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "name": "Folder",
+   "props": {
+    "translucency": {
+     "enabled": true,
+     "value": 0.1
+    },
+    "blur-material": 0.2,
+    "specular": true,
+    "shadow": {
+     "kind": "neutral",
+     "opacity": 0.45
+    }
+   },
+   "layers": [
+    {
+     "file": "folder.svg",
+     "name": "1 Folder",
+     "props": {
+      "glass": true,
+      "fill": {
+       "linear-gradient": [
+        "#FFFFFF",
+        "#E6ECF5"
+       ]
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

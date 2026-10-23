@@ -17,7 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # 別アプリ（受付アプリなど）のときに差し替える名前。既定（variant=None）は SW NAS WATCH のまま
 WATCH = {"title": "SW NAS WATCH", "exe": "SW_NAS_WATCH.exe", "pyc": "sw_nas_watch.pyc",
-         "home_env": "SW_NAS_WATCH_HOME", "internal": "SW_NAS_WATCH", "ident": "SEVENTHWELL.SWNASWATCH"}
+         "home_env": "SW_NAS_WATCH_HOME", "internal": "SW_NAS_WATCH", "ident": "SEVENTHWELL.SWNASWATCH", "icon": "watch.ico"}
 
 
 def build(out, version, variant=None):
@@ -25,8 +25,11 @@ def build(out, version, variant=None):
     if not m:
         raise SystemExit("バージョンは x.y.z 形式で指定してください: %r" % version)
     with tempfile.TemporaryDirectory() as td:
-        for f in ("launcher.c", "app.ico", "app.manifest"):
+        for f in ("launcher.c", "app.manifest"):
             shutil.copy(os.path.join(HERE, f), td)
+        # アプリごとのアイコン（fresnel で作成。exe/icons/）
+        ico = os.path.join(HERE, "icons", (variant or WATCH).get("icon", "watch.ico"))
+        shutil.copy(ico, os.path.join(td, "app.ico"))
         rc = open(os.path.join(HERE, "launcher.rc"), encoding="ascii").read()
         rc = (rc.replace("@V1@", m.group(1)).replace("@V2@", m.group(2)).replace("@V3@", m.group(3))
                 .replace("@VER@", version))
