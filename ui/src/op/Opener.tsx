@@ -12,12 +12,13 @@ export interface OpenCfg { enabled: boolean; dest: string; dbl: "file" | "show" 
 export const OPEN: { settings: OpenCfg; dest: { id: string; label: string } | null } = { settings: { enabled: true, dest: "", dbl: "file", multi: "newest" }, dest: null };
 export function openLoad() { return api<any>("/api/op/open/settings").then((j) => { OPEN.settings = j.settings; OPEN.dest = j.dest; store.emit(); }).catch(() => {}); }
 
-export async function opOpen(root: string, group: string, rel: string, how: "file" | "show" | "folder") {
-  if (!store.S?.local) { toast("開くのは、このアプリを動かしているPCでのみできます", 4000); return; }
+export async function opOpen(root: string, group: string, rel: string, how: "file" | "show" | "folder"): Promise<boolean> {
+  if (!store.S?.local) { toast("開くのは、このアプリを動かしているPCでのみできます", 4000); return false; }
   try {
     const j: any = await api("/api/op/open", { root, group, rel: rel || "", how });
     toast((j.what === "folder" ? "フォルダを開いています（" + j.dest + "）" : j.what === "show" ? "スライドショーで開いています: " + j.name + "（" + j.dest + "）" : "開いています: " + j.name + "（" + j.dest + "）") + (j.msg ? "\n" + j.msg : ""), j.msg ? 7000 : 3000);
-  } catch (e: any) { toast(e.message, 8000); }
+    return true;
+  } catch (e: any) { toast(e.message, 8000); return false; }
 }
 if (IS_OP) {
   openLoad();

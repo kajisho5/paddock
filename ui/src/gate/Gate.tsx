@@ -211,7 +211,7 @@ export function GateApp() {
       if (!M || !ses || e.ctrlKey || e.metaKey || e.altKey || menu) return;   // メニューを開いている間は、後ろの一覧を動かさない
       const sel = store.SEL && store.SEL.root === M.r.id ? ses.list.findIndex((g) => g.key === store.SEL!.group) : -1;
       if (e.key === "n" || e.key === "N") { e.preventDefault(); nextUpGuard(M, ses); }
-      else if (e.key === "Enter" && sel >= 0 && !ses.list[sel].mk_drop && !menu && !store.q && !(e.target as HTMLElement).closest("button,a,[role=menu],[role=tab]")) { e.preventDefault(); setStage(M.r.id, ses.list[sel].key, "now"); }
+      else if (e.key === "Enter" && sel >= 0 && !ses.list[sel].mk_drop && !menu && !store.q && !(e.target as HTMLElement).closest("button,a,[role=menu],[role=tab]")) { e.preventDefault(); rowFx(ses.list[sel].key); setStage(M.r.id, ses.list[sel].key, "now"); }
       else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !store.q && !menu) {
         e.preventDefault(); const d = e.key === "ArrowDown" ? 1 : -1; let n = sel + d;
         while (ses.list[n] && ses.list[n].mk_drop) n += d;   // 取り下げは飛ばす
@@ -237,9 +237,13 @@ export function GateApp() {
 }
 
 let lastN = 0; let warnN = 0;
+function pressFx(id: string) {   // キーで押したときも、ボタンが押されたように見せる
+  const el = document.getElementById(id); if (!el) return;
+  el.classList.remove("kpress"); void el.offsetWidth; el.classList.add("kpress");
+}
 function nextUpGuard(M: Model, ses: Ses) {
   if (Date.now() - lastN < 400) return;   // 連打・ダブルクリックで2人進めない
-  lastN = Date.now();
+  lastN = Date.now(); pressFx("bNext");
   const lv = liveSes(M);
   if (lv && lv.key !== ses.key && Date.now() - warnN > 4000) {   // 進行中ではないセッションを見ているとき：もう一度押したら進める
     warnN = Date.now(); toast("いま表示しているのは進行中のセッションではありません（進行中：" + sesLabel(lv) + "）。このセッションで進めるなら、もう一度押してください", 4000); return;
@@ -456,7 +460,12 @@ function rowClick(e: React.MouseEvent, root: string, group: string) {
   LAST = { g: k, t: Date.now(), x: e.clientX, y: e.clientY }; selectGroup(root, group);
 }
 /* ダブルクリック：設定（［設定］→ 演者のスライドを開く）に合わせて開く */
+function rowFx(key: string) {   // 行が押されたように一瞬沈む
+  const el = document.querySelector<HTMLElement>(`.grow[data-g="${CSS.escape(key)}"]`); if (!el) return;
+  el.classList.remove("kpress"); void el.offsetWidth; el.classList.add("kpress");
+}
 function dblOpen(root: string, group: string) {
+  rowFx(group);
   if (!OPEN.settings.enabled) { toast("ダブルクリックで開くには、［設定］→「演者のスライドを開く」をオンにしてください", 7000); return; }
   opOpen(root, group, "", OPEN.settings.dbl);
 }
@@ -485,7 +494,7 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
   if (!g) return null;
   const has = g.files > 0 && OPEN.settings.enabled; const ok = canOpen(g);
   const it = (label: React.ReactNode, f: () => void, opt: { k?: string; dis?: boolean; ic?: React.ReactNode; id?: string } = {}) =>
-    <button className="it" id={opt.id} disabled={opt.dis} onClick={() => { close(); f(); }}>{opt.ic}{label}{opt.k && <kbd>{opt.k}</kbd>}</button>;
+    <button className="it" id={opt.id} disabled={opt.dis} onClick={(e) => { e.currentTarget.classList.add("hit"); setTimeout(() => { close(); f(); }, 90); }}>{opt.ic}{label}{opt.k && <kbd>{opt.k}</kbd>}</button>;
   const onKey = (e: React.KeyboardEvent) => {
     const bs = [...(ref.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") || [])]; const i = bs.indexOf(document.activeElement as HTMLButtonElement);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length]?.focus(); }
@@ -516,9 +525,26 @@ function FileTable({ F }: { F: Folder }) {
       <td className="num">{i.mk ? "" : fmtSize(i.s)}</td><td className="tm">{i.m ? dtm(i.m) : ""}</td>
       <td className="cps">{!i.mk && ds.map((d) => { const x = i.cp?.[d.id]; const y = x ? CPL[x[0]] : null; const k = !y ? "wait" : y[1] === "ok" ? "ok" : y[1] === "run" ? "run" : y[1] === "bad" ? "bad" : "wait";
         return <i key={d.id} className={"pc " + k} title={d.label + "：" + (y ? y[0] : "確認中") + (x && x[1] ? " — " + x[1] : "")} />; })}</td>
-      <td className="op">{!i.mk && <>{SHOWX.test(i.p) && <button className="gb icon sm" disabled={!ok} title="スライドショーで開く" onClick={() => opOpen(F.root, F.group, i.p, "show")}><Icon n="play" /></button>}
-        <button className="gb icon sm" disabled={!ok} title="開く" onClick={() => opOpen(F.root, F.group, i.p, "file")}><Icon n="file" /></button></>}</td></tr>;
+      <td className="op">{!i.mk && <>{SHOWX.test(i.p) && <OpenBtn cls="gb icon sm" how="show" F={F} rel={i.p} disabled={!ok} title="スライドショーで開く"><Icon n="play" /></OpenBtn>}
+        <OpenBtn cls="gb icon sm" how="file" F={F} rel={i.p} disabled={!ok} title="開く"><Icon n="file" /></OpenBtn></>}</td></tr>;
   })}</tbody></table>;
+}
+
+/* 押した手ごたえ：押す → 「開いています…」（くるくる）→ 開けたら「開きました」✓ を一瞬、だめなら軽く揺れる */
+function OpenBtn({ id, cls, how, F, rel = "", disabled, title, children, done }: {
+  id?: string; cls: string; how: "show" | "file" | "folder"; F: Folder; rel?: string; disabled?: boolean; title?: string; children: React.ReactNode; done?: string;
+}) {
+  const [st, setSt] = useState<"" | "run" | "ok" | "ng">("");
+  const t = useRef(0);
+  useEffect(() => () => clearTimeout(t.current), []);
+  const go = async () => {
+    if (st === "run") return;
+    setSt("run"); const ok = await opOpen(F.root, F.group, rel, how);
+    setSt(ok ? "ok" : "ng"); clearTimeout(t.current); t.current = window.setTimeout(() => setSt(""), ok ? 1400 : 600);
+  };
+  return <button id={id} className={cx(cls, "ob", st && "is-" + st)} disabled={disabled} title={title} onClick={go} aria-busy={st === "run" || undefined}>
+    <span className="ob-in">{st === "run" ? <><Icon n="spin" className="spin" />{done ? "開いています…" : null}</> : st === "ok" ? <><Icon n="chk" />{done || null}</> : children}</span>
+  </button>;
 }
 
 /* ---- 右：選んだ演者（本番で使うものだけ。解析の詳細はたたんでおく） */
@@ -559,9 +585,9 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
       <div className="no">{nm.no}{st === "now" && <span className="pill now">発表中</span>}{st === "done" && <span className="pill">発表済み</span>}</div>
       <h2 id="gdName">{nm.name}</h2><div className="by">{sesLabel({ name: ses, t: sesTime(ses) })}</div>
       <div className="go">
-        <button className="gb pri" id="bShow" disabled={!canShow} onClick={() => opOpen(F.root, F.group, "", "show")} title={!on ? "［設定］→「演者のスライドを開く」がオフです" : !canShow ? (g.files ? "このPCへのコピーが終わると開けます" : "データがありません") : byo ? "PC持込の演者です。本人のPCが使えないときに、入っているデータ（バックアップ）をスライドショーで開きます" : "発表ファイルをスライドショーで開きます（このPCのコピーから）"}><Icon n="play" />{byo && hasData(g) ? "バックアップを開く" : "スライドショー"}</button>
-        <button className="gb" id="bOpenF" disabled={!canShow} onClick={() => opOpen(F.root, F.group, "", "file")} title="発表ファイルを開く（PowerPoint など）"><Icon n="file" /></button>
-        <button className="gb" id="bFold" disabled={!on || !g.files} onClick={() => opOpen(F.root, F.group, "", "folder")} title="この演者のフォルダを開く（このPCのコピー）"><Icon n="folder" /></button>
+        <OpenBtn cls="gb pri" id="bShow" how="show" F={F} done="開きました" disabled={!canShow} title={!on ? "［設定］→「演者のスライドを開く」がオフです" : !canShow ? (g.files ? "このPCへのコピーが終わると開けます" : "データがありません") : byo ? "PC持込の演者です。本人のPCが使えないときに、入っているデータ（バックアップ）をスライドショーで開きます" : "発表ファイルをスライドショーで開きます（このPCのコピーから）"}><Icon n="play" />{byo && hasData(g) ? "バックアップを開く" : "スライドショー"}</OpenBtn>
+        <OpenBtn cls="gb" id="bOpenF" how="file" F={F} disabled={!canShow} title="発表ファイルを開く（PowerPoint など）"><Icon n="file" /></OpenBtn>
+        <OpenBtn cls="gb" id="bFold" how="folder" F={F} disabled={!on || !g.files} title="この演者のフォルダを開く（このPCのコピー）"><Icon n="folder" /></OpenBtn>
       </div>
     </div>
     {!canShow && g.files > 0 && <div className="gwhy">{!on ? "開けません：［設定］→「演者のスライドを開く」がオフです" : "開けません：" + (hasData(g) ? cp.t : "発表に使うファイルがありません（メモだけ）")}</div>}
@@ -590,8 +616,8 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
       {shows.length > 1 && <div className="r files"><dt>ファイル</dt><dd><ul className="gfiles">{shows.map((it) => {
         const c = it.cp?.[mainDest()]?.[0]; const ok = on && !!c && OPENABLE.includes(c);
         return <li key={it.p} data-p={it.p}><span className="fn" title={nfc(it.p)}>{nfc(it.p.split("/").pop())}{pres && pres.newest === it.p && <span className="gt" data-k="info">後から入った</span>}</span>
-          {SHOWX.test(it.p) && <button className="gb icon sm" disabled={!ok} title="スライドショーで開く" onClick={() => opOpen(F.root, F.group, it.p, "show")}><Icon n="play" /></button>}
-          <button className="gb icon sm" disabled={!ok} title="開く" onClick={() => opOpen(F.root, F.group, it.p, "file")}><Icon n="file" /></button></li>;
+          {SHOWX.test(it.p) && <OpenBtn cls="gb icon sm" how="show" F={F} rel={it.p} disabled={!ok} title="スライドショーで開く"><Icon n="play" /></OpenBtn>}
+          <OpenBtn cls="gb icon sm" how="file" F={F} rel={it.p} disabled={!ok} title="開く"><Icon n="file" /></OpenBtn></li>;
       })}</ul></dd></div>}
       {g.repl ? <div className="r"><dt>差し替え</dt><dd>{g.repl}回{g.repl_ts ? `（最終 ${dtm(g.repl_ts)}）` : ""}</dd></div> : null}
       {g.recv_ts ? <div className="r"><dt>受付</dt><dd>{hms(g.recv_ts)}</dd></div> : null}

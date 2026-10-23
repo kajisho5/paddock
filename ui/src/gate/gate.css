@@ -251,3 +251,27 @@
 }
 
 @keyframes fadeout-q{to{opacity:0}}
+
+/* ---- 押した手ごたえ（押すと少し沈んで、離すとふわっと戻る。キーで押したときも同じ） ---- */
+.gate .gb,.gate .gs,.gate .gchip.btn{transition:transform 200ms var(--ease-spring),background-color 120ms var(--ease-out),border-color 120ms var(--ease-out)}
+.gate .gb:active:not(:disabled),.gate .gchip.btn:active{transform:scale(.95);transition-duration:60ms;background:var(--g-active)}
+.gate .gb.pri:active:not(:disabled){background:#4F5AC0}
+.gate .gs:active{transform:scale(.985);transition-duration:60ms}
+.gate .grow.grp:active{background:var(--g-active);transition:background-color 60ms}
+@keyframes kpress{0%{transform:scale(1)}30%{transform:scale(.95)}100%{transform:scale(1)}}
+@keyframes kpress-row{0%{background:transparent}25%{background:var(--g-active)}100%{background:transparent}}
+.gate .gb.kpress{animation:kpress 280ms var(--ease-out)}
+.gate .grow.kpress{animation:kpress-row 420ms var(--ease-out)}
+.gate .gmenu .it.hit{background:var(--g-accent-dim)}
+/* 開くボタン：開いています… → ✓ 開きました（一瞬） → 元に。だめなら軽く横に揺れる */
+.ob .ob-in{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.ob.is-run{cursor:progress}
+.ob.is-ok .ob-in svg{animation:okpop 360ms var(--ease-spring) both}
+.ob.is-ok:not(.pri){color:var(--g-received);border-color:rgba(78,167,252,.45)}
+@keyframes okpop{0%{transform:scale(.4);opacity:0}100%{transform:scale(1);opacity:1}}
+.ob.is-ng{animation:ng 360ms var(--ease-out)}
+@keyframes ng{0%,100%{transform:translateX(0)}20%{transform:translateX(-4px)}45%{transform:translateX(4px)}70%{transform:translateX(-2px)}}
+@media (prefers-reduced-motion: reduce){
+  .gate .gb:active:not(:disabled),.gate .gs:active,.gate .gchip.btn:active{transform:none}
+  .gate .gb.kpress,.ob.is-ok .ob-in svg,.ob.is-ng{animation:none}
+}
