@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.7.4"
+VERSION = "1.8.0"
 DEFAULT_PORT = 8797
 
 
@@ -1262,6 +1262,44 @@ def newest_of(base, items):
     return ts[0][1]
 
 
+class Stage:
+    """発表の進み具合（発表中・発表済み）。このPCのデータフォルダにだけ記録し、NASには何も書かない。"""
+    NAME = "present.json"
+    KEEP = 21 * 86400
+
+    def __init__(self, mgr):
+        self.mgr = mgr
+        self.lock = threading.Lock()
+        d = mgr.store.read_json(self.NAME, None)
+        st = d.get("st") if isinstance(d, dict) else None
+        now = time.time()
+        self.st = {k: v for k, v in (st or {}).items()
+                   if isinstance(k, str) and isinstance(v, dict) and v.get("st") in ("now", "done") and now - float(v.get("ts") or 0) < self.KEEP}
+
+    def get(self):
+        with self.lock:
+            return {"st": dict(self.st)}
+
+    def set(self, root, group, st):
+        if not root or not group or len(root) > 200 or len(group) > 2000:
+            raise ValueError("演者の指定が不正です")
+        if st not in ("now", "done", ""):
+            raise ValueError("状態の指定が不正です")
+        key = root + "|" + group
+        now = time.time()
+        with self.lock:
+            if st == "now":   # 発表中は1人だけ。前の人は発表済みにする
+                for k, v in self.st.items():
+                    if v["st"] == "now" and k != key:
+                        self.st[k] = {"st": "done", "ts": now}
+            if st:
+                self.st[key] = {"st": st, "ts": now}
+            else:
+                self.st.pop(key, None)
+            self.mgr.store.write_json(self.NAME, {"v": 1, "st": self.st})
+            return {"st": dict(self.st)}
+
+
 class Opener:
     """演者のスライド・フォルダを、このPCのコピー先（コピー済みのもの）から開く。
     NAS上のファイルは開かない（会場側・受付の差し替えに影響を出さないため。PowerPointの鍵ファイルもNASに作らない）。"""
@@ -1392,6 +1430,10 @@ class OpHandler(W.Handler):
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
             return self.send_json(self.server.opener.get())
+        if u.path == "/api/op/stage":
+            if not self.is_local():
+                return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
+            return self.send_json(self.server.stage.get())
         if u.path.startswith("/api/op/net"):
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
@@ -1426,6 +1468,9 @@ class OpHandler(W.Handler):
                                                               str(body.get("rel") or ""), str(body.get("how") or "")))
             if u.path == "/api/op/open/settings":
                 return self.send_json(self.server.opener.set(body))
+            if u.path == "/api/op/stage":
+                return self.send_json(self.server.stage.set(str(body.get("root") or ""), str(body.get("group") or ""),
+                                                            str(body.get("st") or "")))
             if u.path == "/api/op/net/check":
                 d = body.get("dests")
                 return self.send_json(net.check(d if isinstance(d, list) else None))
@@ -1496,6 +1541,7 @@ def main():
     srv.page = build_page()
     srv.net = NetTools(mgr, data_dir)
     srv.opener = Opener(mgr, data_dir)
+    srv.stage = Stage(mgr)
     mgr.start()
     W.start_autoquit(srv, enabled=False)
 

@@ -10,6 +10,7 @@ import { openCfg, SettingsDialog } from "./components/Settings";
 import { NetDialog } from "./op/Net";
 import { AddDialog, UsbDialog } from "./rx/RxPanel";
 import { cx } from "./lib/util";
+import { GateApp } from "./gate/Gate";
 
 let setupShown = false;
 export function App() {
@@ -26,6 +27,13 @@ export function App() {
     };
     document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k);
   }, []);
+  if (IS_OP && s.S && OPON()) return <>
+    <GateApp />
+    <SettingsDialog />
+    <NetDialog />
+    {s.quit && <div className="quitov"><div><b>終了しました</b>このウィンドウを閉じてください。もう一度使うときは、アプリ（exe）を起動してください。</div></div>}
+    <div id="toast" className={cx("toast", s.toastMsg && "on")} key={s.toastSeq}>{s.toastMsg}</div>
+  </>;
   return <div className={cx("app", "v-" + s.view, s.logOpen && "showlog", s.drawer && "drawer", IS_OP && "k-op", IS_RX && "k-rx")}>
     <Header />
     <OpStrip />

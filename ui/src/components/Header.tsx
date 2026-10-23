@@ -70,7 +70,7 @@ function Roots() {
 
 /* 変更ログの開閉ボタン：閉じている間に増えた件数を小さく出す */
 let LOG_SEEN = -1;
-function LogButton() {
+export function LogButton() {
   const s = useApp(); const evs = s.S ? s.S.events : [];
   const last = evs.length ? evs[evs.length - 1].id : 0;
   if (LOG_SEEN < 0 && s.S) LOG_SEEN = last;

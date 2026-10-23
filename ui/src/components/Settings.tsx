@@ -27,7 +27,7 @@ export async function openCfg() {
 }
 export function closeModal() { store.modal = null; store.emit(); }
 
-const MKROLES: [string, string][] = [["recv", "受付済にする"], ["got", "会場取得済にする"], ["done", "発表終了にする"], ["drop", "取り下げ（数に入れない）"], ["direct", "会場直（未受付にしない）"], ["warn", "注意（黄色のチップ）"], ["info", "チップで表示するだけ"]];
+const MKROLES: [string, string][] = [["recv", "受付済にする"], ["got", "会場取得済にする"], ["done", "発表終了にする"], ["drop", "取り下げ（数に入れない）"], ["direct", "会場直（未受付にしない）"], ["warn", "注意（黄色のチップ）"], ["op", "オペが対応（発表者ツール・演台上げなど）"], ["info", "チップで表示するだけ"]];
 const NK: [string, string][] = [["incoming", "受信開始（コピー中にすぐ知らせる）"], ["folder_new", "新しい演者フォルダ"], ["add", "ファイル追加"], ["mod", "ファイル更新（差し替え）"], ["rename", "ファイル名変更"], ["del", "ファイル削除"], ["folder_rename", "フォルダ名変更"], ["folder_del", "フォルダ削除"], ["offline", "NAS接続断"], ["online", "NAS復帰"]];
 
 function DepthSel({ v, on }: { v: number; on: (n: number) => void }) {

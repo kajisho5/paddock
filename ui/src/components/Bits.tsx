@@ -55,10 +55,10 @@ export function AnaChips({ a }: { a?: AnaSum }) {
     {!!a.noclick && <Tag t="bad">クリック無効</Tag>}
   </>;
 }
-/* 目印のチップ（注意 → 会場直 → 表示だけ の順。max を超えた分は「+n」） */
-const FLO: Record<string, number> = { warn: 0, direct: 1, info: 2 };
+/* 目印のチップ（注意 → オペ対応 → 会場直 → 表示だけ の順。max を超えた分は「+n」） */
+export const FLO: Record<string, number> = { warn: 0, op: 1, direct: 2, info: 3 };
 export function FlagChips({ g, max }: { g: Group; max?: number }) {
-  const f = (g.fl || []).map((x, i) => [x[0], x[1], i] as [string, string, number]).sort((a, b) => (FLO[a[1]] ?? 3) - (FLO[b[1]] ?? 3) || a[2] - b[2]);
+  const f = (g.fl || []).map((x, i) => [x[0], x[1], i] as [string, string, number]).sort((a, b) => (FLO[a[1]] ?? 4) - (FLO[b[1]] ?? 4) || a[2] - b[2]);
   if (!f.length) return null;
   const sh = max && f.length > max ? f.slice(0, max - 1) : f;
   return <>{sh.map(([l, r]) => <span key={l} className={"fl fl-" + r} title={"目印：" + nfc(l)}>{nfc(l)}</span>)}

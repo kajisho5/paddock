@@ -148,7 +148,7 @@ function VideoRow(a: Analysis, open: boolean, setOpen: (v: boolean) => void): AR
   return ["動画", cls, `あり ${nv}${sum ? "（" + sum + "）" : ""}`, <>{body}{nv > vs.length && <span className="sub">ほか {nv - vs.length}本（表示を省略）</span>}</>];
 }
 const autoText = (auto: [number, number][]) => { const m = new Map<number, number[]>(); auto.forEach(([s2, sec]) => { if (!m.has(sec)) m.set(sec, []); m.get(sec)!.push(s2); }); return [...m].map(([sec, ss]) => `${sl(ss)}：${sec}秒`).join("　"); };
-function AnaCard({ it }: { it: FolderItem }) {
+export function AnaCard({ it }: { it: FolderItem }) {
   const [open, setOpen] = useState(false);
   const a = it.a!; const chip = <span className={"chip c-" + it.c}>{it.c}</span>; const nm = nfc(it.p);
   if (a.na) return <div className="ana"><div className="hd">{chip}<span className="fn">{nm}</span><Tag t="dim">{a.na}</Tag></div></div>;
