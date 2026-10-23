@@ -81,7 +81,7 @@ export function OpenSettings({ c }: { c: Config }) {
   </div>;
 }
 export async function openSettingsSave() {
-  if (!draft) return;
+  if (!draft) { setTimeout(() => openLoad(), 800); return; }   // コピー先を変えたときも「開くコピー」を読み直す
   const j: any = await api("/api/op/open/settings", draft); OPEN.settings = j.settings; OPEN.dest = j.dest; draft = null;
   setTimeout(() => openLoad(), 800);
 }

@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.8.7"
+VERSION = "1.8.8"
 DEFAULT_PORT = 8797
 
 
@@ -1293,12 +1293,13 @@ def _bring_front(hint, show, before, gen, timeout=12.0):
             ft = u.GetWindowThreadProcessId(fg, None) if fg else 0
             att = bool(ft and ft != me and u.AttachThreadInput(me, ft, True))
             try:
-                u.keybd_event(0x12, 0, 0, 0)          # Alt を一瞬押す（前に出すことを Windows に許してもらう）
-                u.keybd_event(0x12, 0, 2, 0)
                 if u.IsIconic(h):
                     u.ShowWindow(h, 9)                # 最小化されていたら戻す
                 u.BringWindowToTop(h)
-                u.SetForegroundWindow(h)
+                if not u.SetForegroundWindow(h) or u.GetForegroundWindow() != h:
+                    u.keybd_event(0x12, 0, 0, 0)      # だめなときだけ Alt を一瞬押す（前に出すことを Windows に許してもらう）
+                    u.keybd_event(0x12, 0, 2, 0)
+                    u.SetForegroundWindow(h)
             finally:
                 if att:
                     u.AttachThreadInput(me, ft, False)
@@ -1347,7 +1348,7 @@ try {
     if ($full -ieq $path) { $pres = $p; break }
     if ($p.Name -ieq $name) { Out @{ err = 'samename'; other = $p.FullName }; exit 0 }
   }
-  if ($pres -eq $null) { $pres = $pp.Presentations.Open($path, 0, 0, -1) }
+  if ($pres -eq $null) { $ro = 0; if ($req.ro) { $ro = -1 }; $pres = $pp.Presentations.Open($path, $ro, 0, -1) }
   if ($req.show) {
     $w = $null
     foreach ($sw in @($pp.SlideShowWindows)) { if ($sw.Presentation.FullName -ieq $pres.FullName) { $w = $sw } }
@@ -1367,13 +1368,17 @@ def ppt_open_com(path, show):
     別の演者の同じ名前のファイルが開いていれば、開かずに知らせる（前の人のスライドは閉じない）。
     戻り値：hwnd（int）／PowerPoint で頼めないとき None（そのときは従来の開き方にする）"""
     ps = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-    env = dict(os.environ, SWNAS_PPTREQ=base64.b64encode(json.dumps({"path": path, "show": bool(show)}, ensure_ascii=False).encode("utf-8")).decode("ascii"))
+    ro = path.startswith("\\\\") or path.startswith("//")   # 別のPCのコピー：読み取り専用で開く（そのPCの差し替えを止めない）
+    env = dict(os.environ, SWNAS_PPTREQ=base64.b64encode(json.dumps({"path": path, "show": bool(show), "ro": ro}, ensure_ascii=False).encode("utf-8")).decode("ascii"))
     enc = base64.b64encode(PPT_PS.encode("utf-16-le")).decode("ascii")
-    try:
-        r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
-                           capture_output=True, timeout=40, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    with _PPT_LOCK:   # 2つ同時に頼まない（二重に開かないように）
+        try:
+            r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
+                               capture_output=True, timeout=20, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired:
+            raise ValueError("PowerPoint が応答しません。PowerPoint にメッセージ（サインイン・パスワード・確認など）が出ていないか見てください")
+        except OSError:
+            return None
     txt = r.stdout.decode("utf-8", "replace").lstrip("\ufeff").strip()
     try:
         data = json.loads(txt[txt.index("{"):]) if "{" in txt else {}
@@ -1402,12 +1407,13 @@ def _front_hwnd(h, timeout=3.0):
             ft = u.GetWindowThreadProcessId(fg, None) if fg else 0
             att = bool(ft and ft != me and u.AttachThreadInput(me, ft, True))
             try:
-                u.keybd_event(0x12, 0, 0, 0)
-                u.keybd_event(0x12, 0, 2, 0)
                 if u.IsIconic(hw):
                     u.ShowWindow(hw, 9)
                 u.BringWindowToTop(hw)
-                u.SetForegroundWindow(hw)
+                if not u.SetForegroundWindow(hw) or u.GetForegroundWindow() != hw.value:
+                    u.keybd_event(0x12, 0, 0, 0)
+                    u.keybd_event(0x12, 0, 2, 0)
+                    u.SetForegroundWindow(hw)
             finally:
                 if att:
                     u.AttachThreadInput(me, ft, False)
@@ -1417,6 +1423,7 @@ def _front_hwnd(h, timeout=3.0):
 
 
 PPT_COM = ppt_open_com              # テストでは差し替える
+_PPT_LOCK = threading.Lock()
 
 
 def open_native(path, how):
@@ -1542,7 +1549,7 @@ class Opener:
     """演者のスライド・フォルダを、このPCのコピー先（コピー済みのもの）から開く。
     NAS上のファイルは開かない（会場側・受付の差し替えに影響を出さないため。PowerPointの鍵ファイルもNASに作らない）。"""
     LABELS = {"todo": "コピー待ち", "copying": "コピー中", "wait": "NASへの受信が終わるのを待っています", "srcbusy": "NAS側で使用中",
-              "busy": "差し替え待ち", "old": "前の版（新しい版を受信中）", "off": "コピー先に接続できません", "err": "コピーできませんでした"}
+              "busy": "差し替え待ち", "old": "新しい版をNASで受信中", "off": "コピー先に接続できません", "err": "コピーできませんでした"}
 
     def __init__(self, mgr, data_dir):
         self.mgr = mgr
@@ -1597,6 +1604,9 @@ class Opener:
         group = str(group or "")
         if not group or (prefix and not group.startswith(prefix)):
             raise ValueError("この会場の演者フォルダではありません")
+        if any(x in ("", ".", "..") or any(c in x for c in '\\:*?"<>|') for x in group.split("/")) or \
+                any(x in (".", "..") or any(c in x for c in '\\:*?"<>|') for x in str(rel or "").split("/") if rel):
+            raise ValueError("演者フォルダの指定が正しくありません")
         sub = W.op_sub(op, group)
         base = os.path.join(d["path"], *sub.split("/"))
         fp = self.mgr.folder_payload(root, group)
@@ -1617,7 +1627,7 @@ class Opener:
                     target = nw
                     msg = "発表ファイルが%d個あるため、後から入った「%s」を開きました" % (len(top), nw["p"].split("/")[-1])
                 else:
-                    msg = "発表ファイルが%d個あるため、フォルダを開きました（フォルダ画面の［開く］から選べます）" % len(top)
+                    msg = "発表ファイルが%d個あるため、フォルダを開きました（右の「ファイル」の一覧から選んで開けます）" % len(top)
             else:
                 msg = "発表ファイル（PowerPoint・PDFなど）がないため、フォルダを開きました"
         if target is None:
@@ -1627,12 +1637,15 @@ class Opener:
             return {"ok": True, "what": "folder", "path": base, "dest": d["label"], "msg": msg}
         st = self._state(target, d["id"])
         name = target["p"].split("/")[-1]
-        if st not in OPENABLE_STATES:
+        path = os.path.join(base, *target["p"].split("/"))
+        have = os.path.isfile(W.long_path(path))   # コピー先のファイルは必ず書き終わったもの（書きかけは別名の一時ファイル）
+        if st not in OPENABLE_STATES and not (have and st not in ("off",)):
             raise ValueError("「%s」は「%s」へまだコピーが終わっていません（%s）。終わってから開いてください"
                              % (name, d["label"], self.LABELS.get(st, "コピー待ち")))
-        path = os.path.join(base, *target["p"].split("/"))
-        if not os.path.isfile(W.long_path(path)):
+        if not have:
             raise ValueError("「%s」の中に「%s」が見つかりません" % (d["label"], name))
+        if st not in ("ok", "edited"):   # 前にコピーした版を開く（新しい版はまだ）
+            msg = ((msg + "\n") if msg else "") + "前の版を開きました。新しい版はまだこのPCにありません（%s）" % self.LABELS.get(st, "コピー待ち")
         show = how == "show" and os.path.splitext(name)[1].lower() in SHOW_EXT
         OPEN_FN(path, "show" if show else "file")
         return {"ok": True, "what": "show" if show else "file", "path": path, "dest": d["label"], "name": name, "msg": msg}

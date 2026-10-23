@@ -119,7 +119,7 @@ export function OpSection({ c, up, part }: { c: Config; up: () => void; part: "v
   }
   return <>
     {c.roots.length ? <div className="grid2">
-      {c.roots.length > 1 && <><span>学会フォルダ</span><span><select id="opRoot" value={op.root} onChange={(e) => { op.root = e.target.value; op.venue = ""; op.days = []; OPD.dirs = null; up(); }}>
+      {c.roots.length > 1 && <><span>学会フォルダ</span><span><select id="opRoot" value={op.root} onChange={(e) => { if (op._dm) setMode(false); op.root = e.target.value; op.venue = ""; op.days = []; OPD.dirs = null; up(); }}>
         {c.roots.map((r, i) => <option key={i} value={r.id || "#" + i}>{r.label || r.path}</option>)}</select></span></>}
       <span>フォルダの分け方</span><span className="checks col">
         <label><input type="radio" name="opDm" value="0" checked={!op._dm} onChange={() => setMode(false)} />学会 → 会場 → セッション → 演者</label>

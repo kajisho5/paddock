@@ -134,7 +134,7 @@
 .grow .rcv.received{color:var(--g-received)}.grow .rcv.pending{color:var(--g-text-2)}.grow .rcv.error{color:var(--g-error)}.grow .rcv.drop{color:var(--g-text-3)}
 .grow .no{font:400 12px var(--mono);color:var(--g-text-2);flex:none;min-width:34px}
 .gate .grow .nm{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:0}
-.grow .tags{display:flex;gap:6px;flex:none}
+.grow .tags{display:flex;gap:6px;flex:0 1 auto;min-width:0;overflow:hidden;max-width:42%}
 .grow .gap{flex:1}
 .grow .state{font-size:12px;color:var(--g-text-2);min-width:120px;display:flex;align-items:center;justify-content:flex-end;gap:6px;flex:none;white-space:nowrap}
 .gate .grow.past .nm,.gate .grow.past .no{color:var(--g-text-2)}
@@ -173,6 +173,10 @@
 .gwarn .ri{margin-top:3px}
 .gwarn > div{display:flex;flex-direction:column;gap:6px;min-width:0}
 .gwarn b{display:block;font-weight:500}.gwarn span{color:var(--g-text-2);font-size:12px;word-break:break-all}
+.gwhy{margin:10px 16px 0;font-size:12px;color:var(--g-text-2)}.gwhy.warn{color:var(--g-progress)}
+.gnow .keys{grid-column:1/-1;font-size:11px;color:var(--g-text-2);margin-top:-6px;text-align:right}
+.gchip.warnc{border-color:rgba(242,201,76,.45);color:var(--g-text)}.gchip.warnc b{color:var(--g-progress)}
+.gchip span{color:var(--g-text-2)}
 .gbyo{margin:14px 16px 0;padding:10px 12px;border:1px solid var(--g-border-strong);border-radius:8px;display:flex;flex-direction:column;gap:2px}
 .gbyo b{font-weight:500}.gbyo span{color:var(--g-text-2);font-size:12px}
 .gdet .sec{font:500 11px var(--sans);color:var(--g-text-2);padding:16px 16px 6px}

@@ -23,24 +23,24 @@ import "./gate.css";
 type Stage = "now" | "done";
 const STG: { st: Record<string, { st: Stage; ts: number }>; loaded: boolean } = { st: {}, loaded: false };
 /* 保存は1つずつ順番に送る（速く続けて押しても、サーバーで順番が入れ替わらない）。送っている間は読み直しの結果で上書きしない */
-let stQ: Promise<void> = Promise.resolve(); let stPending = 0;
+let stQ: Promise<void> = Promise.resolve(); let stPending = 0; let stWrites = 0;
 async function stageLoad() {
-  if (stPending) return;
-  try { const j: any = await api("/api/op/stage"); if (stPending) return; STG.st = j.st || {}; STG.loaded = true; store.emit(); } catch { /* 古いサーバー */ }
+  if (stPending) return; const w0 = stWrites;
+  try { const j: any = await api("/api/op/stage"); if (stPending || stWrites !== w0) return; STG.st = j.st || {}; STG.loaded = true; store.emit(); } catch { /* 古いサーバー */ }
 }
 export function setStage(root: string, group: string, st: Stage | "") {
   const k = root + "|" + group; const n = { ...STG.st };
   if (st === "now") for (const x of Object.keys(n)) if (n[x].st === "now" && x !== k) n[x] = { st: "done", ts: Date.now() / 1000 };
   if (st) n[k] = { st, ts: Date.now() / 1000 }; else delete n[k];
   STG.st = n; store.emit();   // 先に画面を変えて、保存はあとから
-  stPending++;
+  stPending++; stWrites++;
   stQ = stQ.then(async () => {
     try { const j: any = await api("/api/op/stage", { root, group, st }); if (stPending === 1 && j.st) { STG.st = j.st; store.emit(); } }
     catch (e: any) { toast("発表の状態を保存できませんでした：" + e.message, 6000); stPending--; await stageLoad(); stPending++; }
     finally { stPending--; }
   });
 }
-const stageOf = (root: string, g: string): Stage | "" => STG.st[root + "|" + g]?.st || (rootById(root)?.groups || []).find((x) => x.key === g)?.mk_done && "done" || "";
+const stageOf = (root: string, g: string, gr?: Group): Stage | "" => STG.st[root + "|" + g]?.st || ((gr ?? (rootById(root)?.groups || []).find((x) => x.key === g))?.mk_done ? "done" : "");
 
 /* ---------------------------------------------------------------- データの組み立て */
 interface Ses { key: string; name: string; day: string; t: STime | null; list: Group[] }
@@ -88,12 +88,16 @@ function needCheck(g: Group) {
   const a = g.ana; const cp = Object.values(g.cp || {});
   return !!(a && (a.vfbad || a.abad || a.noclick || a.err)) || cp.includes("err") || (g.fl || []).some((f) => f[1] === "warn");
 }
+/* 受付済みか：目印（受付済・取得済・発表終了・会場直）があるか、発表に使うデータがあるか（メモの .txt だけでは受付済みにしない） */
+const isRecvG = (g: Group) => !!(g.mk_recv || g.mk_got || g.mk_done || g.mk_direct) || hasData(g) || (!!g.pending && isRecv(g));
 function rcOf(g: Group): RC {
   if (g.mk_drop) return "drop"; if (needCheck(g)) return "error";
-  if (g.mk_got || g.mk_done) return "got"; if (g.mk_direct && !g.files && !g.mk_recv) return "direct";
-  if (isRecv(g)) return "received";
+  if (g.mk_got || g.mk_done) return "got"; if (g.mk_direct && !hasData(g) && !g.mk_recv) return "direct";
+  if (isRecvG(g)) return "received";
   return isBYO(g) ? "byo" : "pending";   // PC持込でデータなし：未受付ではない
 }
+/* 受付の数（左の一覧・発表順の見出しで同じ数え方） */
+const recvCount = (L: Group[]) => L.filter((g) => isRecvG(g) || isBYO(g)).length;
 const RCL: Record<RC, string> = { received: "受付済", got: "取得済", direct: "会場直", byo: "持込", pending: "未受付", error: "要確認", drop: "取下げ" };
 const RCT: Record<RC, string> = { received: "受付済み", got: "会場取得済（「取得済」の目印あり）", direct: "会場直（データは会場で受け取る）", byo: "PC持込（本人のPCで発表。データなしでもよい）", pending: "まだ受付していません", error: "要確認（下のラベル・右の注意を見てください）", drop: "演題取り下げ" };
 function RIcon({ k }: { k: RC | "done" | "live" | "progress" }) {
@@ -109,18 +113,21 @@ function RIcon({ k }: { k: RC | "done" | "live" | "progress" }) {
 
 /* このPCのコピー（行の右） */
 const mainDest = () => OPEN.dest?.id || opDests()[0]?.id || "";
-function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: string; pct?: number } {
+function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: string; pct?: number; tip?: string } {
   const S = store.S!; const a = S.op.active;
   if (a && a.rel.startsWith(g.key + "/") && (!a.dests || a.dests.includes(mainDest()))) { const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; return { k: "run", t: "コピー中 " + pct + "%", pct }; }
   if (g.pending) {   // NASへ書き込み中：受信済みサイズ・速度・経過時間
     const r = rootById(S.op.root || ""); const v = r ? rateOf(r.id, g) : 0;
-    return { k: "run", t: (canOpen(g) ? "DL済・差し替えを受信中" : "NASに受信中") + (g.pbytes ? " " + fmtSize(g.pbytes) : "") + (v ? " · " + fmtSize(v) + "/s" : "") + (g.pstart ? " · " + mss(Date.now() / 1000 + store.SKEW - g.pstart) : "") };
+    return { k: "run", t: (canOpen(g) ? "DL済・差し替えを受信中" : "NASに受信中") + (g.pbytes ? " " + fmtSize(g.pbytes) : ""),
+      tip: "NASに受信中" + (g.pbytes ? " " + fmtSize(g.pbytes) : "") + (v ? " · " + fmtSize(v) + "/s" : "") + (g.pstart ? " · 経過 " + mss(Date.now() / 1000 + store.SKEW - g.pstart) : "") };
   }
   if (!hasData(g)) return { k: "none", t: isBYO(g) ? "PC持込（データなし）" : g.files ? "データなし（メモだけ）" : "データなし" };
   const st: CpState | undefined = g.cp?.[mainDest()];
   if (!st) return { k: "wait", t: "確認中" };
-  if (st === "ok" || st === "edited") return { k: "ok", t: isBYO(g) ? "DL済（バックアップ）" : "DL済" };
-  if (st === "old") return { k: "run", t: "前の版あり・新しい版を受信中" };
+  if (st === "ok") return { k: "ok", t: isBYO(g) ? "DL済（バックアップ）" : "DL済" };
+  if (st === "edited") return { k: "ok", t: "DL済（このPCで変更あり）" };
+  const ps = g.cpp?.[mainDest()];
+  if (ps === "old") return { k: "run", t: "前の版あり・新しい版はまだ" };
   if (st === "copying") return { k: "run", t: "コピー中" };
   if (st === "err" || st === "off") return { k: "bad", t: CPL[st][0] };
   return { k: "wait", t: CPL[st]?.[0] || st };
@@ -173,12 +180,19 @@ function Tags({ g, max = 2, fresh }: { g: Group; max?: number; fresh?: Set<strin
 /* ---------------------------------------------------------------- 選んでいるセッション（このPCに保存） */
 const GS: { ses: string; auto: boolean } = { ses: "", auto: true };
 try { const v = localStorage.getItem("gate.ses"); if (v) { GS.ses = v; GS.auto = false; } } catch { /* */ }
+/* いま本番で進んでいるセッション（発表中の人がいる／時刻が進行中） */
+function liveSes(M: Model): Ses | null {
+  return M.sessions.find((x) => x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now")) || M.sessions.find((x) => M.tl.get(x.key)?.st === "live") || null;
+}
 function pickSes(k: string, manual = true) { GS.ses = k; GS.auto = !manual; try { manual ? localStorage.setItem("gate.ses", k) : localStorage.removeItem("gate.ses"); } catch { /* */ } store.emit(); }
 function curSes(M: Model): Ses | null {
   const ss = M.sessions; if (!ss.length) return null;
   const hit = !GS.auto && ss.find((x) => x.key === GS.ses); if (hit) return hit;
+  const now = ss.find((x) => x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now"));   // 発表中の人がいるセッション（時間が延びていても）
+  if (now) return now;
   const live = ss.find((x) => M.tl.get(x.key)?.st === "live") || ss.find((x) => M.tl.get(x.key)?.st === "next");
-  return live || ss[0];
+  if (live) return live;
+  return M.tl.size && [...M.tl.values()].every((x) => x.st === "done") ? ss[ss.length - 1] : ss[0];
 }
 
 /* ---------------------------------------------------------------- 画面 */
@@ -187,23 +201,24 @@ export function GateApp() {
   useEffect(() => { stageLoad(); const t = window.setInterval(stageLoad, 15000); return () => clearInterval(t); }, []);
   const ses = M ? curSes(M) : null;
   const [menu, setMenu] = useState<{ x: number; y: number; g: string } | null>(null);
-  useEffect(() => { setMenu(null); }, [ses?.key, M?.day]);
+  useEffect(() => { setMenu(null); }, [ses?.key, M?.day, s.q]);
   /* キーボード：N＝次の人へ、Enter＝選んでいる人を発表中に、↑↓＝選ぶ、Esc＝メニュー・ログを閉じる */
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (store.modal || (e.target as HTMLElement).closest("input,textarea,select")) return;
-      if (e.key === "Escape") { if (menu) { setMenu(null); e.preventDefault(); } else if (store.q) { store.q = ""; store.emit(); e.preventDefault(); } return; }
+      if (e.key === "Escape") { if (menu) { setMenu(null); e.preventDefault(); e.stopImmediatePropagation(); } else if (store.q) { store.q = ""; store.emit(); e.preventDefault(); e.stopImmediatePropagation(); } return; }
       if (e.repeat) return;   // 押しっぱなしで何人も進めない
       if (!M || !ses || e.ctrlKey || e.metaKey || e.altKey) return;
       const sel = store.SEL && store.SEL.root === M.r.id ? ses.list.findIndex((g) => g.key === store.SEL!.group) : -1;
-      if (e.key === "n" || e.key === "N") { e.preventDefault(); if (Date.now() - lastN > 400) { lastN = Date.now(); nextUp(M.r, ses); } }
-      else if (e.key === "Enter" && sel >= 0 && !menu && !store.q && !(e.target as HTMLElement).closest("button,a,[role=menu],[role=tab]")) { e.preventDefault(); setStage(M.r.id, ses.list[sel].key, "now"); }
+      if (e.key === "n" || e.key === "N") { e.preventDefault(); if (Date.now() - lastN > 400) { lastN = Date.now(); nextUpGuard(M, ses); } }
+      else if (e.key === "Enter" && sel >= 0 && !ses.list[sel].mk_drop && !menu && !store.q && !(e.target as HTMLElement).closest("button,a,[role=menu],[role=tab]")) { e.preventDefault(); setStage(M.r.id, ses.list[sel].key, "now"); }
       else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !store.q && !menu) {
-        e.preventDefault(); const n = Math.max(0, Math.min(ses.list.length - 1, sel + (e.key === "ArrowDown" ? 1 : -1)));
+        e.preventDefault(); const d = e.key === "ArrowDown" ? 1 : -1; let n = sel + d;
+        while (ses.list[n] && ses.list[n].mk_drop) n += d;   // 取り下げは飛ばす
         if (ses.list[n]) selectGroup(M.r.id, ses.list[n].key);
       }
     };
-    document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k);
+    document.addEventListener("keydown", k, true); return () => document.removeEventListener("keydown", k, true);   // 先に受ける（Esc を二重に使わない）
   });
   return <div className={cx("gate", s.logOpen && "showlog")}>
     <Side M={M} ses={ses} />
@@ -221,11 +236,18 @@ export function GateApp() {
   </div>;
 }
 
-let lastN = 0;
+let lastN = 0; let warnN = 0;
+function nextUpGuard(M: Model, ses: Ses) {
+  const lv = liveSes(M);
+  if (lv && lv.key !== ses.key && Date.now() - warnN > 4000) {   // 進行中ではないセッションを見ているとき：もう一度押したら進める
+    warnN = Date.now(); toast("いま表示しているのは進行中のセッションではありません（進行中：" + sesLabel(lv) + "）。このセッションで進めるなら、もう一度押してください", 4000); return;
+  }
+  warnN = 0; nextUp(M.r, ses);
+}
 function nextUp(r: Root, ses: Ses) {
   const L = ses.list.filter((g) => !g.mk_drop);
-  const i = L.findIndex((g) => stageOf(r.id, g.key) === "now");
-  const nx = i >= 0 ? L[i + 1] : L.find((g) => stageOf(r.id, g.key) !== "done");
+  const i = L.findIndex((g) => stageOf(r.id, g.key, g) === "now");
+  const nx = i >= 0 ? L[i + 1] : L.find((g) => stageOf(r.id, g.key, g) !== "done");
   if (i >= 0 && !nx) { setStage(r.id, L[i].key, "done"); toast("このセッションの最後の演者でした（発表済みにしました）", 4000); return; }
   if (!nx) { toast("このセッションは全員発表済みです", 3000); return; }
   setStage(r.id, nx.key, "now"); selectGroup(r.id, nx.key);
@@ -245,7 +267,7 @@ function Side({ M, ses }: { M: Model | null; ses: Ses | null }) {
   };
   return <aside className="gside">
     <div className="gws"><img src={APP_ICON} alt="" width={20} height={20} /><b>PADDOCK GATE</b><span className="sub" title={rootTip(M)}>{M && <i className={"pc " + (M.r.online === false ? "bad" : M.r.online ? "ok" : "run")} />}{venue}</span></div>
-    <div className="gsearch"><Icon n="search" /><input id="q" type="text" placeholder="演者・セッションを検索" autoComplete="off" value={s.q}
+    <div className="gsearch"><Icon n="search" /><input id="q" type="text" aria-label="演者・セッションを検索" placeholder="演者・セッションを検索" autoComplete="off" value={s.q}
       onChange={(e) => { s.q = e.target.value; s.emit(); }} onKeyDown={(e) => { if (e.key === "Escape") { s.q = ""; s.emit(); (e.target as HTMLInputElement).blur(); } }} />
       {s.q && <button className="x" title="検索をやめる（Esc）" onClick={() => { s.q = ""; s.emit(); }}><Icon n="x" /></button>}</div>
     {M && M.days.length > 0 && <div className="gdays">
@@ -254,9 +276,9 @@ function Side({ M, ses }: { M: Model | null; ses: Ses | null }) {
     </div>}
     <div className="gh">セッション{M ? " · " + M.sessions.length : ""}</div>
     <nav className="gses" id="gses">{M && M.sessions.map((x) => {
-      const st = M.tl.get(x.key); const n = x.list.filter((g) => !g.mk_drop); const rc = n.filter(isRecv).length;
+      const st = M.tl.get(x.key); const n = x.list.filter((g) => !g.mk_drop); const rc = recvCount(n);
       const ic = st?.st === "done" ? "done" : st?.st === "live" ? "live" : st?.st === "next" ? "progress" : "pending";
-      return <button key={x.key} className={cx("gs", ses?.key === x.key && "on")} data-ses={x.key} onClick={() => pickSes(x.key)} title={nfc(x.name)}>
+      return <button key={x.key} aria-current={ses?.key === x.key ? "true" : undefined} className={cx("gs", ses?.key === x.key && "on")} data-ses={x.key} onClick={() => pickSes(x.key)} title={nfc(x.name)}>
         <RIcon k={ic as any} /><span className="nm">{sesLabel(x)}</span><span className="c">{rc}/{n.length}</span>
         <span className="tm">{x.t ? fmtT(x.t.s) + (x.t.e != null ? "–" + fmtT(x.t.e) : "〜") : ""}
           {st?.st === "live" && <span className="live">進行中{st.rem != null ? " 残り" + st.rem + "分" : ""}</span>}
@@ -286,7 +308,8 @@ function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
   return <div className="gbar">
     {ses ? <><b className="st-t">{sesLabel(ses)}</b>{ses.t && <span className="st-tm">{fmtT(ses.t.s)}{ses.t.e != null ? "–" + fmtT(ses.t.e) : ""}</span>}</> : <b className="st-t">{M ? nfc(M.r.label) : "PADDOCK GATE"}</b>}
     {!store.conn && <span className="gchip bad">アプリに再接続中…</span>}
-    {M && M.r.online === false && <span className="gchip bad" title={nfc(M.r.path) + (M.r.error ? "\n" + M.r.error : "")}><RIcon k="error" /><b>NASに接続できません</b></span>}
+    {M && M.r.online === false && <span className="gchip bad" title={nfc(M.r.path) + (M.r.error ? "\n" + M.r.error : "")}><RIcon k="error" /><b>NASに接続できません</b>{M.r.last_scan ? <span>最終確認 {hms(M.r.last_scan).slice(0, 5)}・表示は古い可能性</span> : null}</span>}
+    {M && ses && (() => { const lv = liveSes(M); return lv && lv.key !== ses.key ? <button className="gchip btn warnc" onClick={() => pickSes("", false)} title="自動で進行中のセッションを表示するように戻します">進行中のセッションではありません<b>進行中へ戻る</b></button> : null; })()}
     <span className="sp" />
     {ds.map((d) => {
       if (d.online === false) return <button key={d.id} className="gchip bad btn" title={d.path + (d.error ? "\n" + d.error : "") + "\nクリックで原因を調べます（つながったら自動でコピーします）"} onClick={() => netOpen()}><RIcon k="error" />{d.label}<b>接続できません</b><span className="lnk">原因を調べる</span></button>;
@@ -325,9 +348,9 @@ function Swap({ k, children }: { k: string; children: React.ReactNode }) {
 
 /* ---- 中央の上：発表中の人・次の人へ */
 function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
-  const cur = ses.list.find((g) => stageOf(M.r.id, g.key) === "now");
+  const cur = ses.list.find((g) => stageOf(M.r.id, g.key, g) === "now");
   const L = ses.list.filter((g) => !g.mk_drop); const ci = cur ? L.indexOf(cur) : -1;
-  const nx = ci >= 0 ? L[ci + 1] : L.find((g) => stageOf(M.r.id, g.key) !== "done");
+  const nx = ci >= 0 ? L[ci + 1] : L.find((g) => stageOf(M.r.id, g.key, g) !== "done");
   return <div className="gnow">
     <div className="cur">
       <div className="lb">発表中</div>
@@ -338,8 +361,9 @@ function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
       <div className="lb">次</div>
       <Swap k={nx ? nx.key : "-"}>{nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span></div> : <div className="tt">—</div>}</Swap>
     </div>
-    <button className="gb big" id="bNext" onClick={() => nextUp(M.r, ses)} title="いまの人を発表済みにして、次の人を発表中にします（キー N）">
+    <button className="gb big" id="bNext" onMouseUp={(e) => e.currentTarget.blur()} onClick={() => nextUpGuard(M, ses)} title="いまの人を発表済みにして、次の人を発表中にします（キー N）">
       {cur ? "次の人へ" : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
+    <div className="keys">↑↓ 選ぶ・Enter 発表中にする・右クリック メニュー</div>
   </div>;
 }
 
@@ -365,14 +389,14 @@ function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: n
     pos.current = { key: ses.key, m };
   });
   const [ind, setInd] = useState<{ y: number; h: number } | null>(null);
-  const curKey = ses.list.find((g) => stageOf(M.r.id, g.key) === "now")?.key || "";
+  const curKey = ses.list.find((g) => stageOf(M.r.id, g.key, g) === "now")?.key || "";
   useLayoutEffect(() => {   // 発表中の帯：行から行へすべって移動する
     const el = curKey ? box.current?.querySelector<HTMLElement>(`.grow[data-g="${CSS.escape(curKey)}"]`) : null;
     const v = el ? { y: el.offsetTop, h: el.offsetHeight } : null;
     setInd((o) => (o && v && o.y === v.y && o.h === v.h) || (!o && !v) ? o : v);
   });
   const L = ses.list.filter((g) => !g.mk_drop);
-  const cnt = { r: L.filter((g) => ["received", "got", "direct", "byo"].includes(rcOf(g))).length, p: L.filter((g) => rcOf(g) === "pending").length, e: L.filter((g) => rcOf(g) === "error").length };
+  const r = recvCount(L); const cnt = { r, p: L.length - r, e: L.filter((g) => rcOf(g) === "error").length };
   return <div className="glist scroll" id="groups" ref={box}>
     <div className="ghd">発表順 · {L.length}人<span className="legend"><span><RIcon k="received" />受付済 {cnt.r}</span><span><RIcon k="pending" />未受付 {cnt.p}</span>{cnt.e > 0 && <span><RIcon k="error" />要確認 {cnt.e}</span>}</span></div>
     <div className={cx("grows", sv.current.dir)} key={ses.key}>
@@ -394,7 +418,7 @@ function Found({ M, onMenu }: { M: Model; onMenu: (x: number, y: number, g: stri
   </div>;
 }
 function Row({ r, g, ord, i, sel, onMenu }: { r: Root; g: Group; ord: number; i: number; sel: boolean; onMenu: (x: number, y: number, g: string) => void }) {
-  const st = stageOf(r.id, g.key); const rc = rcOf(g); const cp = copyOf(g); const nm = nameOf(g);
+  const st = stageOf(r.id, g.key, g); const rc = rcOf(g); const cp = copyOf(g); const nm = nameOf(g);
   const prev = useRef(cp.k); const [pop, setPop] = useState(false);
   useEffect(() => { if (prev.current !== cp.k && cp.k === "ok" && prev.current === "run") { setPop(true); const t = setTimeout(() => setPop(false), 700); prev.current = cp.k; return () => clearTimeout(t); } prev.current = cp.k; }, [cp.k]);
   const ref = useRef<HTMLDivElement>(null);
@@ -418,7 +442,7 @@ function Row({ r, g, ord, i, sel, onMenu }: { r: Root; g: Group; ord: number; i:
     <span className="tags"><Tags g={g} fresh={fresh} /></span><span className="gap" />
     <span className="state">{st === "now" ? <span className="pill now">発表中</span>
       : st === "done" ? <><RIcon k="done" />発表済み</>
-        : <><i className={cx("pc", cp.k, pop && "pop")} />{cp.t}{cp.pct != null && <Bar pct={cp.pct} className="gtrack sm" />}<OtherDests g={g} /></>}</span>
+        : <><i className={cx("pc", cp.k, pop && "pop")} /><span title={cp.tip}>{cp.t}</span>{cp.pct != null && <Bar pct={cp.pct} className="gtrack sm" />}<OtherDests g={g} /></>}</span>
   </div>;
 }
 
@@ -451,12 +475,13 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
   useEffect(() => {
     const c = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) close(); };
     const w = () => close();
-    document.addEventListener("mousedown", c); window.addEventListener("blur", w); window.addEventListener("resize", w);
-    return () => { document.removeEventListener("mousedown", c); window.removeEventListener("blur", w); window.removeEventListener("resize", w); };
+    const sc = (e: Event) => { if (!ref.current?.contains(e.target as Node)) close(); };
+    document.addEventListener("mousedown", c); window.addEventListener("blur", w); window.addEventListener("resize", w); document.addEventListener("scroll", sc, true);
+    return () => { document.removeEventListener("mousedown", c); window.removeEventListener("blur", w); window.removeEventListener("resize", w); document.removeEventListener("scroll", sc, true); };
   }, []);
   useEffect(() => { if (!g) close(); }, [g]);
   if (!g) return null;
-  const has = g.files > 0; const ok = canOpen(g);
+  const has = g.files > 0 && OPEN.settings.enabled; const ok = canOpen(g);
   const it = (label: React.ReactNode, f: () => void, opt: { k?: string; dis?: boolean; ic?: React.ReactNode; id?: string } = {}) =>
     <button className="it" id={opt.id} disabled={opt.dis} onClick={() => { close(); f(); }}>{opt.ic}{label}{opt.k && <kbd>{opt.k}</kbd>}</button>;
   const onKey = (e: React.KeyboardEvent) => {
@@ -519,14 +544,14 @@ function warnsOf(F: Folder) {
 }
 function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
   const [more, setMore] = useState(false);
-  const nm = nameOf(g); const ses = parts(r, g.key).ses; const st = stageOf(r.id, g.key);
+  const nm = nameOf(g); const ses = parts(r, g.key).ses; const st = stageOf(r.id, g.key, g);
   const ws = warnsOf(F); const memo = (F.memo || []).filter((m) => !m.more);
   const fl = g.fl || []; const ops = fl.filter((f) => f[1] === "op"); const oth = fl.filter((f) => f[1] !== "op");
   const pres = F.op?.pres; const d = F.op?.dests.find((x) => x.id === mainDest()) || F.op?.dests[0];
   const cp = copyOf(g); const on = OPEN.settings.enabled; const canShow = on && canOpen(g); const byo = isBYO(g);
   const ana = F.items.filter((i) => i.a);
   const shows = F.items.filter((i) => !i.d && !i.mk && PRESX.test(i.p)).sort((a, b) => cmpPath(a.p, b.p));
-  const presFile = pres && pres.newest ? pres.newest : shows.length === 1 ? shows[0].p : "";
+  const presFile = pres && pres.newest && OPEN.settings.multi !== "folder" ? pres.newest : shows.length === 1 ? shows[0].p : "";
   return <>
     <div className="dhd">
       <div className="no">{nm.no}{st === "now" && <span className="pill now">発表中</span>}{st === "done" && <span className="pill">発表済み</span>}</div>
@@ -537,6 +562,8 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
         <button className="gb" id="bFold" disabled={!on || !g.files} onClick={() => opOpen(F.root, F.group, "", "folder")} title="この演者のフォルダを開く（このPCのコピー）"><Icon n="folder" /></button>
       </div>
     </div>
+    {!canShow && g.files > 0 && <div className="gwhy">{!on ? "開けません：［設定］→「演者のスライドを開く」がオフです" : "開けません：" + (hasData(g) ? cp.t : "発表に使うファイルがありません（メモだけ）")}</div>}
+    {canShow && (g.cpp || g.cp)?.[mainDest()] === "old" && <div className="gwhy warn">前の版を開きます（新しい版はまだこのPCにありません）</div>}
     {byo && <div className="gbyo"><b>PC持込</b><span>{hasData(g) ? "本人のPCで発表します。入っているデータはバックアップです（本人のPCが使えないときに［バックアップを開く］）。" : "本人のPCで発表します。バックアップのデータは入っていません。"}</span></div>}
     {!F.exists && <div className="gwarn" role="alert"><RIcon k="error" /><div><div><b>NAS にこのフォルダが見つかりません</b><span>削除・名前変更された可能性があります。このPCにコピーしたファイルは消していません。</span></div></div></div>}
     {ws.length > 0 && <div className="gwarn" role="alert"><RIcon k="error" /><div>{ws.map((w, i) => <div key={i}><b>{w[0]}</b><span>{w[1]}</span></div>)}</div></div>}
