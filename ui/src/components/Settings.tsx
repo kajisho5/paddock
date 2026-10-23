@@ -10,7 +10,7 @@ import { OpSection, opPrepare, opReady, OpSetupGuide } from "../op/OpSettings";
 import { OpenSettings, openSettingsSave } from "../op/Opener";
 import { RxSettings, rxSettingsSave } from "../rx/RxSettings";
 
-export interface Defaults { ignore: string[]; coi: string[]; marks: Mark[] }
+export interface Defaults { ignore: string[]; coi: string[]; marks: Mark[]; op_dest?: string }
 export let CFG: Config | null = null;
 let DEF: Defaults | null = null;
 let DATA = "";
@@ -20,7 +20,7 @@ export async function openCfg() {
   try {
     const j: any = await api("/api/config");
     CFG = JSON.parse(JSON.stringify(j.config)); DEF = j.defaults; DATA = j.data_dir || "";
-    if (IS_OP) opPrepare(CFG!);
+    if (IS_OP) opPrepare(CFG!, (j.defaults && j.defaults.op_dest) || "");
     store.modal = "cfg"; store.emit();
   } catch (e: any) { toast(e.message, 5000); }
 }
@@ -47,6 +47,7 @@ function SettingsBody() {
   const [coi, setCoi] = useState((c.coi_keywords || []).join("\n"));
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<"base" | "open" | "adv">("base");
 
   const save = async () => {
     if (np.p.trim()) { toast("入力中のパスは［追加］を押してから保存してください", 4500); return; }
@@ -85,9 +86,9 @@ function SettingsBody() {
   return <div className="dlg settings">
     <div className="dlg-h"><div><h2>設定</h2><p className="desc">{IS_OP ? "見るNASのフォルダ、この発表PCの会場とコピー先、解析の動作を設定します。" : IS_RX ? "受付先のNASフォルダ、受付の動作、解析・目印を設定します。" : "監視するNASのフォルダ、検出のタイミング、通知と解析の動作を設定します。"}</p></div>
       <button className="ghost" onClick={closeModal}><Icon n="x" />閉じる</button></div>
-    {IS_OP && !opReady() && <OpSetupGuide />}
 
-    <h3>監視フォルダ</h3>
+    {(() => {
+      const rootsList = <>
     <div id="rlist">{c.roots.length ? c.roots.map((r, i) => <div className="rrow" key={i} data-i={i}>
       <input type="text" data-k="label" value={r.label} placeholder="表示名（例: 学会名）" onChange={(e) => { r.label = e.target.value; up(); }} />
       <input type="text" data-k="path" className="pth mono" value={r.path} onChange={(e) => { r.path = e.target.value; up(); }} />
@@ -99,6 +100,8 @@ function SettingsBody() {
       }}>基準リセット</button>
       <button className="ghost danger" onClick={() => { if (confirm(`「${r.label || r.path}」を監視対象から外しますか？（NAS上のファイルには何もしません）`)) { c.roots.splice(i, 1); up(); } }}>削除</button>
     </div>) : <div className="hint" style={{ margin: "0 0 8px" }}>まだありません</div>}</div>
+      </>;
+      const rootsAdd = <>
     <div className="addrow"><input type="text" id="nPath" className="mono" value={np.p} onChange={(e) => setNp({ ...np, p: e.target.value })} placeholder="\\NASのIP\共有名\学会名  /  Z:\学会名  /  /Volumes/共有名/学会名" />
       <button id="bPick" onClick={async () => { try { const j: any = await api("/api/pick", {}); if (j.path) setNp({ ...np, p: j.path }); } catch (e: any) { toast(e.message, 5000); } }}>参照…</button></div>
     <div className="addrow2"><input type="text" id="nLabel" value={np.l} onChange={(e) => setNp({ ...np, l: e.target.value })} placeholder="表示名（任意）" /><DepthSel v={np.d} on={(n) => setNp({ ...np, d: n })} />
@@ -106,14 +109,16 @@ function SettingsBody() {
         const p = np.p.trim().replace(/^"|"$/g, ""); if (!p) { toast("パスを入力してください"); return; }
         c.roots.push({ path: p, label: np.l.trim(), depth: np.d, enabled: true }); setNp({ p: "", l: "", d: 3 }); up();
       }}><Icon n="plus" />追加</button></div>
+      </>;
+      const rootsMain = <>{rootsList}{rootsAdd}</>;
+      const rootsHint = <>
     <p className="hint">「階層」= 監視フォルダから見て演者フォルダが何段目にあるか。<br />
       <b>階層3</b>: 学会名フォルダ／会場／セッション／<b>001_演者名</b>／…（学会名フォルダを登録）<br />
       階層2: 会場フォルダ／セッション／<b>演者</b>　　階層1: セッションフォルダ／<b>演者</b><br />
       NAS側で「読み取り専用のユーザー」を作り、そのユーザーで接続しておくと、誤操作でも書き込めないので確実です。</p>
 
-    {IS_OP && <OpSection c={c} up={up} />}
-    {IS_OP && <OpenSettings c={c} />}
-
+      </>;
+      const rest = <>
     <h3>検出</h3>
     <div className="grid2">
       <span>確認する間隔</span><span><input type="number" id="poll" min={1} max={60} step={1} value={c.poll_sec} onChange={(e) => { c.poll_sec = +e.target.value; up(); }} /> 秒</span>
@@ -156,6 +161,28 @@ function SettingsBody() {
     <h3>無視するファイル名（1行1パターン、* と ? が使えます）</h3>
     <textarea id="ig" spellCheck={false} value={ig} onChange={(e) => setIg(e.target.value)} />
     <p className="hint"><button className="ghost" onClick={() => setIg((DEF?.ignore || []).join("\n"))}>初期値に戻す</button>　設定の保存先: <span className="mono">{DATA}</span></p>
+      </>;
+      if (!IS_OP) return <><h3>監視フォルダ</h3>{rootsMain}{rootsHint}{rest}</>;
+      return <>
+        <div className="seg cfgtabs" role="tablist" aria-label="設定の切り替え">
+          <button type="button" role="tab" id="tBase" aria-selected={tab === "base"} onClick={() => setTab("base")}>① 会場とコピー先</button>
+          <button type="button" role="tab" id="tOpen" aria-selected={tab === "open"} onClick={() => setTab("open")}>スライドを開く</button>
+          <button type="button" role="tab" id="tAdv" aria-selected={tab === "adv"} onClick={() => setTab("adv")}>詳細</button>
+        </div>
+        <div className="tabpane" hidden={tab !== "base"}>
+          {!opReady() && <OpSetupGuide />}
+          <section className="stepcard"><h3><span className="stepn">1</span>NASの学会フォルダ</h3>
+            <p className="hint" style={{ margin: "0 0 10px" }}>NAS上の学会名のフォルダを選んで［追加］。NASには書き込みません（読むだけ）。</p>
+            {c.roots.length ? <>{rootsList}<details className="more"><summary>別の学会フォルダを追加</summary>{rootsAdd}</details></> : rootsMain}
+            <details className="more"><summary>「階層」について</summary>{rootsHint}</details></section>
+          <section className="stepcard"><h3><span className="stepn">2</span>このPCの会場</h3><OpSection c={c} up={up} part="venue" /></section>
+          <section className="stepcard"><h3><span className="stepn">3</span>コピー先</h3><OpSection c={c} up={up} part="dests" /></section>
+        </div>
+        <div className="tabpane" hidden={tab !== "open"}><OpenSettings c={c} /></div>
+        <div className="tabpane" hidden={tab !== "adv"}><OpSection c={c} up={up} part="adv" />{rest}</div>
+      </>;
+    })()}
+
     <div className="err" id="cerr">{err}</div>
     <div className="foot"><span className="hint" style={{ margin: 0 }}>{APP_TITLE} v{store.appVersion}{IS_OP || IS_RX ? `（PADDOCK SCOUT v${BASE_VERSION} ベース）` : ""} · © SEVENTHWELL</span>
       <span style={{ display: "flex", gap: 8 }}><button id="bCancel" onClick={closeModal}>キャンセル</button><button className="pri" id="bSave" disabled={busy} onClick={save}>保存</button></span></div>

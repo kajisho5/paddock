@@ -502,3 +502,14 @@ table.files button.oo.show{border-color:var(--ok);color:var(--ok-fg)}
 :root[data-theme="dark"] .col .vh{background:var(--card)}
 :root[data-theme="dark"] .fh h1{font-size:32px}
 :root[data-theme="dark"] .modal{background:rgba(0,0,0,.6)}
+
+/* 設定：タブと手順カード（GATE） */
+.cfgtabs{margin:14px 0 4px;align-self:flex-start;display:inline-flex}
+.cfgtabs button{padding:0 14px;font-weight:600}
+.tabpane[hidden]{display:none}
+.stepcard{margin-top:14px;padding:4px 18px 16px;border:1px solid var(--border);border-radius:14px;background:var(--bg2)}
+.stepcard h3{border-top:0;margin:14px 0 8px;padding-top:0}
+.stepn{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--accent);color:var(--accent-fg);font-size:13px;font-weight:700;flex:none}
+:root[data-theme="dark"] .stepn{background:var(--ok);color:#04210f}
+details.more{margin-top:8px}
+details.more summary{cursor:pointer;color:var(--muted);font-size:12.5px}

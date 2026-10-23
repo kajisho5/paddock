@@ -10,19 +10,20 @@ import { closeModal } from "../components/Settings";
 import { netOpen } from "./Net";
 
 export const opReady = () => OPON();
-export function opPrepare(c: Config) {
+export let OP_DEST = "";   // コピー先の初期値（デスクトップ\講演資料）
+export function opPrepare(c: Config, defDest = "") {
+  OP_DEST = defDest;
   c.op = c.op || { enabled: false, root: "", venue: "", dests: [], max_mbps: 0 };
   if (!c.op.dests.length) c.op.dests = [{ label: "メイン", path: "", enabled: true }, { label: "バックアップ", path: "", enabled: true }];
+  // はじめて（コピー先がどれも空）：メインはこのPCのデスクトップの「講演資料」フォルダ（コピーのときに自動で作る）
+  if (OP_DEST && !c.op.dests.some((d) => String(d.path || "").trim())) c.op.dests[0].path = OP_DEST;
   c.op._dm = !!(c.op.days || []).length;
   const ids = c.roots.map((r, i) => r.id || "#" + i);
   if (!c.op.root || !ids.includes(c.op.root)) c.op.root = ids[0] || "";
 }
 
 export function OpSetupGuide() {
-  return <div className="opsetup"><b>はじめに設定してください</b><ol>
-    <li>「監視フォルダ」に、NASの学会名フォルダを追加（［参照…］→［追加］）</li>
-    <li>「このPCの会場とコピー先」で、自分の会場を選ぶ</li>
-    <li>コピー先（この発表PCのフォルダ、バックアップPCの共有フォルダ）を入れて［保存］</li></ol>
+  return <div className="opsetup"><b>はじめに、上から順に ①〜③ を入れて［保存］してください。</b>
     <div className="alt">このPCが<b>バックアップPC（コピーされる側）</b>なら、ここの設定は不要です。<button className="ghost" onClick={() => { closeModal(); netOpen(); }}>ネットワーク共有</button> で［このPCを設定する］だけ押してください。</div></div>;
 }
 
@@ -31,7 +32,7 @@ const opList = async (path: string) => (await api<{ venues: string[] }>("/api/ve
 type Sub = string[] | { err: string };
 const OPD: { root: string; dirs: string[] | null; sub: Record<string, Sub>; err: string } = { root: "", dirs: null, sub: {}, err: "" };
 
-export function OpSection({ c, up }: { c: Config; up: () => void }) {
+export function OpSection({ c, up, part }: { c: Config; up: () => void; part: "venue" | "dests" | "adv" }) {
   const op = c.op;
   {   // 監視フォルダを追加・削除したときも、選べる監視フォルダにそろえる（はじめての設定で会場が読み込めなくならないように）
     const ids = c.roots.map((r, i) => r.id || "#" + i);
@@ -45,14 +46,14 @@ export function OpSection({ c, up }: { c: Config; up: () => void }) {
 
   // 会場の候補（監視フォルダのすぐ下のフォルダ）
   useEffect(() => {
-    if (!rp) return; let alive = true;
+    if (!rp || part !== "venue") return; let alive = true;
     api<{ venues: string[] }>("/api/venues?root=" + enc(rr?.id || "") + "&path=" + enc(rp)).then((j) => { if (alive) setVenues({ list: j.venues, err: "", root: rp }); })
       .catch((e) => { if (alive) setVenues({ list: [], err: e.message, root: rp }); });
     return () => { alive = false; };
   }, [rp]);
   // 日ごとの会場（DAY1 → その下の会場）
   useEffect(() => {
-    if (!op._dm || !rp) return; let alive = true;
+    if (!op._dm || !rp || part !== "venue") return; let alive = true;
     (async () => {
       if (OPD.root !== rp) { OPD.root = rp; OPD.dirs = null; OPD.sub = {}; OPD.err = ""; }
       if (!OPD.dirs) { try { OPD.dirs = await opList(rp); } catch (e: any) { OPD.err = e.message; if (alive) re(); return; } }
@@ -83,19 +84,43 @@ export function OpSection({ c, up }: { c: Config; up: () => void }) {
     up();
   };
   const vl = venues && venues.root === rp ? venues : null;
+  if (part === "adv") return <>
+    <h3>コピーの速度</h3>
+    <div className="grid2"><span>速度の上限</span><span><input type="number" id="opMbps" min={0} max={1000} step={1} value={op.max_mbps || 0} onChange={(e) => { op.max_mbps = Math.max(0, +e.target.value || 0); up(); }} /> MB/秒（0 = 制限なし）</span></div>
+    <p className="hint">コピーの決まり（安全のため）<br />
+      ・コピー先には、会場より下（セッション／演者フォルダ）を同じ構成で作ります。<br />
+      ・<b>NASには一切書き込みません</b>（読むだけ）。受信中の演者フォルダはコピーせず、NAS上で開かれているファイルにも触れません。<br />
+      ・コピー先で<b>開かれているファイル（発表中など）は上書きしません</b>。閉じられてから新しい版に差し替えます。<br />
+      ・差し替えた旧版はコピー先の「_差し替え前」フォルダに残します。<b>コピー先のファイルを消すことはありません</b>（NAS側で消えても残します）。<br />
+      ・コピー先で編集したファイルは、NAS側が更新されない限り上書きしません。</p>
+  </>;
+  if (part === "dests") {
+    const main = op.dests[0];
+    return <>
+      <p className="hint" style={{ margin: "0 0 10px" }}>NASに演者のデータが入り終わったら、ここへ演者フォルダごと自動でコピーします。<b>メイン</b>は、このPCのデスクトップの「講演資料」フォルダが初期値です（無ければ自動で作ります）。</p>
+      <div id="dlist">{op.dests.map((d, i) => <div className="drow" key={i} data-i={i}>
+        <input type="text" data-k="label" value={d.label} placeholder="名前（例: メイン）" onChange={(e) => { d.label = e.target.value; up(); }} />
+        <input type="text" data-k="path" className="pth mono" value={d.path} placeholder={i === 0 ? "デスクトップ\\講演資料" : "\\\\BACKUP-PC\\共有\\講演資料（バックアップPCの共有フォルダ。無ければ空のまま）"} onChange={(e) => { d.path = e.target.value; up(); }} />
+        <button className="ghost" onClick={async () => { try { const j: any = await api("/api/pick", { dest: true }); if (j.path) { d.path = j.path; up(); } } catch (e: any) { toast(e.message, 5000); } }}>参照…</button>
+        <label><input type="checkbox" data-k="enabled" checked={d.enabled} onChange={(e) => { d.enabled = e.target.checked; up(); }} />有効</label>
+        <button className="ghost danger" onClick={() => { op.dests.splice(i, 1); up(); }}>削除</button></div>)}</div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        {op.dests.length < 4 && <button className="ghost" id="bDAdd" onClick={() => { op.dests.push({ label: "", path: "", enabled: true }); up(); }}><Icon n="plus" />コピー先を追加</button>}
+        {OP_DEST && main && main.path !== OP_DEST && <button className="ghost" id="bDDef" onClick={() => { main.path = OP_DEST; up(); }}>メインをデスクトップ\講演資料に戻す</button>}
+        <button className="ghost" id="bNetCfg" onClick={() => netOpen()}><Icon n="net" />バックアップPCとの接続・共有…</button></p>
+    </>;
+  }
   return <>
-    <h3>このPCの会場とコピー先</h3>
-    <p className="hint" style={{ margin: "0 0 6px" }}>自分の会場だけを監視し、NASへの受信が完了した演者フォルダを、下のコピー先（この発表PC・バックアップPCなど）へコピーします。</p>
-    {c.roots.length ? <div className="grid2" style={{ marginTop: 12 }}>
-      <span>監視フォルダ</span><span><select id="opRoot" disabled={c.roots.length < 2} value={op.root} onChange={(e) => { op.root = e.target.value; op.venue = ""; op.days = []; OPD.dirs = null; up(); }}>
-        {c.roots.map((r, i) => <option key={i} value={r.id || "#" + i}>{r.label || r.path}</option>)}</select></span>
+    {c.roots.length ? <div className="grid2">
+      {c.roots.length > 1 && <><span>学会フォルダ</span><span><select id="opRoot" value={op.root} onChange={(e) => { op.root = e.target.value; op.venue = ""; op.days = []; OPD.dirs = null; up(); }}>
+        {c.roots.map((r, i) => <option key={i} value={r.id || "#" + i}>{r.label || r.path}</option>)}</select></span></>}
       <span>フォルダの分け方</span><span className="checks col">
-        <label><input type="radio" name="opDm" value="0" checked={!op._dm} onChange={() => setMode(false)} />学会 → 会場 → …（会場フォルダが直下にある）</label>
+        <label><input type="radio" name="opDm" value="0" checked={!op._dm} onChange={() => setMode(false)} />学会 → 会場 → セッション → 演者</label>
         <label><input type="radio" name="opDm" value="1" checked={!!op._dm} onChange={() => setMode(true)} />学会 → 日（DAY1・DAY2…） → 会場 → …（日ごとに分かれている）</label></span>
       {!op._dm ? <>
         <span>自分の会場</span><span><select id="opVenue" value={op.venue} onChange={(e) => { op.venue = e.target.value; up(); }}>
           {!vl ? <option value={op.venue}>{op.venue || "読み込み中…"}</option> : <>
-            <option value="">（監視フォルダ全体）</option>
+            <option value="">（選んでください）</option>
             {vl.list.map((v) => <option key={v} value={v}>{nfc(v)}</option>)}
             {op.venue && !vl.list.includes(op.venue) && <option value={op.venue}>{nfc(op.venue)}（現在見つかりません）</option>}
             {vl.err && <option disabled>{vl.err}</option>}</>}</select></span>
@@ -111,24 +136,9 @@ export function OpSection({ c, up }: { c: Config; up: () => void }) {
               <td><button className="ghost danger" onClick={() => { days.splice(i, 1); up(); }}>削除</button></td></tr>;
           })}</tbody></table>}</div>
           <p className="hint" style={{ margin: "6px 0 0" }}><button className="ghost" id="bDayAdd" onClick={() => { op.days = [...days, { label: "", venue: "" }]; up(); }}><Icon n="plus" />日を追加</button>　1つの日で会場を選ぶと、ほかの日にも同じ名前の会場があれば自動で入ります。</p>
-          <p className="hint" style={{ margin: "8px 0 0" }}><label><input type="checkbox" id="opDayDir" checked={op.day_dir !== false} onChange={(e) => { op.day_dir = e.target.checked; up(); }} />コピー先に日のフォルダ（DAY1 など）を作って分ける</label>（日が違う同じ名前のセッションが混ざらないように。おすすめ）</p></span>
+          <p className="hint" style={{ margin: "8px 0 0" }}><label><input type="checkbox" id="opDayDir" checked={op.day_dir !== false} onChange={(e) => { op.day_dir = e.target.checked; up(); }} />コピー先に日のフォルダ（DAY1 など）を作って分ける</label>（おすすめ）</p></span>
         <span>いまの日</span><span><select id="opDay" value={op.day || ""} onChange={(e) => { op.day = e.target.value; up(); }}>{days.filter((d) => d.label).map((d) => <option key={d.label} value={d.label}>{d.label}</option>)}</select><span className="hint">　メイン画面の上の帯からも切り替えられます</span></span>
       </>}
-      <span>速度の上限</span><span><input type="number" id="opMbps" min={0} max={1000} step={1} value={op.max_mbps || 0} onChange={(e) => { op.max_mbps = Math.max(0, +e.target.value || 0); up(); }} /> MB/秒（0 = 制限なし）</span>
-    </div> : <p className="hint">先に「監視フォルダ」に学会名フォルダを追加してください（追加すると、ここで会場を選べます）。</p>}
-    <p className="hint" style={{ marginTop: 14 }}>コピー先（最大4か所。メインPC・バックアップPCなど。バックアップPCは共有フォルダのパス \\PC名\共有名\… で指定）</p>
-    <div id="dlist">{op.dests.map((d, i) => <div className="drow" key={i} data-i={i}>
-      <input type="text" data-k="label" value={d.label} placeholder="名前（例: メイン）" onChange={(e) => { d.label = e.target.value; up(); }} />
-      <input type="text" data-k="path" className="pth mono" value={d.path} placeholder="D:\発表データ  /  \\BACKUP-PC\共有\発表データ" onChange={(e) => { d.path = e.target.value; up(); }} />
-      <button className="ghost" onClick={async () => { try { const j: any = await api("/api/pick", { dest: true }); if (j.path) { d.path = j.path; up(); } } catch (e: any) { toast(e.message, 5000); } }}>参照…</button>
-      <label><input type="checkbox" data-k="enabled" checked={d.enabled} onChange={(e) => { d.enabled = e.target.checked; up(); }} />有効</label>
-      <button className="ghost danger" onClick={() => { op.dests.splice(i, 1); up(); }}>削除</button></div>)}</div>
-    {op.dests.length < 4 && <p className="hint" style={{ marginTop: 0 }}><button className="ghost" id="bDAdd" onClick={() => { op.dests.push({ label: "", path: "", enabled: true }); up(); }}><Icon n="plus" />コピー先を追加</button></p>}
-    <p className="hint"><button className="ghost" id="bNetCfg" onClick={() => netOpen()}><Icon n="net" />接続を確認・共有を設定…</button>　バックアップPCにつながらないときは、ここからファイル共有をまとめて設定できます（保存してから確認してください）</p>
-    <p className="hint">・コピー先には、会場より下（セッション／演者フォルダ）を同じ構成で作ります。<br />
-      ・<b>NASには一切書き込みません</b>（読むだけ）。受信中の演者フォルダはコピーせず、NAS上で開かれているファイルにも触れません。<br />
-      ・コピー先で<b>開かれているファイル（発表中など）は上書きしません</b>。閉じられてから新しい版に差し替えます。<br />
-      ・差し替えた旧版はコピー先の「_差し替え前」フォルダに残します。<b>コピー先のファイルを消すことはありません</b>（NAS側で消えても残します）。<br />
-      ・コピー先で編集したファイルは、NAS側が更新されない限り上書きしません。</p>
+    </div> : <p className="hint" style={{ margin: 0 }}>先に ① で学会フォルダを追加してください（追加すると、ここで会場を選べます）。</p>}
   </>;
 }
