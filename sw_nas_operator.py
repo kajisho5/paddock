@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 DEFAULT_PORT = 8797
 
 
@@ -1502,16 +1502,20 @@ def newest_of(base, items):
 
 
 class Stage:
-    """発表の進み具合（発表中・発表済み）。このPCのデータフォルダにだけ記録し、NASには何も書かない。"""
+    """発表の進み具合（発表中・発表済み）。このPCのデータフォルダにだけ記録し、NASには何も書かない。
+    「未発表に戻す」も時刻つきで覚えておき（cl）、バックアップPCとそろえるとき新しいほうを使う。"""
     NAME = "present.json"
     KEEP = 21 * 86400
 
     def __init__(self, mgr):
         self.mgr = mgr
         self.lock = threading.Lock()
+        self.on_change = None
         d = mgr.store.read_json(self.NAME, None)
         st = d.get("st") if isinstance(d, dict) else None
+        cl = d.get("cl") if isinstance(d, dict) else None
         self.st = self._prune(st if isinstance(st, dict) else {})
+        self.cl = self._prune_cl(cl if isinstance(cl, dict) else {})
 
     def _prune(self, st):
         now = time.time(); out = {}
@@ -1523,9 +1527,33 @@ class Stage:
                 continue
         return out
 
+    def _prune_cl(self, cl):
+        now = time.time(); out = {}
+        for k, v in cl.items():
+            try:
+                if isinstance(k, str) and now - float(v) < self.KEEP:
+                    out[k] = float(v)
+            except (TypeError, ValueError):
+                continue
+        return out
+
     def get(self):
         with self.lock:
             return {"st": dict(self.st)}
+
+    def _save(self, n, cl):
+        self.mgr.store.write_json(self.NAME, {"v": 2, "st": n, "cl": cl})   # 書けたときだけ入れ替える
+        self.st, self.cl = n, cl
+
+    @staticmethod
+    def _one_now(n, root):
+        """発表中は1つの会場（監視フォルダ）に1人だけ。いちばん新しい人を残し、ほかは発表済みに"""
+        nows = [(v["ts"], k) for k, v in n.items() if v["st"] == "now" and k.startswith(root + "|")]
+        if len(nows) > 1:
+            keep = max(nows)
+            for ts, k in nows:
+                if k != keep[1]:
+                    n[k] = {"st": "done", "ts": keep[0]}
 
     def set(self, root, group, st):
         if not root or not group or len(root) > 200 or len(group) > 2000:
@@ -1535,18 +1563,262 @@ class Stage:
         key = root + "|" + group
         now = time.time()
         with self.lock:
-            n = self._prune(self.st)   # 書けたときだけ入れ替える（保存に失敗したら前のまま）
+            n = self._prune(self.st)
+            cl = self._prune_cl(self.cl)
             if st == "now":   # 発表中は1人だけ。前の人は発表済みにする
                 for k, v in list(n.items()):
                     if v["st"] == "now" and k != key:
                         n[k] = {"st": "done", "ts": now}
             if st:
                 n[key] = {"st": st, "ts": now}
+                cl.pop(key, None)
             else:
                 n.pop(key, None)
-            self.mgr.store.write_json(self.NAME, {"v": 1, "st": n})
-            self.st = n
-            return {"st": dict(n)}
+                cl[key] = now
+            self._save(n, cl)
+            out = {"st": dict(n)}
+        if self.on_change:
+            self.on_change()
+        return out
+
+    def snapshot(self, root):
+        """この会場の記録（バックアップPCへ送る）：{演者フォルダ: [状態, 時刻]}（"" は未発表に戻した）"""
+        with self.lock:
+            out = {k.split("|", 1)[1]: [v["st"], v["ts"]] for k, v in self.st.items() if k.startswith(root + "|")}
+            for k, ts in self.cl.items():
+                if k.startswith(root + "|"):
+                    g = k.split("|", 1)[1]
+                    if g not in out or out[g][1] < ts:
+                        out[g] = ["", ts]
+        items = sorted(out.items(), key=lambda x: -x[1][1])[:400]
+        return dict(items)
+
+    def merge(self, root, entries):
+        """バックアップPCから届いた記録を合わせる（新しいほうを使う）。変わったら True"""
+        if not root or not isinstance(entries, dict):
+            return False
+        ch = False
+        with self.lock:
+            n = dict(self.st); cl = dict(self.cl)
+            for g, v in list(entries.items())[:400]:
+                try:
+                    st, ts = str(v[0]), float(v[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if not isinstance(g, str) or not g or len(g) > 2000 or st not in ("now", "done", "") or time.time() - ts > self.KEEP:
+                    continue
+                key = root + "|" + g
+                cur = n[key]["ts"] if key in n else cl.get(key, 0)
+                if ts <= cur:
+                    continue
+                if st:
+                    n[key] = {"st": st, "ts": ts}; cl.pop(key, None)
+                else:
+                    n.pop(key, None); cl[key] = ts
+                ch = True
+            if ch:
+                self._one_now(n, root)
+                self._save(self._prune(n), self._prune_cl(cl))
+        return ch
+
+
+PAIR_FW_PS = r"""
+param([string]$ParamJson, [string]$ParamFile)
+$ErrorActionPreference = 'Stop'
+try {
+  $p = $ParamJson | ConvertFrom-Json
+  Remove-Item -LiteralPath $ParamFile -Force -ErrorAction SilentlyContinue
+  Get-NetFirewallRule -Name 'SWNAS-PAIR-UDP' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+  New-NetFirewallRule -Name 'SWNAS-PAIR-UDP' -DisplayName 'SW NAS OPERATOR - バックアップPCと発表中をそろえる' -Group 'SW NAS OPERATOR' `
+    -Direction Inbound -Action Allow -Profile Any -Protocol UDP -LocalPort ([int]$p.port) -RemoteAddress LocalSubnet | Out-Null
+  Write-Host 'OK: ファイアウォールの許可を追加しました'
+  exit 0
+} catch { Write-Host ('NG: ' + $_.Exception.Message); Start-Sleep -Seconds 4; exit 1 }
+"""
+
+
+class Pair:
+    """メインPCとバックアップPCで「発表中・発表済み」をそろえる（同じLANのUDP。合言葉で署名）。
+    送るのは演者フォルダの名前と状態だけ。NASには触らない。"""
+    NAME = "pair.json"
+    PORT = 8796
+
+    def __init__(self, mgr, stage, data_dir):
+        self.mgr, self.stage, self.dir = mgr, stage, data_dir
+        self.lock = threading.Lock()
+        d = mgr.store.read_json(self.NAME, None)
+        d = d if isinstance(d, dict) else {}
+        self.cfg = {"enabled": bool(d.get("enabled")), "peer": str(d.get("peer") or "")[:200], "code": str(d.get("code") or "")[:200],
+                    "port": int(d.get("port") or self.PORT) if str(d.get("port") or "").isdigit() else self.PORT}
+        self.last_rx = 0.0; self.rx_from = ""; self.err = ""; self.last_tx = 0.0; self.fw = ""
+        self.seen = {}
+        self.sock = None
+        self.sock_port = 0
+        self.ev = threading.Event()
+        self.stop = False
+        stage.on_change = self.ev.set
+        threading.Thread(target=self._send_loop, daemon=True).start()
+        self._restart()
+
+    def info(self):
+        c = self.cfg
+        return {"enabled": c["enabled"], "peer": c["peer"], "port": c["port"], "code_set": bool(c["code"]),
+                "me": os.environ.get("COMPUTERNAME") or socket.gethostname(),
+                "last_rx": self.last_rx, "rx_from": self.rx_from, "err": self.err, "last_tx": self.last_tx, "fw": self.fw}
+
+    def set(self, body):
+        c = dict(self.cfg)
+        c["enabled"] = bool(body.get("enabled"))
+        c["peer"] = str(body.get("peer") or "").strip()[:200]
+        if body.get("code"):
+            code = str(body["code"]).strip()
+            if len(code) < 6:
+                raise ValueError("合言葉は6文字以上にしてください（2台で同じものを入れます）")
+            c["code"] = code[:200]
+        if c["enabled"] and (not c["peer"] or not c["code"]):
+            raise ValueError("相手のPC（名前かIPアドレス）と合言葉を入れてください")
+        if c["peer"] and not re.fullmatch(r"[A-Za-z0-9._\-\[\]:]+", c["peer"]):
+            raise ValueError("相手のPCの書き方が正しくありません（例: BACKUP-PC / 192.168.0.12）")
+        self.mgr.store.write_json(self.NAME, c)
+        self.cfg = c
+        self.err = ""
+        self._restart()
+        return self.info()
+
+    def _root(self):
+        op = self.mgr.cfg.get("op") or {}
+        return op.get("root") if op.get("enabled") else ""
+
+    def _sig(self, body):
+        import hmac
+        return hmac.new(self.cfg["code"].encode("utf-8"), body, hashlib.sha256).hexdigest()
+
+    def _restart(self):
+        with self.lock:
+            if self.sock and self.cfg["enabled"] and self.sock_port == self.cfg["port"]:
+                self.ev.set()   # 受け付けはそのまま（合言葉・相手が変わっただけ）
+                return
+            if self.sock:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+                self.sock = None
+            if not self.cfg["enabled"]:
+                return
+            sk = None
+            for _ in range(8):   # 前の受け付けが閉じ終わるまで少し待つ
+                try:
+                    sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    sk.bind(("0.0.0.0", self.cfg["port"]))
+                    break
+                except OSError as e:
+                    try:
+                        sk.close()
+                    except OSError:
+                        pass
+                    sk = None
+                    self.err = "受け付けを始められません（ポート %d）: %s" % (self.cfg["port"], e)
+                    time.sleep(0.3)
+            if sk is None:
+                return
+            self.err = ""
+            sk.settimeout(1.0)
+            self.sock = sk
+            self.sock_port = self.cfg["port"]
+        threading.Thread(target=self._recv_loop, args=(sk,), daemon=True).start()
+        self.ev.set()
+
+    def _peer_addr(self):
+        p = self.cfg["peer"]; port = self.cfg["port"]
+        m = re.fullmatch(r"(.+):(\d{2,5})", p)
+        if m and "]" not in p[m.start(2) - 1:] and p.count(":") == 1:
+            p, port = m.group(1), int(m.group(2))
+        return socket.getaddrinfo(p, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4]
+
+    def _send_loop(self):
+        while not self.stop:
+            self.ev.wait(3.0)
+            self.ev.clear()
+            if not self.cfg["enabled"] or not self.cfg["code"] or not self.sock:
+                continue
+            root = self._root()
+            if not root:
+                continue
+            try:
+                body = json.dumps({"v": 1, "from": os.environ.get("COMPUTERNAME") or socket.gethostname(), "ts": time.time(),
+                                   "n": secrets.token_hex(8), "venue": (self.mgr.cfg.get("op") or {}).get("venue", ""),
+                                   "st": self.stage.snapshot(root)}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                pkt = body + b"\n" + self._sig(body).encode("ascii")
+                if len(pkt) > 60000:
+                    continue
+                with self.lock:
+                    sk = self.sock
+                if sk:
+                    sk.sendto(pkt, self._peer_addr())
+                    self.last_tx = time.time()
+                    if self.err.startswith("送れません"):
+                        self.err = ""
+            except OSError as e:
+                self.err = "送れません（%s）: %s" % (self.cfg["peer"], e)
+
+    def _recv_loop(self, sk):
+        import hmac
+        while not self.stop:
+            try:
+                pkt, addr = sk.recvfrom(65535)
+            except socket.timeout:
+                continue
+            except OSError:
+                return   # 閉じた（設定を変えた）
+            try:
+                body, sig = pkt.rsplit(b"\n", 1)
+                if not hmac.compare_digest(self._sig(body), sig.decode("ascii", "replace")):
+                    self.err = "合言葉の違う相手から届きました（%s）。2台で同じ合言葉を入れてください" % addr[0]
+                    continue
+                d = json.loads(body.decode("utf-8"))
+                now = time.time()
+                if abs(now - float(d.get("ts") or 0)) > 600:
+                    self.err = "相手のPC（%s）と時計が10分以上ずれています。Windows の時刻を合わせてください" % (d.get("from") or addr[0])
+                    continue
+                nn = str(d.get("n") or "")
+                if nn in self.seen:
+                    continue
+                self.seen = {k: t for k, t in self.seen.items() if now - t < 900}
+                self.seen[nn] = now
+                op = self.mgr.cfg.get("op") or {}
+                if str(d.get("venue") or "") != op.get("venue", ""):
+                    self.err = "相手のPC（%s）は別の会場（%s）を見ています" % (d.get("from") or addr[0], d.get("venue") or "—")
+                    continue
+                self.last_rx = now
+                self.rx_from = str(d.get("from") or addr[0])[:60]
+                if self.err.startswith(("合言葉", "相手のPC")):
+                    self.err = ""
+                root = self._root()
+                if root and self.stage.merge(root, d.get("st")):
+                    pass   # 画面は数秒ごとに読み直す
+            except (ValueError, TypeError, AttributeError, UnicodeDecodeError):
+                continue
+
+    def allow_firewall(self):
+        """このPCに、相手からの知らせを受け付ける許可（Windows ファイアウォール）を足す。管理者の確認が出る"""
+        if not W.IS_WIN:
+            raise ValueError("Windows でだけ使えます")
+        script = os.path.join(self.dir, "sw_pair_fw.ps1")
+        sb = PAIR_FW_PS.encode("utf-8-sig")
+        with open(script, "wb") as f:
+            f.write(sb)
+        pf = os.path.join(self.dir, "params-%s.json" % secrets.token_hex(6))
+        pb = json.dumps({"port": self.cfg["port"]}).encode("utf-8")
+        with open(pf, "wb") as f:
+            f.write(pb)
+        st, code, msg = ELEVATE(script, pf, hashlib.sha256(sb).hexdigest(), hashlib.sha256(pb).hexdigest())
+        self.fw = "ok" if st == "ok" and code == 0 else "canceled" if st == "canceled" else "ng"
+        if st == "canceled":
+            raise ValueError("管理者の確認で［いいえ］が選ばれたため、許可を追加しませんでした")
+        if st != "ok" or code != 0:
+            raise ValueError(msg or "許可を追加できませんでした（終了コード %s）" % code)
+        return self.info()
 
 
 class Remote:
@@ -1750,6 +2022,10 @@ class OpHandler(W.Handler):
             except ValueError:
                 since = 0
             return self.send_json(self.server.remote.take(since))
+        if u.path == "/api/op/pair":
+            if not self.is_local():
+                return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
+            return self.send_json(self.server.pair.info())
         if u.path == "/api/op/remote/info":
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
@@ -1788,6 +2064,10 @@ class OpHandler(W.Handler):
                                                               str(body.get("rel") or ""), str(body.get("how") or "")))
             if u.path == "/api/op/open/settings":
                 return self.send_json(self.server.opener.set(body))
+            if u.path == "/api/op/pair":
+                return self.send_json(self.server.pair.set(body))
+            if u.path == "/api/op/pair/fw":
+                return self.send_json(self.server.pair.allow_firewall())
             if u.path == "/api/op/remote/status":
                 st = {k: str(body.get(k) or "")[:200] for k in ("now", "next", "session", "venue")}
                 self.server.remote.status = st
@@ -1867,6 +2147,7 @@ def main():
     srv.opener = Opener(mgr, data_dir)
     srv.stage = Stage(mgr)
     srv.remote = Remote(mgr)
+    srv.pair = Pair(mgr, srv.stage, data_dir)
     mgr.start()
     W.start_autoquit(srv, enabled=False)
 

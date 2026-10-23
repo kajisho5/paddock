@@ -215,7 +215,7 @@ function curSes(M: Model): Ses | null {
 /* ---------------------------------------------------------------- 画面 */
 export function GateApp() {
   const s = useApp(); const M = build();
-  useEffect(() => { stageLoad(); const t = window.setInterval(stageLoad, 15000); return () => clearInterval(t); }, []);
+  useEffect(() => { stageLoad(); const t = window.setInterval(stageLoad, 3000); return () => clearInterval(t); }, []);   // バックアップPCとそろえているときも数秒で反映
   const ses = M ? curSes(M) : null;
   const [menu, setMenu] = useState<{ x: number; y: number; g: string } | null>(null);
   useEffect(() => { setMenu(null); }, [ses?.key, M?.day, s.q]);
@@ -376,6 +376,17 @@ function rootTip(M: Model | null) {
   return nfc(store.S!.op.venue || "") + "\n" + nfc(r.label) + "　" + st + (r.online ? `\n${(r.count || 0).toLocaleString()}件${r.scan_ms != null ? " · " + (r.scan_ms / 1000).toFixed(1) + "s" : ""}${r.last_scan ? " · " + hms(r.last_scan) : ""}` : "") + "\n" + r.path + (r.error ? "\n" + r.error : "") + (r.n_warns ? "\n読めないフォルダ " + r.n_warns + "件" : "");
 }
 
+/* バックアップPCと発表中をそろえているとき：つながっているか */
+const PAIR: { info: any } = { info: null };
+function PairChip() {
+  useApp();
+  useEffect(() => { const f = () => api<any>("/api/op/pair").then((j) => { PAIR.info = j; store.emit(); }).catch(() => {}); f(); const t = window.setInterval(f, 5000); return () => clearInterval(t); }, []);
+  const p = PAIR.info; if (!p || !p.enabled) return null;
+  const ok = p.last_rx && Date.now() / 1000 - p.last_rx < 15;
+  return <button className={cx("gchip btn", !ok && "warnc")} onClick={() => openCfg()} title={(ok ? "バックアップPCと発表中・発表済みをそろえています" : "相手のPCから知らせが届いていません") + (p.err ? "\n" + p.err : "") + "\n相手: " + p.peer}>
+    <i className={"pc " + (ok ? "ok" : "run")} />{ok ? <>連携中<b>{p.rx_from}</b></> : <>連携先から応答なし</>}</button>;
+}
+
 /* ---- 上：セッション名とコピーの状況 */
 function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
   const S = store.S!; const L = ses ? ses.list.filter((g) => !g.mk_drop) : [];
@@ -402,6 +413,7 @@ function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
       const a = S.op.active!; const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; const here = L.some((g) => a.rel.startsWith(g.key + "/"));
       return <span className="gchip act" title={nfc(a.rel)}><Icon n="spin" className="spin" /><span className="fn">{here ? "" : "ほかのセッション · "}{nfc(a.rel.split("/").pop())}</span><b>{pct}%</b>{(S.op.queue || 0) > 1 && <span className="sub2">残り {(S.op.queue || 0) - 1}</span>}</span>;
     })()}
+    <PairChip />
     <LogButton />
   </div>;
 }

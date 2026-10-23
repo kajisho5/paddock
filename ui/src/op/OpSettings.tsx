@@ -21,6 +21,33 @@ export function opPrepare(c: Config, defDest = "") {
   if (!c.op.root || !ids.includes(c.op.root)) c.op.root = ids[0] || "";
 }
 
+/* メインPCとバックアップPCで「発表中・発表済み」をそろえる */
+function PairSettings() {
+  const [p, setP] = useState<any>(null); const [code, setCode] = useState(""); const [busy, setBusy] = useState("");
+  const load = () => api<any>("/api/op/pair").then(setP).catch(() => {});
+  useEffect(() => { load(); const t = window.setInterval(load, 4000); return () => clearInterval(t); }, []);
+  if (!p) return null;
+  const save = async (over: any = {}) => {
+    setBusy("save");
+    try { const j = await api<any>("/api/op/pair", { enabled: p.enabled, peer: p.peer, code: code || undefined, ...over }); setP(j); setCode(""); toast(j.enabled ? "連携を保存しました" : "連携を止めました"); }
+    catch (e: any) { toast(e.message, 7000); }
+    setBusy("");
+  };
+  const fw = async () => { setBusy("fw"); try { setP(await api<any>("/api/op/pair/fw", {})); toast("ファイアウォールの許可を追加しました"); } catch (e: any) { toast(e.message, 8000); } setBusy(""); };
+  const ok = p.last_rx && Date.now() / 1000 - p.last_rx < 15;
+  return <><h3>バックアップPCと発表中をそろえる</h3>
+    <p className="hint" style={{ margin: "0 0 8px" }}>メインPCとバックアップPCの両方で設定すると、片方で［次の人へ］や「発表中にする」をしたとき、もう片方も同じ人になります。送るのは「どの演者を発表中・発表済みにしたか」だけです（NAS には触りません）。2台とも同じ会場・同じ合言葉にしてください。</p>
+    <div className="grid2" id="pairSet">
+      <span>そろえる</span><span><label className="lbl"><input type="checkbox" id="pairOn" checked={!!p.enabled} onChange={(e) => setP({ ...p, enabled: e.target.checked })} />このPCで使う</label></span>
+      <span>相手のPC</span><span><input type="text" id="pairPeer" value={p.peer} placeholder="BACKUP-PC または 192.168.0.12" onChange={(e) => setP({ ...p, peer: e.target.value })} /> <span className="hint">このPCは「{p.me}」</span></span>
+      <span>合言葉</span><span><input type="text" id="pairCode" value={code} placeholder={p.code_set ? "（設定済み。変えるときだけ入れる）" : "6文字以上。2台で同じもの"} onChange={(e) => setCode(e.target.value)} /></span>
+      <span /><span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button className="pri" id="pairSave" disabled={!!busy} onClick={() => save()}>連携を保存</button>
+        <button id="pairFw" disabled={!!busy} onClick={fw} title="相手のPCからの知らせを受け付けるよう、Windows ファイアウォールに許可を足します（管理者の確認が出ます。1回だけ）">ファイアウォールの許可を追加…</button></span>
+      <span>状態</span><span id="pairSt" className={ok ? "" : "dim"}>{!p.enabled ? "使っていません" : ok ? "連携中（" + p.rx_from + " から届いています）" : "相手のPCから届いていません" + (p.err ? "：" + p.err : "（相手のPCでも設定し、両方でファイアウォールの許可を追加してください）")}{p.fw === "ok" ? "　· ファイアウォール許可済み" : ""}</span>
+    </div></>;
+}
+
 /* Stream Deck・Companion から操作するときのURL（このPCの中だけ） */
 function RemoteInfo() {
   const [info, setInfo] = useState<{ key: string; port: number } | null>(null);
@@ -114,6 +141,7 @@ export function OpSection({ c, up, part }: { c: Config; up: () => void; part: "v
       ・コピー先で<b>開かれているファイル（発表中など）は上書きしません</b>。閉じられてから新しい版に差し替えます。<br />
       ・差し替えた旧版はコピー先の「_差し替え前」フォルダに残します。<b>コピー先のファイルを消すことはありません</b>（NAS側で消えても残します）。<br />
       ・コピー先で編集したファイルは、NAS側が更新されない限り上書きしません。</p>
+    <PairSettings />
     <RemoteInfo />
   </>;
   if (part === "dests") {
