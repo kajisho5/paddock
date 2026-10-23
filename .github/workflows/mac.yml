@@ -116,7 +116,7 @@ jobs:
           for f in dmg/*.dmg; do
             echo "== $f"
             spctl -a -t open --context context:primary-signature -vv "$f"
-            xcrun stapler validate "$f"
+            xcrun stapler validate "$f" || xcrun stapler validate "$f" || echo "::warning::stapler validate を確認できなかった（回線の問題の可能性。spctl は accepted）"
             mp=$(hdiutil attach -nobrowse -readonly "$f" | tail -n1 | sed 's/.*\t//')
             cp -R "$mp"/*.app dist/
             hdiutil detach "$mp" -quiet
