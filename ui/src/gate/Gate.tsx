@@ -278,35 +278,25 @@ function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
   </div>;
 }
 
-/* ---- 中央の上：残り時間・発表中の人・次の人へ */
-function useSecond() { const [, f] = useState(0); useEffect(() => { const t = window.setInterval(() => f((n) => n + 1), 1000); return () => clearInterval(t); }, []); }
-function Digits({ text }: { text: string }) {   // 変わった数字だけ下から入れ替わる
-  return <span className="digits" aria-label={text}>{text.split("").map((c, i) => <span key={i + ":" + c} className={cx("dg", c === ":" && "colon")} aria-hidden="true">{c}</span>)}</span>;
-}
+/* ---- 中央の上：発表中の人・次の人へ */
 function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
-  useSecond();
-  const st = M.tl.get(ses.key); const now = new Date(); const ns = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-  let lb = "セッションの時刻", txt = "--:--", tone = "";
-  if (st && st.end != null && st.st === "live") { const r = Math.max(0, st.end * 60 - ns); lb = "セッション終了まで"; txt = mmss(r); tone = r === 0 ? "bad" : r < 300 ? "warn" : ""; }
-  else if (st && st.st === "live") { lb = "開始から"; txt = mmss(ns - st.s * 60); }
-  else if (st && (st.st === "next" || st.st === "later")) { const r = Math.max(0, st.s * 60 - ns); lb = r >= 3600 ? "開始時刻" : "開始まで"; txt = r >= 3600 ? fmtT(st.s).padStart(5, "0") : mmss(r); }
-  else if (st && st.st === "done") { lb = "終了しました"; txt = "00:00"; tone = "dim"; }
   const cur = ses.list.find((g) => stageOf(M.r.id, g.key) === "now");
   const L = ses.list.filter((g) => !g.mk_drop); const ci = cur ? L.indexOf(cur) : -1;
   const nx = ci >= 0 ? L[ci + 1] : L.find((g) => stageOf(M.r.id, g.key) !== "done");
   return <div className="gnow">
-    <div className={cx("tmr", tone)}><div className="lb">{st?.st === "live" && <RIcon k="live" />}{lb}</div><div className="timer" id="gtimer"><Digits text={txt} /></div></div>
     <div className="cur" key={cur ? cur.key : "-"}>
       <div className="lb">発表中</div>
-      {cur ? <><div className="who">{ci + 1}. {nameOf(cur).name}</div><div className="tt">{nameOf(cur).no}</div></>
+      {cur ? <div className="who"><span className="o">{ci + 1}</span>{nameOf(cur).name}<span className="no">{nameOf(cur).no}</span></div>
         : <div className="tt">まだいません（右クリック「発表中にする」か ［次の人へ］）</div>}
-      {nx && <div className="nx">次：{nameOf(nx).name}</div>}
+    </div>
+    <div className="cur nxb">
+      <div className="lb">次</div>
+      {nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span></div> : <div className="tt">—</div>}
     </div>
     <button className="gb big" id="bNext" onClick={() => nextUp(M.r, ses)} title="いまの人を発表済みにして、次の人を発表中にします（キー N）">
       {cur ? "次の人へ" : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
   </div>;
 }
-const mmss = (sec: number) => { sec = Math.max(0, Math.floor(sec)); const m = Math.floor(sec / 60), s = sec % 60; return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s; };
 
 /* ---- 中央：発表順の一覧 */
 function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: number, g: string) => void }) {

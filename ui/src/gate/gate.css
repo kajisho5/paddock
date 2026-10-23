@@ -92,16 +92,11 @@
 
 /* ---- 中央 ---- */
 .gmain{display:flex;flex-direction:column;min-width:0;min-height:0}
-.gnow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:24px;align-items:center;padding:16px 16px 14px;border-bottom:1px solid var(--g-border)}
+.gnow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:24px;align-items:center;padding:16px 16px 14px;border-bottom:1px solid var(--g-border)}
 .gnow .lb{font:500 11px var(--sans);color:var(--g-text-2);margin-bottom:4px;display:flex;align-items:center;gap:6px}
-.gnow .timer{font:600 56px/1 var(--mono);letter-spacing:-.02em;height:56px;overflow:hidden;display:flex}
-.tmr.warn .timer{color:var(--g-progress)}.tmr.bad .timer{color:var(--g-error)}.tmr.dim .timer{color:var(--g-text-3)}
-.digits{display:inline-flex}
-.dg{display:inline-block;width:.6em;text-align:center;animation:dg-in var(--dur-3) var(--ease-out) both}
-.dg.colon{width:.3em;animation:none}
-@keyframes dg-in{from{transform:translateY(-.45em);opacity:0}}
 .gnow .cur{min-width:0;animation:fade-up var(--dur-3) var(--ease-out) both}
-.gnow .who{font:500 15px var(--sans);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gnow .who .o{font:500 13px var(--mono);color:var(--g-text-2);margin-right:8px}.gnow .who .no{font:400 12px var(--mono);color:var(--g-text-2);margin-left:10px}.gnow .who.dim2{color:var(--g-text-2)}
+.gnow .who{font:500 18px var(--sans);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gnow .tt{color:var(--g-text-2)}
 .gnow .nx{color:var(--g-text-2);font-size:12px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .glist{flex:1;min-height:0;overflow:auto}
@@ -220,10 +215,10 @@
 /* 画面が広いとき（1920×1080 を 100% で使うとき）は少しだけ大きく */
 @media (min-width:1800px){.gate{zoom:1.08;height:calc(100vh / 1.08)}}
 /* 125% 表示（1536 幅）など、幅が足りないとき */
-@media (max-width:1360px){.gate{grid-template-columns:232px minmax(0,1fr) 320px}.gchip .gtrack{display:none}.gnow{gap:16px}.gnow .timer{font-size:46px;height:46px}}
+@media (max-width:1360px){.gate{grid-template-columns:232px minmax(0,1fr) 320px}.gchip .gtrack{display:none}.gnow{gap:16px}}
 
 @media (prefers-reduced-motion: reduce){
-  .dg,.gnow .cur,.grows,.gdet,.gwarn,.ganalysis,.gmenu,.gate .glog .log{animation:fade-in 140ms linear both!important}
+  .gnow .cur,.grows,.gdet,.gwarn,.ganalysis,.gmenu,.gate .glog .log{animation:fade-in 140ms linear both!important}
   .nowind,.gate .gtrack i,.gate .gmore svg{transition-duration:1ms}
   .pc.pop{animation:none}
 }
