@@ -54,7 +54,7 @@ def build(out, version, variant=None):
             '-DAPP_EXE=L"%s"' % v["exe"], '-DHOME_ENV=L"%s"' % v["home_env"]]
         cmd = [sys.executable, "-m", "ziglang", "cc", "-target", "x86_64-windows-gnu",
                "-O2", "-s", "-Wall", "-Wextra", "-Werror"] + defs + [
-               "-Wl,--subsystem,console",
+               "-municode", "-Wl,--subsystem,windows",
                "launcher.c", "launcher.rc", "-o", tmp_out, "-lkernel32", "-luser32"]
         subprocess.run(cmd, cwd=td, check=True)
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)

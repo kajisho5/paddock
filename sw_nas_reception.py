@@ -46,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS RECEPTION"
-VERSION = "1.2.3"
+VERSION = "1.3.0"
 DEFAULT_PORT = 8795
 RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（SW NAS WATCH は常に無視する）
 CHUNK = 1 << 20
@@ -1168,6 +1168,8 @@ class RxManager(W.Manager):
 
 
 def build_page():
+    if not W.LEGACY_UI and W.UI_PACK:
+        return W.ui_page()     # 新しい画面（React）：どのアプリかは画面の側で切り替える
     h = W.HTML
 
     def sub(old, new):
@@ -1347,7 +1349,9 @@ def main():
     ap.add_argument("--browser", choices=["app", "default"], default="app")
     ap.add_argument("--data-dir", default="", help="設定・受付データの保存先（既定: このファイルの横）")
     ap.add_argument("--drive", action="append", default=[], help="取り込み元として一覧に出すフォルダ（任意・複数可）")
+    ap.add_argument("--legacy-ui", action="store_true", help="旧画面（v1.13 まで）で表示する")
     a = ap.parse_args()
+    W.use_legacy(a.legacy_ui)
     W.disable_quick_edit()
 
     data_dir = a.data_dir or pick_data_dir()
@@ -1394,7 +1398,10 @@ def main():
     srv.allowed_hosts = {"127.0.0.1:%d" % a.port, "localhost:%d" % a.port, "[::1]:%d" % a.port}
     srv.page = build_page()
     srv.rx = Rx(mgr, data_dir, a.drive)
+    srv.quit_block = lambda: ("受け取り・NASへの書き込みの途中です。終わってから終了してください"
+                              if any(j.get("state") == "run" for j in list(srv.rx.jobs.values())) else "")
     mgr.start()
+    W.start_autoquit(srv, enabled=False)
 
     print("=" * 64)
     print(" %s v%s   (受付：NASの演者フォルダへ書き込みます)" % (APP_NAME, VERSION))
@@ -1404,7 +1411,7 @@ def main():
         print(" 受付先: [%s] %s  (階層%d)" % (r["label"] or W.default_label(r["path"]), r["path"], r["depth"]))
     if not cfg["roots"]:
         print(" 受付先が未設定 → 画面の［設定］から学会名フォルダを追加してください")
-    print(" このウィンドウを閉じると止まります（Ctrl+C で終了）")
+    print(" " + ("画面の［終了］（電源のボタン）で止まります。ウィンドウを閉じても裏で動いています（もう一度起動すると画面が開きます）" if W.AUTOQUIT else "このウィンドウを閉じると止まります（Ctrl+C で終了）"))
     print("=" * 64, flush=True)
     if not a.no_browser:
         threading.Timer(0.6, W.open_ui, args=(url, data_dir, a.browser)).start()

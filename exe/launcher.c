@@ -7,7 +7,8 @@
  *
  * - Nothing is installed; no registry / system writes.
  * - Settings are kept next to the exe (SW_NAS_WATCH_HOME tells the app where).
- * - The console window stays: closing it stops monitoring (same as the .bat version).
+ * - No console window. Output goes to runtime\\last_run.log; if the app stops with an error,
+ *   the end of that log is shown in a message box. Closing the app window ends the app.
  */
 #define WIN32_LEAN_AND_MEAN
 #ifndef UNICODE
@@ -17,7 +18,6 @@
 #define _UNICODE
 #endif
 #include <windows.h>
-#include <conio.h>
 #include <wchar.h>
 
 #define BUF 32768
@@ -38,41 +38,9 @@
 
 static wchar_t g_dir[BUF];
 
-static void out(const wchar_t *s)
-{
-    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD n;
-    if (h && h != INVALID_HANDLE_VALUE && !WriteConsoleW(h, s, (DWORD)wcslen(s), &n, NULL)) {
-        /* redirected: fall back to UTF-8 */
-        char tmp[4096];
-        int len = WideCharToMultiByte(CP_UTF8, 0, s, -1, tmp, sizeof(tmp), NULL, NULL);
-        if (len > 1) WriteFile(h, tmp, (DWORD)(len - 1), &n, NULL);
-    }
-}
-
-static void wait_key(void)
-{
-    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
-    DWORD mode;
-    if (!in || in == INVALID_HANDLE_VALUE || !GetConsoleMode(in, &mode)) return;  /* not interactive */
-    out(L"\r\n  何かキーを押すと閉じます。\r\n");
-    FlushConsoleInputBuffer(in);
-    _getwch();
-}
-
 static void fatal(const wchar_t *msg)
 {
-    out(L"\r\n  [" APP_TITLE L"] ");
-    out(msg);
-    out(L"\r\n");
     MessageBoxW(NULL, msg, APP_TITLE, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
-}
-
-static BOOL WINAPI on_ctrl(DWORD type)
-{
-    /* Ctrl+C / Ctrl+Break: let the app (child) handle it and wait for it to exit. */
-    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) return TRUE;
-    return FALSE;   /* close / logoff / shutdown: default handling */
 }
 
 static const wchar_t *skip_argv0(const wchar_t *p)
@@ -88,17 +56,52 @@ static const wchar_t *skip_argv0(const wchar_t *p)
     return p;
 }
 
-/* Hand our standard handle to the child as an inheritable duplicate.
-   (Relying on implicit inheritance fails when stdin/stdout are redirected, e.g. to NUL.) */
-static HANDLE std_for_child(DWORD which, HANDLE *dup)
+/* 子プロセス（Python）に渡すハンドル（継承できるように作る） */
+static HANDLE open_inherit(const wchar_t *path, DWORD access, DWORD disp)
 {
-    HANDLE h = GetStdHandle(which);
-    *dup = NULL;
-    if (h == NULL || h == INVALID_HANDLE_VALUE) return NULL;
-    if (DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), dup, 0, TRUE, DUPLICATE_SAME_ACCESS))
-        return *dup;
-    *dup = NULL;
-    return h;
+    SECURITY_ATTRIBUTES sa;
+    HANDLE h;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+    h = CreateFileW(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa, disp, FILE_ATTRIBUTE_NORMAL, NULL);
+    return h == INVALID_HANDLE_VALUE ? NULL : h;
+}
+
+/* ログの最後の部分（エラーの内容）を読んで、メッセージとして見せる */
+static void show_log_tail(const wchar_t *logp, DWORD code)
+{
+    static char buf[4097];
+    static wchar_t wbuf[4200], msg[4600];
+    HANDLE h = CreateFileW(logp, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    DWORD n = 0;
+    LARGE_INTEGER sz;
+    int len;
+    wbuf[0] = 0;
+    if (h != INVALID_HANDLE_VALUE) {
+        if (GetFileSizeEx(h, &sz)) {
+            LARGE_INTEGER off;
+            off.QuadPart = sz.QuadPart > 4096 ? sz.QuadPart - 4096 : 0;
+            SetFilePointerEx(h, off, NULL, FILE_BEGIN);
+            if (!ReadFile(h, buf, 4096, &n, NULL)) n = 0;
+        }
+        CloseHandle(h);
+    }
+    buf[n] = 0;
+    {   /* 途中から読んだときの、こわれた先頭の文字（UTF-8の途中）を飛ばす */
+        DWORD i = 0;
+        while (i < n && (buf[i] & 0xC0) == 0x80) i++;
+        len = MultiByteToWideChar(CP_UTF8, 0, buf + i, -1, wbuf, 4200);
+        if (len <= 0) wbuf[0] = 0;
+    }
+    {   /* 長いときは最後の 1200 文字だけ */
+        size_t L = wcslen(wbuf);
+        const wchar_t *t = L > 1200 ? wbuf + (L - 1200) : wbuf;
+        _snwprintf(msg, 4600, L"%ls が止まりました（終了コード %lu）。\r\n\r\n%ls\r\n\r\n詳しくは次のファイルを見てください:\r\n%ls",
+                   APP_TITLE, (unsigned long)code, *t ? t : L"（記録がありません）", logp);
+        msg[4599] = 0;
+    }
+    MessageBoxW(NULL, msg, APP_TITLE, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
 }
 
 static int exists_file(const wchar_t *p)
@@ -107,51 +110,48 @@ static int exists_file(const wchar_t *p)
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-int main(void)
+int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
 {
-    static wchar_t py[BUF], app[BUF], cmd[BUF * 2];
+    static wchar_t py[BUF], app[BUF], cmd[BUF * 2], logp[BUF];
     DWORD n = GetModuleFileNameW(NULL, g_dir, BUF);
     wchar_t *slash;
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
-    HANDLE job;
+    HANDLE job, hlog, hnul;
     DWORD code = 1, err;
     const wchar_t *rest;
-    HANDLE dups[3];
     BOOL ok;
-    int i;
+    (void)hi; (void)hp; (void)cl; (void)show;
 
     if (n == 0 || n >= BUF) {
         fatal(L"起動場所を取得できません。");
-        wait_key();
         return 1;
     }
     slash = wcsrchr(g_dir, L'\\');
     if (slash) *slash = 0;
 
-    SetConsoleTitleW(APP_TITLE);
-
     _snwprintf(py, BUF, L"%ls\\runtime\\python\\python.exe", g_dir);
     _snwprintf(app, BUF, L"%ls\\runtime\\app\\%ls", g_dir, APP_PYC);
-    py[BUF - 1] = app[BUF - 1] = 0;
+    _snwprintf(logp, BUF, L"%ls\\runtime\\last_run.log", g_dir);
+    py[BUF - 1] = app[BUF - 1] = logp[BUF - 1] = 0;
     if (!exists_file(py) || !exists_file(app)) {   /* ZIPの中から直接起動した／runtime が無い */
         fatal(L"runtime フォルダが見つかりません。\r\n\r\n"
               L"ZIPファイルを「すべて展開」してから、"
               L"展開したフォルダの " APP_EXE L" を起動してください。");
-        wait_key();
         return 1;
     }
 
     rest = skip_argv0(GetCommandLineW());
     if (_snwprintf(cmd, BUF * 2, L"\"%ls\" \"%ls\"%ls%ls", py, app, *rest ? L" " : L"", rest) < 0) {
         fatal(L"引数が長すぎます。");
-        wait_key();
         return 1;
     }
     cmd[BUF * 2 - 1] = 0;
 
     SetEnvironmentVariableW(HOME_ENV, g_dir);
-    SetConsoleCtrlHandler(on_ctrl, TRUE);
+    SetEnvironmentVariableW(L"SW_NAS_AUTOQUIT", L"1");        /* 画面のウィンドウを閉じたら終了する（コンソールを出さないため） */
+    SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
+    SetEnvironmentVariableW(L"PYTHONUNBUFFERED", L"1");
 
     /* If this launcher is killed, the app goes with it. Processes the app starts
        (the browser window) are not part of the job and are left alone. */
@@ -166,24 +166,28 @@ int main(void)
         }
     }
 
+    /* コンソール（黒い画面）は出さない。出力は runtime\last_run.log に残す（書けないときは捨てる） */
+    hlog = open_inherit(logp, GENERIC_WRITE, CREATE_ALWAYS);
+    if (!hlog) hlog = open_inherit(L"NUL", GENERIC_WRITE, OPEN_EXISTING);
+    hnul = open_inherit(L"NUL", GENERIC_READ, OPEN_EXISTING);
+
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = std_for_child(STD_INPUT_HANDLE, &dups[0]);
-    si.hStdOutput = std_for_child(STD_OUTPUT_HANDLE, &dups[1]);
-    si.hStdError = std_for_child(STD_ERROR_HANDLE, &dups[2]);
+    si.hStdInput = hnul;
+    si.hStdOutput = hlog;
+    si.hStdError = hlog;
     ZeroMemory(&pi, sizeof(pi));
-    ok = CreateProcessW(py, cmd, NULL, NULL, TRUE, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+    ok = CreateProcessW(py, cmd, NULL, NULL, TRUE, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
                         NULL, g_dir, &si, &pi);
     err = GetLastError();
-    for (i = 0; i < 3; i++)
-        if (dups[i]) CloseHandle(dups[i]);
+    if (hlog) CloseHandle(hlog);
+    if (hnul) CloseHandle(hnul);
     if (!ok) {
         wchar_t msg[512];
         _snwprintf(msg, 512, L"Python を起動できませんでした。(error %lu)", (unsigned long)err);
         msg[511] = 0;
         fatal(msg);
-        wait_key();
         return 1;
     }
     if (job) AssignProcessToJobObject(job, pi.hProcess);   /* failure is harmless */
@@ -194,7 +198,7 @@ int main(void)
     GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hProcess);
 
-    if (code != 0) wait_key();   /* keep the error visible (same as "if errorlevel 1 pause") */
+    if (code != 0) show_log_tail(logp, code);   /* エラーで止まったときは内容を見せる */
     if (job) CloseHandle(job);
     return (int)code;
 }

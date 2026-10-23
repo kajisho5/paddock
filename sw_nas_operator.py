@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS OPERATOR"
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 DEFAULT_PORT = 8797
 
 
@@ -140,6 +140,8 @@ class OpManager(W.Manager):
 
 
 def build_page():
+    if not W.LEGACY_UI and W.UI_PACK:
+        return W.ui_page()     # 新しい画面（React）：どのアプリかは画面の側で切り替える
     h = W.HTML
 
     def sub(old, new):
@@ -1442,7 +1444,9 @@ def main():
     ap.add_argument("--no-browser", action="store_true", help="画面を自動で開かない")
     ap.add_argument("--browser", choices=["app", "default"], default="app")
     ap.add_argument("--data-dir", default="", help="設定・コピーの記録の保存先（既定: このファイルの横）")
+    ap.add_argument("--legacy-ui", action="store_true", help="旧画面（v1.13 まで）で表示する")
     a = ap.parse_args()
+    W.use_legacy(a.legacy_ui)
     W.disable_quick_edit()
 
     data_dir = a.data_dir or pick_data_dir()
@@ -1490,6 +1494,7 @@ def main():
     srv.net = NetTools(mgr, data_dir)
     srv.opener = Opener(mgr, data_dir)
     mgr.start()
+    W.start_autoquit(srv, enabled=False)
 
     op = cfg["op"]
     print("=" * 64)
@@ -1512,7 +1517,7 @@ def main():
     if rec and isinstance(rec.get("share"), dict):
         print(" ※ このPCには共有の設定が残っています（\\\\%s\\%s）。イベントが終わったら、画面の［ネットワーク共有］→［元に戻す］"
               % (computer_name(), rec["share"].get("name") or ""))
-    print(" このウィンドウを閉じるとコピーが止まります（Ctrl+C で終了）")
+    print(" " + ("画面の［終了］（電源のボタン）で止まります。ウィンドウを閉じても、コピーは裏で続けます（もう一度起動すると画面が開きます）" if W.AUTOQUIT else "このウィンドウを閉じると止まります（Ctrl+C で終了）"))
     print("=" * 64, flush=True)
     if not a.no_browser:
         threading.Timer(0.6, W.open_ui, args=(url, data_dir, a.browser)).start()
