@@ -241,7 +241,7 @@ function nextUpGuard(M: Model, ses: Ses) {
   if (Date.now() - lastN < 400) return;   // 連打・ダブルクリックで2人進めない
   lastN = Date.now();
   const lv = liveSes(M);
-  if (lv && lv.key !== ses.key && (Date.now() - warnN > 4000 || Date.now() - warnN < 400)) {   // 確認は 0.4 秒以上あけて押したときだけ通す   // 進行中ではないセッションを見ているとき：もう一度押したら進める
+  if (lv && lv.key !== ses.key && Date.now() - warnN > 4000) {   // 進行中ではないセッションを見ているとき：もう一度押したら進める
     warnN = Date.now(); toast("いま表示しているのは進行中のセッションではありません（進行中：" + sesLabel(lv) + "）。このセッションで進めるなら、もう一度押してください", 4000); return;
   }
   warnN = 0; nextUp(M.r, ses);

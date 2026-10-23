@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.8.8"
+VERSION = "1.8.9"
 DEFAULT_PORT = 8797
 
 
@@ -1371,15 +1371,18 @@ def ppt_open_com(path, show):
     ro = path.startswith("\\\\") or path.startswith("//")   # 別のPCのコピー：読み取り専用で開く（そのPCの差し替えを止めない）
     env = dict(os.environ, SWNAS_PPTREQ=base64.b64encode(json.dumps({"path": path, "show": bool(show), "ro": ro}, ensure_ascii=False).encode("utf-8")).decode("ascii"))
     enc = base64.b64encode(PPT_PS.encode("utf-16-le")).decode("ascii")
-    with _PPT_LOCK:   # 2つ同時に頼まない（二重に開かないように）
-        try:
-            r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
-                               capture_output=True, timeout=45, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except subprocess.TimeoutExpired:   # 二重に開かないよう、ほかの開き方には切り替えない
-            raise ValueError("PowerPoint で開くのに時間がかかっています。PowerPoint の画面を確かめてください（開いていればそのまま使えます。"
-                             "サインイン・パスワード・確認などのメッセージが出ていることもあります）")
-        except OSError:
-            return None
+    if not _PPT_LOCK.acquire(timeout=2):   # 2つ同時に頼まない（二重に開かないように）。前の分が止まっていたら待たせずに知らせる
+        raise ValueError("PowerPoint で前のファイルを開いているところです。PowerPoint の画面を確かめてから、もう一度押してください")
+    try:
+        r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
+                           capture_output=True, timeout=45, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:   # 二重に開かないよう、ほかの開き方には切り替えない
+        raise ValueError("PowerPoint で開くのに時間がかかっています。PowerPoint の画面を確かめてください（開いていればそのまま使えます。"
+                         "サインイン・パスワード・確認などのメッセージが出ていることもあります）")
+    except OSError:
+        return None
+    finally:
+        _PPT_LOCK.release()
     txt = r.stdout.decode("utf-8", "replace").lstrip("\ufeff").strip()
     try:
         data = json.loads(txt[txt.index("{"):]) if "{" in txt else {}
