@@ -6,6 +6,7 @@ const P: Record<string, string> = {
   cog: '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
   cols: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/>',
   list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
+  shoe: '<path fill="currentColor" stroke="none" fill-rule="evenodd" d="M16.88 4.80A9.2 9.2 0 1 1 7.12 4.80A1.80 1.80 0 0 1 9.03 7.85A5.6 5.6 0 1 0 14.97 7.85A1.80 1.80 0 0 1 16.88 4.80ZM18.33 10.07a0.62 0.62 0 1 0 1.24 0a0.62 0.62 0 1 0 -1.24 0ZM17.79 16.30a0.62 0.62 0 1 0 1.24 0a0.62 0.62 0 1 0 -1.24 0ZM4.97 16.30a0.62 0.62 0 1 0 1.24 0a0.62 0.62 0 1 0 -1.24 0ZM4.43 10.07a0.62 0.62 0 1 0 1.24 0a0.62 0.62 0 1 0 -1.24 0Z"/>',
   folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   ext: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   copy: '<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',

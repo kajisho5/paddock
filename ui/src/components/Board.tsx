@@ -68,7 +68,7 @@ export function BoardPane() {
     <div className="bleg"><span><i className="sw recv" />受付済み</span><span><i className="sw got" />会場取得済</span><span><i className="sw copying" />コピー中</span><span><i className="sw none" />未受付</span><span><i className="sw direct" />会場直</span><span style={{ opacity: .6 }}><i className="sw done" />発表終了</span><span style={{ opacity: .7, textDecoration: "line-through" }}>取り下げ</span><span><i className="sw unread" />未確認（新着）</span><span className="dim">演者をクリックすると中身と解析結果を表示</span></div>
     <Nav cols={real} boardRef={boardRef} navRef={navRef} />
     <div className="boardcols" id="board" ref={boardRef}>
-      {!S.roots.length ? <div className="empty"><div className="ico"><Icon n="folder" /></div><b>監視フォルダがありません</b>［設定］から学会名フォルダを追加してください。</div>
+      {!S.roots.length ? <div className="empty"><div className="ico"><Icon n="shoe" /></div><b>監視フォルダがありません</b>［設定］から学会名フォルダを追加してください。</div>
         : !cols.length ? <div className="empty"><div className="ico"><Icon n="search" /></div><b>該当なし</b>検索の文字や絞り込みを変えてください。</div>
           : cols.map((c) => "empty" in c
             ? <section key={"e" + c.r.id} className="col" data-col={c.r.id + "|"} style={{ ["--vc" as any]: VPAL_[c.ri % VPAL_.length] }}><div className="vh"><div className="n"><Icon n="building" /><span className="vn">{nfc(c.r.label)}</span></div></div>

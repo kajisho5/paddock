@@ -26,7 +26,7 @@ export function CenterPane() {
 function FolderBody() {
   const s = store; const S = s.S; const F = s.F;
   if (s.folderErr && !F) return <div className="empty">{s.folderErr}</div>;
-  if (!s.SEL || !S) return IS_RX ? null : <div className="empty" style={{ paddingTop: 90 }}><div className="ico"><Icon n="folder" /></div><b>演者フォルダを選択</b>左の一覧か通知をクリックすると、<br />その演者フォルダの中身と解析結果がここに表示されます。<br /><br /><span className="dim" style={{ fontSize: 12.5 }}>NAS上のファイルは書き換えません（一覧・属性の取得と、PowerPoint解析のための読み取りのみ）</span></div>;
+  if (!s.SEL || !S) return IS_RX ? null : <div className="empty" style={{ paddingTop: 90 }}><div className="ico"><Icon n="shoe" /></div><b>演者フォルダを選択</b>左の一覧か通知をクリックすると、<br />その演者フォルダの中身と解析結果がここに表示されます。<br /><br /><span className="dim" style={{ fontSize: 12.5 }}>NAS上のファイルは書き換えません（一覧・属性の取得と、PowerPoint解析のための読み取りのみ）</span></div>;
   if (!F) return <div className="empty">読み込み中…</div>;
   const segs = F.group.split("/"); const r = rootById(F.root);
   const name = F.group === "" ? (r && r.depth > 1 ? "（演者フォルダより上のファイル）" : "（直下のファイル）") : segs[segs.length - 1];

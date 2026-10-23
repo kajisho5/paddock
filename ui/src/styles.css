@@ -28,7 +28,7 @@
   --bg:#0b0e12;--bg2:#080a0d;--card:#11161c;--card2:#151b22;--hover:#18202a;--sel:#1b2633;
   --border:#1e2731;--border2:#2a3542;--fg:#e3e9f0;--fg2:#c4cfdb;--muted:#8fa0b2;--dim:#5b6b7b;
   --accent:#e3e9f0;--accent-fg:#0b0e12;--ring:#38bdf8;
-  --ok:#22c55e;--ok-bg:rgba(34,197,94,.14);--ok-fg:#4ade80;
+  --ok:#2bb868;--ok-bg:rgba(43,184,104,.15);--ok-fg:#5fd896;   /* 芝の緑（少しだけ深め） */
   --got:#38bdf8;--got-bg:rgba(56,189,248,.14);--got-fg:#7dd3fc;
   --warn:#f59e0b;--warn-bg:rgba(245,158,11,.14);--warn-fg:#fbbf24;
   --bad:#ef4444;--bad-bg:rgba(239,68,68,.15);--bad-fg:#f87171;
@@ -193,6 +193,7 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 @keyframes flash{0%{background:var(--warn-bg)}100%{background:transparent}}
 .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:13px;line-height:1.8}
 .empty b{display:block;color:var(--fg);font-size:14.5px;margin-bottom:4px}
+.empty .ico svg{width:24px;height:24px}
 .empty .ico{width:46px;height:46px;border-radius:14px;border:1px solid var(--border);display:grid;place-items:center;margin:0 auto 14px;color:var(--muted);background:var(--card2)}
 
 /* 進み具合・タグ */
