@@ -1,9 +1,9 @@
 /* OPERATOR の設定：このPCの会場（日ごとに分かれている学会にも対応）とコピー先 */
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { api, enc } from "../api";
 import type { Config } from "../types";
 import { dayInfo } from "../lib/layout";
-import { nfc } from "../lib/util";
+import { copyText, nfc } from "../lib/util";
 import { OPON, toast } from "../store";
 import { Icon } from "../components/Icons";
 import { netOpen } from "./Net";
@@ -19,6 +19,20 @@ export function opPrepare(c: Config, defDest = "") {
   c.op._dm = !!(c.op.days || []).length;
   const ids = c.roots.map((r, i) => r.id || "#" + i);
   if (!c.op.root || !ids.includes(c.op.root)) c.op.root = ids[0] || "";
+}
+
+/* Stream Deck・Companion から操作するときのURL（このPCの中だけ） */
+function RemoteInfo() {
+  const [info, setInfo] = useState<{ key: string; port: number } | null>(null);
+  useEffect(() => { api<any>("/api/op/remote/info").then(setInfo).catch(() => {}); }, []);
+  if (!info) return null;
+  const base = "http://127.0.0.1:" + info.port + "/api/remote/";
+  const rows: [string, string][] = [["next", "次の人へ（いまの人を発表済みに）"], ["prev", "1人戻す"], ["show", "発表中の人をスライドショーで開く"], ["file", "発表中の人の発表ファイルを開く"], ["folder", "発表中の人のフォルダを開く"], ["status", "いまの状態（発表中・次の人の名前。JSON）"]];
+  return <><h3>Stream Deck・Companion から操作</h3>
+    <p className="hint" style={{ margin: "0 0 8px" }}>Companion の「Generic HTTP」→「GET」に、下のURLを入れてボタンに割り当てます。<b>このPCの中から</b>だけ使えます（Companion はこのPCで動かしてください）。GATE の画面を開いているときに動きます。</p>
+    <div className="grid2" id="remoteUrls">{rows.map(([k, l]) => { const u = base + k + "?key=" + info.key; return <Fragment key={k}><span>{l}</span>
+      <span style={{ display: "flex", gap: 6, alignItems: "center", minWidth: 0 }}><code className="mono" style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u}</code>
+        <button className="ghost sm" onClick={() => copyText(u).then(() => toast("URLをコピーしました"), () => toast("コピーできませんでした"))}><Icon n="copy" />コピー</button></span></Fragment>; })}</div></>;
 }
 
 export function OpSetupGuide() {
@@ -100,6 +114,7 @@ export function OpSection({ c, up, part }: { c: Config; up: () => void; part: "v
       ・コピー先で<b>開かれているファイル（発表中など）は上書きしません</b>。閉じられてから新しい版に差し替えます。<br />
       ・差し替えた旧版はコピー先の「_差し替え前」フォルダに残します。<b>コピー先のファイルを消すことはありません</b>（NAS側で消えても残します）。<br />
       ・コピー先で編集したファイルは、NAS側が更新されない限り上書きしません。</p>
+    <RemoteInfo />
   </>;
   if (part === "dests") {
     const main = op.dests[0];

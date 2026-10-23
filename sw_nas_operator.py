@@ -27,13 +27,13 @@ import sys
 import threading
 import time
 import unicodedata
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Pythonでも隣の sw_nas_watch を読めるように
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.8.10"
+VERSION = "1.9.0"
 DEFAULT_PORT = 8797
 
 
@@ -1549,6 +1549,43 @@ class Stage:
             return {"st": dict(n)}
 
 
+class Remote:
+    """Stream Deck・Companion などから操作するための入口（このPCの中だけ。合言葉つき）。
+    受けた操作は GATE の画面が順に実行する（発表順・セッションの判断は画面と同じにするため）。"""
+    NAME = "remote.json"
+    CMDS = ("next", "prev", "show", "file", "folder")
+
+    def __init__(self, mgr):
+        self.mgr = mgr
+        self.lock = threading.Lock()
+        d = mgr.store.read_json(self.NAME, None)
+        k = d.get("key") if isinstance(d, dict) else None
+        if not (isinstance(k, str) and re.fullmatch(r"[A-Za-z0-9]{12,64}", k)):
+            k = secrets.token_hex(8)
+            try:
+                mgr.store.write_json(self.NAME, {"key": k})
+            except Exception:
+                pass
+        self.key = k
+        self.seq = 0
+        self.q = []          # [(seq, cmd, ts)]
+        self.status = {}     # 画面が知らせてくる、いまの状態（発表中・次の人など）
+        self.seen = 0        # 画面が最後に取りに来た時刻
+
+    def push(self, cmd):
+        with self.lock:
+            self.seq += 1
+            now = time.time()
+            self.q = [x for x in self.q if now - x[2] < 10][-20:] + [(self.seq, cmd, now)]
+            return self.seq
+
+    def take(self, since):
+        with self.lock:
+            self.seen = time.time()
+            now = time.time()
+            return {"seq": self.seq, "cmds": [{"seq": a, "cmd": b} for a, b, t in self.q if a > since and now - t < 10]}
+
+
 class Opener:
     """演者のスライド・フォルダを、このPCのコピー先（コピー済みのもの）から開く。
     NAS上のファイルは開かない（会場側・受付の差し替えに影響を出さないため。PowerPointの鍵ファイルもNASに作らない）。"""
@@ -1689,6 +1726,34 @@ class OpHandler(W.Handler):
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
             return self.send_json(self.server.stage.get())
+        if u.path.startswith("/api/remote/"):   # Stream Deck・Companion から（合言葉 key が必要）
+            rm = self.server.remote
+            if not self.is_local():
+                return self.deny(403, "このPCの中からのみ使えます")
+            q = parse_qs(u.query or "")
+            if not secrets.compare_digest((q.get("key") or [""])[0], rm.key):
+                return self.deny(403, "key が違います（［設定］→「詳細」の Stream Deck・Companion で確かめてください）")
+            cmd = u.path[len("/api/remote/"):]
+            if cmd == "status":
+                return self.send_json(dict(rm.status, screen=time.time() - rm.seen < 5))
+            if cmd not in rm.CMDS:
+                return self.deny(404, "使える操作: " + " / ".join(rm.CMDS + ("status",)))
+            if time.time() - rm.seen > 5:
+                return self.deny(409, "GATE の画面が開いていません（画面を開いているときだけ操作できます）")
+            return self.send_json({"ok": True, "seq": rm.push(cmd)})
+        if u.path == "/api/op/remote":
+            if not self.is_local():
+                return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
+            q = parse_qs(u.query or "")
+            try:
+                since = int((q.get("since") or ["0"])[0])
+            except ValueError:
+                since = 0
+            return self.send_json(self.server.remote.take(since))
+        if u.path == "/api/op/remote/info":
+            if not self.is_local():
+                return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
+            return self.send_json({"key": self.server.remote.key, "port": self.server.server_address[1]})
         if u.path.startswith("/api/op/net"):
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
@@ -1723,6 +1788,10 @@ class OpHandler(W.Handler):
                                                               str(body.get("rel") or ""), str(body.get("how") or "")))
             if u.path == "/api/op/open/settings":
                 return self.send_json(self.server.opener.set(body))
+            if u.path == "/api/op/remote/status":
+                st = {k: str(body.get(k) or "")[:200] for k in ("now", "next", "session", "venue")}
+                self.server.remote.status = st
+                return self.send_json({"ok": True})
             if u.path == "/api/op/stage":
                 return self.send_json(self.server.stage.set(str(body.get("root") or ""), str(body.get("group") or ""),
                                                             str(body.get("st") or "")))
@@ -1797,6 +1866,7 @@ def main():
     srv.net = NetTools(mgr, data_dir)
     srv.opener = Opener(mgr, data_dir)
     srv.stage = Stage(mgr)
+    srv.remote = Remote(mgr)
     mgr.start()
     W.start_autoquit(srv, enabled=False)
 
