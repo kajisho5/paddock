@@ -289,3 +289,8 @@
 .gate .grow[data-dz=bot]{box-shadow:inset 0 -2px 0 var(--g-accent)}
 .ghd .reorder{height:20px;padding:0 8px;border-radius:999px;border:1px solid rgba(94,106,210,.5);background:transparent;color:var(--g-text);font:500 11px var(--sans);cursor:pointer}
 .ghd .reorder:hover{background:var(--g-hover)}
+
+/* セッションの終了 */
+.gs.fin .nm{color:var(--g-text-2)}
+.gs .tm .end{color:var(--g-done);font-family:var(--sans);font-weight:500}
+.gnow .tt.fin{display:flex;align-items:center;gap:6px;color:var(--g-text)}

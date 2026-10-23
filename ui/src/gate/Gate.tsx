@@ -198,8 +198,23 @@ function Tags({ g, max = 2, fresh }: { g: Group; max?: number; fresh?: Set<strin
 const GS: { ses: string; auto: boolean } = { ses: "", auto: true };
 try { const v = localStorage.getItem("gate.ses"); if (v) { GS.ses = v; GS.auto = false; } } catch { /* */ }
 /* いま本番で進んでいるセッション（発表中の人がいる／時刻が進行中） */
+/* セッションの終了：取り下げ以外の全員が発表済み（時刻より優先。バックアップPCとも発表済みでそろう） */
+function sesDone(M: Model, x: Ses) { const L = x.list.filter((g) => !g.mk_drop); return L.length > 0 && L.every((g) => stageOf(M.r.id, g.key, g) === "done"); }
+/* 終わったセッションの次（まだ終わっていないもの） */
+function sesAfter(M: Model, x: Ses): Ses | null { const i = M.sessions.indexOf(x); return M.sessions.slice(i + 1).find((y) => !sesDone(M, y)) || null; }
 function liveSes(M: Model): Ses | null {
-  return M.sessions.find((x) => x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now")) || M.sessions.find((x) => M.tl.get(x.key)?.st === "live") || null;
+  return M.sessions.find((x) => x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now")) || M.sessions.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x)) || null;
+}
+/* セッションを終了にする／取り消す */
+function endSes(M: Model, x: Ses) {
+  for (const g of x.list) if (!g.mk_drop && stageOf(M.r.id, g.key, g) !== "done") setStage(M.r.id, g.key, "done");
+  const nx = sesAfter(M, x);
+  if (!GS.auto && GS.ses === x.key && nx) pickSes("", false);   // 手で選んでいたら、自動（次のセッション）に戻す
+  toast("「" + sesLabel(x) + "」を終了にしました" + (nx ? "。次は「" + sesLabel(nx) + "」です" : ""), 4000);
+}
+function reopenSes(M: Model, x: Ses) {
+  for (const g of x.list) if (STG.st[M.r.id + "|" + g.key]) setStage(M.r.id, g.key, "");
+  pickSes(x.key); toast("「" + sesLabel(x) + "」の終了を取り消しました（全員を未発表に戻しました）", 4000);
 }
 function pickSes(k: string, manual = true) { GS.ses = k; GS.auto = !manual; try { manual ? localStorage.setItem("gate.ses", k) : localStorage.removeItem("gate.ses"); } catch { /* */ } store.emit(); }
 function curSes(M: Model): Ses | null {
@@ -207,8 +222,14 @@ function curSes(M: Model): Ses | null {
   const hit = !GS.auto && ss.find((x) => x.key === GS.ses); if (hit) return hit;
   const now = ss.find((x) => x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now"));   // 発表中の人がいるセッション（時間が延びていても）
   if (now) return now;
-  const live = ss.find((x) => M.tl.get(x.key)?.st === "live") || ss.find((x) => M.tl.get(x.key)?.st === "next");
+  const live = ss.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x));
   if (live) return live;
+  let ld = -1; ss.forEach((x, i) => { if (sesDone(M, x)) ld = i; });   // 終了にしたセッションの次（時刻より早く終わったとき・時刻がないとき）
+  const aft = ld >= 0 ? ss.slice(ld + 1).find((x) => !sesDone(M, x)) : undefined;
+  if (aft) return aft;
+  const nxt = ss.find((x) => M.tl.get(x.key)?.st === "next" && !sesDone(M, x));
+  if (nxt) return nxt;
+  if (ld >= 0 && ss.every((x) => sesDone(M, x))) return ss[ss.length - 1];
   return M.tl.size && [...M.tl.values()].every((x) => x.st === "done") ? ss[ss.length - 1] : ss[0];
 }
 
@@ -217,7 +238,7 @@ export function GateApp() {
   const s = useApp(); const M = build();
   useEffect(() => { stageLoad(); const t = window.setInterval(stageLoad, 3000); return () => clearInterval(t); }, []);   // バックアップPCとそろえているときも数秒で反映
   const ses = M ? curSes(M) : null;
-  const [menu, setMenu] = useState<{ x: number; y: number; g: string } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; g: string; s?: string } | null>(null);
   useEffect(() => { setMenu(null); }, [ses?.key, M?.day, s.q]);
   /* 本番で進んでいるセッションの「発表中」と「次」 */
   const live = M ? (liveSes(M) || ses) : null;
@@ -269,7 +290,7 @@ export function GateApp() {
     document.addEventListener("keydown", k, true); return () => document.removeEventListener("keydown", k, true);   // 先に受ける（Esc を二重に使わない）
   });
   return <div className={cx("gate", s.logOpen && "showlog")}>
-    <Side M={M} ses={ses} />
+    <Side M={M} ses={ses} onMenu={(x, y, k) => setMenu({ x, y, g: "", s: k })} />
     <TopBar M={M} ses={ses} />
     <main className="gmain">
       {alert && M && <ReplAlert M={M} a={alert} close={() => setAlert(null)} />}
@@ -295,7 +316,7 @@ function nowNext(M: Model, ses: Ses) {
 /* Stream Deck・Companion からの操作 */
 function runRemote(cmd: string, c: { M: Model | null; ses: Ses | null; live: Ses | null; pair: { cur?: Group; nx?: Group } }) {
   const { M, live } = c; if (!M || !live) return;
-  if (cmd === "next") { pressFx("bNext"); nextUp(M.r, live); return; }
+  if (cmd === "next") { pressFx("bNext"); nextUp(M.r, live, M); return; }
   if (cmd === "prev") {   // 1人戻す：いまの人を未発表に戻し、前の人を発表中に
     const L = live.list.filter((g) => !g.mk_drop); const i = L.findIndex((g) => stageOf(M.r.id, g.key, g) === "now");
     const p = i > 0 ? L[i - 1] : i < 0 ? [...L].reverse().find((g) => stageOf(M.r.id, g.key, g) === "done") : undefined;
@@ -314,22 +335,32 @@ function nextUpGuard(M: Model, ses: Ses) {
   if (Date.now() - lastN < 400) return;   // 連打・ダブルクリックで2人進めない
   lastN = Date.now(); pressFx("bNext");
   const lv = liveSes(M);
-  if (lv && lv.key !== ses.key && Date.now() - warnN > 4000) {   // 進行中ではないセッションを見ているとき：もう一度押したら進める
+  if (lv && lv.key !== ses.key && !sesDone(M, ses) && Date.now() - warnN > 4000) {   // 終了したセッションで押したとき（次のセッションへ移るだけ）は聞かない   // 進行中ではないセッションを見ているとき：もう一度押したら進める
     warnN = Date.now(); toast("いま表示しているのは進行中のセッションではありません（進行中：" + sesLabel(lv) + "）。このセッションで進めるなら、もう一度押してください", 4000); return;
   }
-  warnN = 0; nextUp(M.r, ses);
+  warnN = 0; nextUp(M.r, ses, M);
 }
-function nextUp(r: Root, ses: Ses) {
+function nextUp(r: Root, ses: Ses, M?: Model) {
   const L = ses.list.filter((g) => !g.mk_drop);
   const i = L.findIndex((g) => stageOf(r.id, g.key, g) === "now");
   const nx = i >= 0 ? L[i + 1] : L.find((g) => stageOf(r.id, g.key, g) !== "done");
-  if (i >= 0 && !nx) { setStage(r.id, L[i].key, "done"); toast("このセッションの最後の演者でした（発表済みにしました）", 4000); return; }
-  if (!nx) { toast("このセッションは全員発表済みです", 3000); return; }
+  if (i >= 0 && !nx) {   // 最後の人が終わった＝セッション終了
+    for (const g of L) if (stageOf(r.id, g.key, g) !== "done") setStage(r.id, g.key, "done");   // 飛ばした人も含めて発表済みに
+    const ns = M ? sesAfter(M, ses) : null;
+    if (M && ns && !GS.auto && GS.ses === ses.key) pickSes("", false);
+    toast("最後の演者でした。このセッションを終了にしました" + (ns ? "（次は「" + sesLabel(ns) + "」。もう一度押すと最初の人を発表中にします）" : ""), 5000); return;
+  }
+  if (!nx) {   // 終了したセッションで押した：次のセッションへ
+    const ns = M ? sesAfter(M, ses) : null;
+    if (ns) { pickSes(ns.key); toast("次のセッション「" + sesLabel(ns) + "」にしました", 3000); }
+    else toast("このセッションは終了しています（このあとのセッションはありません）", 3000);
+    return;
+  }
   setStage(r.id, nx.key, "now"); selectGroup(r.id, nx.key);
 }
 
 /* ---- 左：会場・DAY・セッション */
-function Side({ M, ses }: { M: Model | null; ses: Ses | null }) {
+function Side({ M, ses, onMenu }: { M: Model | null; ses: Ses | null; onMenu: (x: number, y: number, s: string) => void }) {
   const s = store; const S = s.S!; const o = S.op;
   const venue = nfc((o.venue || "").split("/").filter(Boolean).filter((x) => !dayInfo(x)).pop() || (M ? M.r.label : ""));
   const nb = netBadge();
@@ -352,13 +383,16 @@ function Side({ M, ses }: { M: Model | null; ses: Ses | null }) {
     <div className="gh">セッション{M ? " · " + M.sessions.length : ""}</div>
     <nav className="gses" id="gses">{M && M.sessions.map((x) => {
       const st = M.tl.get(x.key); const n = x.list.filter((g) => !g.mk_drop); const rc = recvCount(n);
-      const ic = st?.st === "done" ? "done" : st?.st === "live" ? "live" : st?.st === "next" ? "progress" : "pending";
-      return <button key={x.key} aria-current={ses?.key === x.key ? "true" : undefined} className={cx("gs", ses?.key === x.key && "on")} data-ses={x.key} onClick={() => pickSes(x.key)} title={nfc(x.name)}>
+      const fin = sesDone(M, x); const run = !fin && x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now");
+      const ic = fin ? "done" : run || st?.st === "live" ? "live" : st?.st === "done" ? "done" : st?.st === "next" ? "progress" : "pending";
+      return <button key={x.key} aria-current={ses?.key === x.key ? "true" : undefined} className={cx("gs", ses?.key === x.key && "on", fin && "fin")} data-ses={x.key} onClick={() => pickSes(x.key)} title={nfc(x.name) + "\n右クリック：セッションを終了にする／取り消す"}
+        onContextMenu={(e) => { e.preventDefault(); onMenu(e.clientX, e.clientY, x.key); }}>
         <RIcon k={ic as any} /><span className="nm">{sesLabel(x)}</span><span className="c">{rc}/{n.length}</span>
         <span className="tm">{x.t ? fmtT(x.t.s) + (x.t.e != null ? "–" + fmtT(x.t.e) : "〜") : ""}
-          {st?.st === "live" && <span className="live">進行中{st.rem != null ? " 残り" + st.rem + "分" : ""}</span>}
-          {st?.st === "next" && <span className="nxt">次 · あと{Math.max(0, st.until)}分</span>}
-          {st?.st === "done" && <span>終了</span>}</span>
+          {fin ? <span className="end">終了</span> : <>
+          {(run || st?.st === "live") && <span className="live">進行中{st?.st === "live" && st.rem != null ? " 残り" + st.rem + "分" : ""}</span>}
+          {!run && st?.st === "next" && <span className="nxt">次 · あと{Math.max(0, st.until)}分</span>}
+          {!run && st?.st === "done" && <span>時間終了</span>}</>}</span>
       </button>;
     })}</nav>
     <div className="gfoot">
@@ -438,18 +472,20 @@ function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
   const cur = ses.list.find((g) => stageOf(M.r.id, g.key, g) === "now");
   const L = ses.list.filter((g) => !g.mk_drop); const ci = cur ? L.indexOf(cur) : -1;
   const nx = ci >= 0 ? L[ci + 1] : L.find((g) => stageOf(M.r.id, g.key, g) !== "done");
-  return <div className="gnow">
+  const fin = sesDone(M, ses); const ns = fin ? sesAfter(M, ses) : null;
+  return <div className={cx("gnow", fin && "fin")}>
     <div className="cur">
       <div className="lb">発表中</div>
       <Swap k={cur ? cur.key : "-"}>{cur ? <div className="who"><span className="o">{ci + 1}</span>{nameOf(cur).name}<span className="no">{nameOf(cur).no}</span></div>
+        : fin ? <div className="tt fin"><RIcon k="done" />このセッションは終了しました</div>
         : <div className="tt">まだいません（右クリック「発表中にする」か ［次の人へ］）</div>}</Swap>
     </div>
     <div className="cur nxb">
       <div className="lb">次</div>
-      <Swap k={nx ? nx.key : "-"}>{nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span></div> : <div className="tt">—</div>}</Swap>
+      <Swap k={nx ? nx.key : ns ? "s:" + ns.key : "-"}>{nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span></div> : ns ? <div className="tt">次のセッション：{sesLabel(ns)}</div> : <div className="tt">—</div>}</Swap>
     </div>
-    <button className="gb big" id="bNext" onMouseUp={(e) => e.currentTarget.blur()} onClick={() => nextUpGuard(M, ses)} title="いまの人を発表済みにして、次の人を発表中にします（キー N）">
-      {cur ? "次の人へ" : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
+    <button className="gb big" id="bNext" onMouseUp={(e) => e.currentTarget.blur()} onClick={() => nextUpGuard(M, ses)} title={fin ? "次のセッションを表示します（キー N）" : "いまの人を発表済みにして、次の人を発表中にします（キー N）"}>
+      {fin ? (ns ? "次のセッションへ" : "終了") : cur ? (nx ? "次の人へ" : "終えてセッション終了") : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
     <div className="keys">↑↓ 選ぶ・Enter 発表中にする・右クリック メニュー</div>
   </div>;
 }
@@ -561,7 +597,7 @@ function dblOpen(root: string, group: string) {
 const SHOWX = /\.(pptx?|ppsx?|pptm|ppsm)$/i, PRESX = /\.(pptx?|ppsx?|pptm|ppsm|key|pdf)$/i;
 
 /* ---- 右クリックのメニュー */
-function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: string }; close: () => void }) {
+function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: string; s?: string }; close: () => void }) {
   const ref = useRef<HTMLDivElement>(null); const [pos, setPos] = useState({ x: at.x, y: at.y });
   const g = (M.r.groups || []).find((x) => x.key === at.g); const st = stageOf(M.r.id, at.g);
   useLayoutEffect(() => {   // 画面からはみ出さないように
@@ -579,9 +615,10 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
     document.addEventListener("mousedown", c); window.addEventListener("blur", w); window.addEventListener("resize", w); document.addEventListener("scroll", sc, true);
     return () => { document.removeEventListener("mousedown", c); window.removeEventListener("blur", w); window.removeEventListener("resize", w); document.removeEventListener("scroll", sc, true); };
   }, []);
-  useEffect(() => { if (!g) close(); }, [g]);
-  if (!g) return null;
-  const has = g.files > 0 && OPEN.settings.enabled; const ok = canOpen(g); const s0 = store;
+  const sx = at.s ? M.sessions.find((x) => x.key === at.s) : undefined;
+  useEffect(() => { if (!g && !sx) close(); }, [g, sx]);
+  if (!g && !sx) return null;
+  const has = !!g && g.files > 0 && OPEN.settings.enabled; const ok = !!g && canOpen(g); const s0 = store;
   const it = (label: React.ReactNode, f: () => void, opt: { k?: string; dis?: boolean; ic?: React.ReactNode; id?: string } = {}) =>
     <button className="it" id={opt.id} disabled={opt.dis} onClick={(e) => { e.currentTarget.classList.add("hit"); setTimeout(() => { close(); f(); }, 90); }}>{opt.ic}{label}{opt.k && <kbd>{opt.k}</kbd>}</button>;
   const onKey = (e: React.KeyboardEvent) => {
@@ -589,6 +626,16 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
     if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length]?.focus(); }
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
   };
+  if (sx) {   // セッションの右クリック
+    const fin = sesDone(M, sx); const any = sx.list.some((x) => STG.st[M.r.id + "|" + x.key]);
+    return <div className="gmenu" ref={ref} role="menu" style={{ left: pos.x, top: pos.y }} onKeyDown={onKey} id="gmenu">
+      <div className="hd">{sesLabel(sx)}</div>
+      {!fin && it("セッションを終了にする（全員を発表済みに）", () => endSes(M, sx), { ic: <RIcon k="done" />, id: "mSesEnd" })}
+      {any && it(fin ? "終了を取り消す（全員を未発表に戻す）" : "全員を未発表に戻す", () => reopenSes(M, sx), { ic: <Icon n="chevL" />, id: "mSesReopen" })}
+      {it("このセッションを表示", () => pickSes(sx.key), { ic: <Icon n="chev" /> })}
+    </div>;
+  }
+  if (!g) return null;
   return <div className="gmenu" ref={ref} role="menu" style={{ left: pos.x, top: pos.y }} onKeyDown={onKey} id="gmenu">
     <div className="hd">{nameOf(g).no} {nameOf(g).name}</div>
     {st !== "now" && it("発表中にする", () => setStage(M.r.id, g.key, "now"), { k: "Enter", ic: <RIcon k="live" />, id: "mNow" })}
