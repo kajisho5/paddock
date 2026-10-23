@@ -144,7 +144,7 @@
 @keyframes pc-pop{0%{transform:scale(1)}35%{transform:scale(2.2)}100%{transform:scale(1)}}
 
 .odots{display:inline-flex;gap:3px;margin-left:4px}
-.grow .rcv.got,.grow .rcv.direct{color:var(--g-received)}
+.grow .rcv.got,.grow .rcv.direct,.grow .rcv.byo{color:var(--g-received)}
 .gt[data-k=warn]{color:var(--g-progress)}
 /* ラベル */
 .gt{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;background:var(--g-active);color:var(--g-text-2);font:500 11px var(--sans);white-space:nowrap}
@@ -173,6 +173,8 @@
 .gwarn .ri{margin-top:3px}
 .gwarn > div{display:flex;flex-direction:column;gap:6px;min-width:0}
 .gwarn b{display:block;font-weight:500}.gwarn span{color:var(--g-text-2);font-size:12px;word-break:break-all}
+.gbyo{margin:14px 16px 0;padding:10px 12px;border:1px solid var(--g-border-strong);border-radius:8px;display:flex;flex-direction:column;gap:2px}
+.gbyo b{font-weight:500}.gbyo span{color:var(--g-text-2);font-size:12px}
 .gdet .sec{font:500 11px var(--sans);color:var(--g-text-2);padding:16px 16px 6px}
 .gmemo{margin:0 16px 6px;padding:10px 12px;border:1px solid var(--g-border);border-radius:8px;background:var(--g-panel)}
 .gmemo small{display:block;font:400 11px var(--mono);color:var(--g-text-2);margin-bottom:2px}

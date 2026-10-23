@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK SADDLE"
-VERSION = "1.5.5"
+VERSION = "1.5.6"
 DEFAULT_PORT = 8795
 RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（PADDOCK SCOUT は常に無視する）
 CHUNK = 1 << 20
