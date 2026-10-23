@@ -51,7 +51,7 @@ export function RxPanel() {
       <div className="btns"><button className="pri" disabled={busy} onClick={rxUsbOpen}><Icon n="hd" />USB・ドライブから取り込む</button>
         <button disabled={busy} onClick={() => fileRef.current?.click()}><Icon n="file" />ファイルを選ぶ</button>
         <button disabled={busy} onClick={() => dirRef.current?.click()}><Icon n="folder" />フォルダを選ぶ</button></div></div>
-    <div id="rxprog"><RxProg /></div><RxTray /><RxRes /><RxHist />
+    <div id="rxprog"><RxProg /></div><RxTray key={RX.key} /><RxRes /><RxHist />
   </div></div>;
 }
 function cancel() { const s = rxSel(); if (RX.up) { RX.up.cancel = true; if (RX.xhr) RX.xhr.abort(); } else if (s) api("/api/rx/cancel", { root: s.root, group: s.group }).catch(() => {}); }

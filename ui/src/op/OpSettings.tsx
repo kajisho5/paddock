@@ -33,6 +33,10 @@ const OPD: { root: string; dirs: string[] | null; sub: Record<string, Sub>; err:
 
 export function OpSection({ c, up }: { c: Config; up: () => void }) {
   const op = c.op;
+  {   // 監視フォルダを追加・削除したときも、選べる監視フォルダにそろえる（はじめての設定で会場が読み込めなくならないように）
+    const ids = c.roots.map((r, i) => r.id || "#" + i);
+    if (!ids.includes(op.root)) { op.root = ids[0] || ""; op.venue = ""; }
+  }
   const rootIdx = c.roots.findIndex((r, i) => (r.id || "#" + i) === op.root);
   const rr = rootIdx >= 0 ? c.roots[rootIdx] : null;
   const rp = rr ? rr.path : "";

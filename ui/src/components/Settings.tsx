@@ -1,5 +1,5 @@
 /* 設定（監視フォルダ・検出・解析・目印・通知・無視するファイル ＋ OPERATOR／RECEPTION の設定） */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "../api";
 import { APP_TITLE, BASE_VERSION, IS_OP, IS_RX } from "../boot";
 import type { Config, Mark } from "../types";
@@ -47,7 +47,6 @@ function SettingsBody() {
   const [coi, setCoi] = useState((c.coi_keywords || []).join("\n"));
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") closeModal(); }; document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k); }, []);
 
   const save = async () => {
     if (np.p.trim()) { toast("入力中のパスは［追加］を押してから保存してください", 4500); return; }
@@ -57,6 +56,13 @@ function SettingsBody() {
     delete (c as any).mark_recv; delete (c as any).mark_got;
     // コピーするのは SW NAS OPERATOR だけ。コピー先が1つ以上あれば有効
     c.op.enabled = IS_OP && c.op.dests.some((d) => d.enabled && String(d.path || "").trim());
+    if (IS_OP && c.op._dm) {   // 日ごとに分かれているとき：会場を選んでいない日があると保存しない（全体をコピーしてしまわないように）
+      const days = (c.op.days || []).filter((d) => d.label || d.venue);
+      const bad = days.filter((d) => !d.venue.split("/")[1]);
+      if (!days.length) { setErr("日ごとの会場を1つ以上選んでください"); return; }
+      if (bad.length) { setErr("会場を選んでいない日があります: " + bad.map((d) => d.label || "（日のフォルダ未選択）").join("、")); return; }
+      if (!c.op.day || !days.some((d) => d.label === c.op.day)) c.op.day = days[0].label;
+    }
     setBusy(true); setErr("");
     try {
       if (IS_OP) await openSettingsSave();

@@ -28,13 +28,12 @@ import threading
 import time
 import unicodedata
 from urllib.parse import urlparse
-from urllib.request import urlopen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Pythonでも隣の sw_nas_watch を読めるように
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS OPERATOR"
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 DEFAULT_PORT = 8797
 
 
@@ -1468,17 +1467,8 @@ def main():
         raise SystemExit(str(e))
 
     url = "http://127.0.0.1:%d/" % a.port
-    if not W.port_free("127.0.0.1", a.port):
-        try:
-            with urlopen(url + "api/ping", timeout=2) as r:
-                if json.loads(r.read().decode("utf-8")).get("app") == APP_NAME:
-                    print("%s はすでに起動しています。画面を開きます: %s" % (APP_NAME, url))
-                    if not a.no_browser:
-                        W.open_ui(url, data_dir, a.browser)
-                    return
-        except Exception:
-            pass
-        raise SystemExit("ポート %d が使用中です。--port で別の番号を指定してください" % a.port)
+    if not W.claim_port("127.0.0.1", a.port, url, APP_NAME, None if a.no_browser else (lambda: W.open_ui(url, data_dir, a.browser))):
+        return
     store.roots = [r["path"] for r in cfg["roots"]]
     store.write_json("config.json", cfg)      # 2つ目の起動（すでに起動中）では設定ファイルに触れない
 

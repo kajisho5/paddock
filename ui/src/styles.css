@@ -127,6 +127,8 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 @media (max-width:1400px){.app.v-list .main{grid-template-columns:minmax(300px,380px) minmax(0,1fr)}.app.v-list .log{display:none}.app.v-list.showlog .log{display:flex}}
 .app.v-board .center{position:absolute;right:18px;top:14px;bottom:16px;width:min(780px,58vw);z-index:20;box-shadow:-20px 0 60px rgba(0,0,0,.18)}
 :root[data-theme="dark"] .app.v-board .center{box-shadow:-20px 0 60px rgba(0,0,0,.6)}
+.app.v-board.drawer .boardcols{padding-right:calc(min(780px,58vw) + 12px)}
+@media (min-width:1401px){.app.v-list #bLog{display:none}}
 #dhead{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 18px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);flex:none}
 
 /* ---------- リスト ---------- */

@@ -57,14 +57,14 @@ static const wchar_t *skip_argv0(const wchar_t *p)
 }
 
 /* 子プロセス（Python）に渡すハンドル（継承できるように作る） */
-static HANDLE open_inherit(const wchar_t *path, DWORD access, DWORD disp)
+static HANDLE open_inherit(const wchar_t *path, DWORD access, DWORD disp, DWORD share)
 {
     SECURITY_ATTRIBUTES sa;
     HANDLE h;
     sa.nLength = sizeof(sa);
     sa.lpSecurityDescriptor = NULL;
     sa.bInheritHandle = TRUE;
-    h = CreateFileW(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa, disp, FILE_ATTRIBUTE_NORMAL, NULL);
+    h = CreateFileW(path, access, share, &sa, disp, FILE_ATTRIBUTE_NORMAL, NULL);
     return h == INVALID_HANDLE_VALUE ? NULL : h;
 }
 
@@ -73,7 +73,7 @@ static void show_log_tail(const wchar_t *logp, DWORD code)
 {
     static char buf[4097];
     static wchar_t wbuf[4200], msg[4600];
-    HANDLE h = CreateFileW(logp, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE h = *logp ? CreateFileW(logp, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL) : INVALID_HANDLE_VALUE;
     DWORD n = 0;
     LARGE_INTEGER sz;
     int len;
@@ -97,8 +97,12 @@ static void show_log_tail(const wchar_t *logp, DWORD code)
     {   /* 長いときは最後の 1200 文字だけ */
         size_t L = wcslen(wbuf);
         const wchar_t *t = L > 1200 ? wbuf + (L - 1200) : wbuf;
-        _snwprintf(msg, 4600, L"%ls が止まりました（終了コード %lu）。\r\n\r\n%ls\r\n\r\n詳しくは次のファイルを見てください:\r\n%ls",
-                   APP_TITLE, (unsigned long)code, *t ? t : L"（記録がありません）", logp);
+        if (!*logp)
+            _snwprintf(msg, 4600, L"%ls が止まりました（終了コード %lu）。\r\n\r\n（記録を書けなかったため、内容を表示できません）",
+                       APP_TITLE, (unsigned long)code);
+        else
+            _snwprintf(msg, 4600, L"%ls が止まりました（終了コード %lu）。\r\n\r\n%ls\r\n\r\n詳しくは次のファイルを見てください:\r\n%ls",
+                       APP_TITLE, (unsigned long)code, *t ? t : L"（記録がありません）", logp);
         msg[4599] = 0;
     }
     MessageBoxW(NULL, msg, APP_TITLE, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
@@ -167,9 +171,22 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
     }
 
     /* コンソール（黒い画面）は出さない。出力は runtime\last_run.log に残す（書けないときは捨てる） */
-    hlog = open_inherit(logp, GENERIC_WRITE, CREATE_ALWAYS);
-    if (!hlog) hlog = open_inherit(L"NUL", GENERIC_WRITE, OPEN_EXISTING);
-    hnul = open_inherit(L"NUL", GENERIC_READ, OPEN_EXISTING);
+    /* 記録は、ほかで書いている最中のもの（起動中のもう1つ）を消さないよう、書き込みの共有を許さずに開く。
+       使われていたら last_run_2.log … を使う。どれも書けなければ捨てる（古い記録をエラーとして見せない） */
+    {
+        int k;
+        hlog = NULL;
+        for (k = 1; k <= 5 && !hlog; k++) {
+            if (k > 1) _snwprintf(logp, BUF, L"%ls\\runtime\\last_run_%d.log", g_dir, k);
+            logp[BUF - 1] = 0;
+            hlog = open_inherit(logp, GENERIC_WRITE, CREATE_ALWAYS, FILE_SHARE_READ);
+        }
+        if (!hlog) {
+            logp[0] = 0;
+            hlog = open_inherit(L"NUL", GENERIC_WRITE, OPEN_EXISTING, FILE_SHARE_READ | FILE_SHARE_WRITE);
+        }
+    }
+    hnul = open_inherit(L"NUL", GENERIC_READ, OPEN_EXISTING, FILE_SHARE_READ | FILE_SHARE_WRITE);
 
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);

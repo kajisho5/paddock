@@ -1,4 +1,5 @@
 /* 小さな部品：状態のチップ・進み具合・コピー状況など（一覧・会場ボード・演者画面で共通） */
+import { useEffect, useState } from "react";
 import type { AnaSum, CpState, Group, Root } from "../types";
 import { Icon } from "./Icons";
 import { actv, fmtDur, fmtT, isGot, isRecv, isTodo, recvState, STL, type RState, type SStat, type STime } from "../lib/layout";
@@ -77,15 +78,20 @@ export function GotProg({ list }: { list: Group[] }) {
   return <span className={cx("gotc", t && n === t && "done")} title="会場取得済（「取得済」の目印あり）">取得 {n}/{t}</span>;
 }
 /* 受信中（NASへ書き込み中）・このPCへのコピー中の進み具合 */
+/* 受信の経過時間（1秒ごとに進める） */
+function Elapsed({ since }: { since: number }) {
+  const [, f] = useState(0);
+  useEffect(() => { const t = window.setInterval(() => f((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  return <>{mss(Date.now() / 1000 + store.SKEW - since)}</>;
+}
 export function RowProg({ r, g }: { r: Root; g: Group }) {
   const S = store.S!;
   const a = OPON() && r.id === S.op.root && S.op.active && S.op.active.rel.startsWith(g.key + "/") ? S.op.active : null;
   if (!g.pending && !a) return null;
-  const now = Date.now() / 1000 + store.SKEW;
   return <>
     {!!g.pending && <div className="rx" title="NASへの書き込み中（全体のサイズはNASの一覧からは分からないため、受信済みサイズと速度を表示）">
       <span className="rbar ind"><i /></span>
-      <span className="rt">受信中{g.pending > 1 ? " " + g.pending + "件" : ""}{g.pbytes ? " " + fmtSize(g.pbytes) : ""}{rateOf(r.id, g) ? " · " + fmtSize(rateOf(r.id, g)) + "/s" : ""}{g.pstart ? " · " + mss(now - g.pstart) : ""}</span></div>}
+      <span className="rt">受信中{g.pending > 1 ? " " + g.pending + "件" : ""}{g.pbytes ? " " + fmtSize(g.pbytes) : ""}{rateOf(r.id, g) ? " · " + fmtSize(rateOf(r.id, g)) + "/s" : ""}{g.pstart ? <> · <Elapsed since={g.pstart} /></> : ""}</span></div>}
     {a && (() => {
       const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0;
       const lb = (S.op.dests || []).filter((d) => (a.dests || []).includes(d.id)).map((d) => d.label).join("・");

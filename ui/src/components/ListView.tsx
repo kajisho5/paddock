@@ -1,5 +1,5 @@
 /* リスト表示（左）：監視フォルダ → 会場 → （日）→ セッション → 演者 のツリー */
-import { Fragment } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import type { Group, Root } from "../types";
 import { cmpDay, dayOK, isTodayLabel, isTodo, lay, parts, recvState, sesStatus, sesTime, todayDay, type SStat } from "../lib/layout";
 import { ago, cmpName, cmpPath, cx, fmtSize, nfc, whereText } from "../lib/util";
@@ -146,10 +146,17 @@ function Row({ r, g, hier }: { r: Root; g: Group; hier: boolean }) {
   const where = segs.length > 1 ? segs.slice(0, -1).join("/") : "";
   const v = venueOf(r.id, g.key);
   const isSel = !!s.SEL && s.SEL.root === r.id && s.SEL.group === g.key;
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isSel || !ref.current) return;
+    const go = () => ref.current?.scrollIntoView({ block: "nearest" });
+    go(); const t1 = setTimeout(go, 400), t2 = setTimeout(go, 1500);   // 中身が読み込まれて行の高さが変わっても隠れないように
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [isSel]);   // 自動表示・通知・ログから選んだときも見える位置へ
   const st = g.key === "" ? "" : recvState(g);
   const cps = OPON() && g.cp ? opDests().map((d) => (g.cp![d.id] ? <CpPill key={d.id} label={d.label} st={g.cp![d.id]} /> : null)) : null;
   const stTag = st === "drop" ? <Tag t="drop">演題取り下げ</Tag> : st === "done" ? <Tag t="done">発表終了</Tag> : st === "none" ? <Tag t="dim">未受付</Tag> : null;
-  return <div className={cx("grp", hier && "hier", st && "st-" + st, g.unread > 0 && "unread", isSel && "sel", s.flashKeys.has(r.id + "|" + g.key) && "flash")} data-r={r.id} data-g={g.key}
+  return <div ref={ref} className={cx("grp", hier && "hier", st && "st-" + st, g.unread > 0 && "unread", isSel && "sel", s.flashKeys.has(r.id + "|" + g.key) && "flash")} data-r={r.id} data-g={g.key}
     onClick={(e) => clickRow(e, r.id, g.key)}>
     <div className="n">{st && <StIcon st={st} />}<span className="nm">{!hier && where && <span className="pre">{v && <span className="vdot" style={{ ["--vc" as any]: vColor(r.id, v) }} />}{whereText(where)} › </span>}{nfc(name)}</span>
       {g.unread > 0 && <span className="badge">{g.unread}</span>}<span className="ago">{g.last_ts ? ago(g.last_ts) : ""}</span></div>

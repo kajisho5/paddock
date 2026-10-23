@@ -3,7 +3,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
 import type { Group, Root } from "../types";
 import { actv, cmpDay, dayOK, fmtDur, fmtT, isRecv, isTodo, lay, parts, recvState, sesStatus, sesTime, STL, todayDay, type STime } from "../lib/layout";
 import { cmpName, cmpPath, cx, dtm, fmtSize, nfc } from "../lib/util";
-import { allDays, clickRow, effDay, effVenue, inVenue, isFold, OPON, opDests, selectGroup, setFold, setFoldMany, setPref, store, useApp, vColor, VPAL_ } from "../store";
+import { allDays, clickRow, effDay, effVenue, foldKeysOf, inVenue, isFold, OPON, opDests, selectGroup, setFold, setFoldMany, setPref, store, useApp, vColor, VPAL_ } from "../store";
 import { AnaChips, Cats, CpPill, FlagChips, Prog, GotProg, ReplTag, RowProg, SesStatus, StIcon, Tag, TimeChip } from "./Bits";
 import { Icon } from "./Icons";
 import { DaySelect, VenueSelect } from "./ListView";
@@ -14,6 +14,13 @@ export function BoardPane() {
   const s = useApp(); const S = s.S;
   const boardRef = useRef<HTMLDivElement>(null);
   const navRef = useRef<HTMLDivElement>(null);
+  /* 自動表示：演者の行が見えない（セッションを閉じている）ときは、そのセッションの見出しまで */
+  useEffect(() => {
+    const k = store.followKey; if (!k) return; store.followKey = null;
+    const i = k.indexOf("|"); const fk = foldKeysOf(k.slice(0, i), k.slice(i + 1)).slice(-1)[0];
+    const sh = fk ? [...document.querySelectorAll<HTMLElement>("#board .ses[data-fold]")].find((x) => x.dataset.fold === fk) : null;
+    if (sh) revealInBoard(sh);
+  });
   if (!S) return <section id="boardpane" className="pane board" />;
   const q = nfc(s.bq).toLowerCase().trim(); const filtering = !!(q || s.onlyU || s.onlyN);
   const DAYS = allDays(), ED = effDay(DAYS), TD = todayDay(DAYS, ED);

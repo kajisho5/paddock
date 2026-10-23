@@ -308,7 +308,7 @@ export async function loadFolder(scrollTop: boolean) {
   store.F = res; store.folderErr = ""; if (scrollTop) folderScrollTop = true; store.emit();
 }
 export function closeDrawer() { store.drawer = false; store.emit(); }
-export function showLog() { store.logOpen = true; store.emit(); }
+export function showLog() { if (innerWidth <= 1400 || store.view === "board") { store.logOpen = true; store.emit(); } }
 export function openOS(root: string, group: string) { api("/api/open", { root, rel: group }).catch((e) => toast(e.message, 5000)); }
 
 /* 演者をダブルクリック：WATCH・RECEPTION は Explorer / Finder で開く（設定でオンのときだけ）。OPERATOR は差し替え（op/opener） */
@@ -325,6 +325,7 @@ export function openFolderOS(root: string, group: string) {
 let LASTCLK: { r: string; g: string; t: number; x: number; y: number } | null = null;
 export function clickRow(e: { clientX: number; clientY: number }, r: string, g: string) {
   const c = LASTCLK;
+  if (g === "") { LASTCLK = null; selectGroup(r, g); return; }   // 演者フォルダより上のファイル：ダブルクリックで監視フォルダ全体を開かない
   if (c && c.r === r && c.g === g && Date.now() - c.t < 450 && Math.abs(e.clientX - c.x) < 8 && Math.abs(e.clientY - c.y) < 8) { LASTCLK = null; openFolderOS(r, g); return; }
   LASTCLK = { r, g, t: Date.now(), x: e.clientX, y: e.clientY };
   selectGroup(r, g);
