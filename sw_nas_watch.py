@@ -48,10 +48,11 @@ import zlib
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 APP_NAME = "PADDOCK SCOUT"
-VERSION = "1.16.10"
+VERSION = "1.16.11"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -3979,6 +3980,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.is_local() or (self.headers.get("Host") or "").lower() not in self.server.allowed_hosts:
             return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
+        if urlparse(self.path).path == "/api/handover":   # 別の版を起動したとき：この版を終わらせる（専用ヘッダーが要るので、ほかのサイトからは送れない）
+            v = (self.headers.get("X-SW-Handover") or "").strip()
+            mine = getattr(self.server, "version", VERSION)
+            if not v or v == mine:
+                return self.deny(400, "same version")
+            block = getattr(self.server, "quit_block", None)
+            msg = block() if block else ""
+            if msg:
+                return self.deny(409, msg)
+            self.send_json({"ok": True})
+            request_quit(self.server, "新しい版（v%s）が起動されたため、この版（v%s）を終了します" % (v, mine))
+            return
         if self.headers.get("X-SW-Token") != self.server.token:
             return self.deny(403, "token")
         try:
@@ -4065,19 +4078,67 @@ STOP_HINT = ("画面のウィンドウを閉じると止まります（画面の
              else "このウィンドウを閉じると止まります（Ctrl+C で終了）")
 
 
-def claim_port(host, port, url, app_name, open_fn=None):
+def _open_quiet(fn):
+    try:
+        fn()
+        return True
+    except Exception:
+        return False
+
+
+def handover(url, version):
+    """裏で動いている別の版に終わってもらう。(ok, 理由)"""
+    req = Request(url + "api/handover", data=b"{}", method="POST",
+                  headers={"Content-Type": "application/json", "X-SW-Handover": version})
+    try:
+        with urlopen(req, timeout=5) as r:
+            return bool(json.loads(r.read().decode("utf-8")).get("ok")), ""
+    except HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode("utf-8")).get("error") or str(e)
+        except Exception:
+            msg = str(e)
+        if e.code == 404 or (e.code == 403 and msg == "token"):   # 引き継ぎに対応していない古い版
+            return False, "old"
+        return False, msg
+    except Exception as e:
+        return False, str(e)
+
+
+def claim_port(host, port, url, app_name, open_fn=None, version=None):
     """ポートが使えるか。同じアプリが動いていれば画面を開いて False（このまま終わる）。
+    裏で動いているのが別の版（更新した直後など）なら、そちらに終わってもらってから、この版で起動する。
     終了したばかりで後片付け中（ポートはまだ使用中・応答なし）のときは、空くまで少し待つ"""
-    for i in range(20):
+    asked = False
+    for i in range(40):
         if port_free(host, port):
             return True
         try:
             with urlopen(url + "api/ping", timeout=2) as r:
-                if json.loads(r.read().decode("utf-8")).get("app") == app_name:
-                    print("%s はすでに起動しています。画面を開きます: %s" % (app_name, url))
-                    if open_fn:
-                        open_fn()
-                    return False
+                j = json.loads(r.read().decode("utf-8"))
+            if j.get("app") == app_name:
+                old = str(j.get("version") or "")
+                if version and old and old != version and not asked:
+                    ok, why = handover(url, version)
+                    if ok:
+                        print("裏で動いていた %s v%s を終了して、v%s で起動します" % (app_name, old, version), flush=True)
+                        asked = True
+                        time.sleep(1)
+                        continue
+                    opened = bool(open_fn) and _open_quiet(open_fn)
+                    if why == "old":
+                        raise SystemExit("%s の別の版（v%s）が裏で動いています。\n%s［終了］（電源のボタン）で終了してから、もう一度起動してください。"
+                                         % (app_name, old, "開いた画面の" if opened else "その画面を開き、"))
+                    raise SystemExit("%s の別の版（v%s）が動いているため、v%s を起動できませんでした。\n%s" % (app_name, old, version, why))
+                if asked:   # 終わるのを待っている
+                    time.sleep(1)
+                    continue
+                print("%s はすでに起動しています。画面を開きます: %s" % (app_name, url))
+                if open_fn:
+                    open_fn()
+                return False
+        except SystemExit:
+            raise
         except Exception:
             pass
         time.sleep(1)
@@ -4202,7 +4263,7 @@ def main():
 
     host = "0.0.0.0" if a.lan else "127.0.0.1"
     url = "http://127.0.0.1:%d/" % a.port
-    if not claim_port(host, a.port, url, APP_NAME, None if a.no_browser else (lambda: open_ui(url, data_dir, a.browser))):
+    if not claim_port(host, a.port, url, APP_NAME, None if a.no_browser else (lambda: open_ui(url, data_dir, a.browser)), VERSION):
         return
     store.roots = [r["path"] for r in cfg["roots"]]
     store.write_json("config.json", cfg)      # 2つ目の起動（すでに起動中）では設定ファイルに触れない
@@ -4211,6 +4272,7 @@ def main():
     srv = Server((host, a.port), Handler)
     srv.mgr = mgr
     srv.token = secrets.token_urlsafe(24)
+    srv.version = VERSION
     srv.lan = a.lan
     srv.stopping = False
     srv.allowed_hosts = {"127.0.0.1:%d" % a.port, "localhost:%d" % a.port, "[::1]:%d" % a.port}

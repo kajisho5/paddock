@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK SADDLE"
-VERSION = "1.5.10"
+VERSION = "1.5.11"
 DEFAULT_PORT = 8795
 RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（PADDOCK SCOUT は常に無視する）
 CHUNK = 1 << 20
@@ -1377,7 +1377,7 @@ def main():
         raise SystemExit(str(e))
 
     url = "http://127.0.0.1:%d/" % a.port
-    if not W.claim_port("127.0.0.1", a.port, url, APP_NAME, None if a.no_browser else (lambda: W.open_ui(url, data_dir, a.browser))):
+    if not W.claim_port("127.0.0.1", a.port, url, APP_NAME, None if a.no_browser else (lambda: W.open_ui(url, data_dir, a.browser)), VERSION):
         return
     store.roots = [r["path"] for r in cfg["roots"]]
     store.write_json("config.json", cfg)      # 2つ目の起動（すでに起動中）では設定ファイルに触れない
@@ -1386,6 +1386,7 @@ def main():
     srv = W.Server(("127.0.0.1", a.port), RxHandler)
     srv.mgr = mgr
     srv.token = secrets.token_urlsafe(24)
+    srv.version = VERSION
     srv.lan = False
     srv.stopping = False
     srv.allowed_hosts = {"127.0.0.1:%d" % a.port, "localhost:%d" % a.port, "[::1]:%d" % a.port}
