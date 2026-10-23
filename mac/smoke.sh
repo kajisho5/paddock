@@ -18,7 +18,8 @@ for app in "PADDOCK SCOUT" "PADDOCK SADDLE" "PADDOCK GATE"; do
   fi
   sleep 4
   if grep -q "メニューバーにアイコンを出しました" "${data}/last_run.log"; then echo "OK メニューバーのアイコン"; else echo "::error::${app}: メニューバーのアイコンが出ていない"; fail=1; fi
-  if curl -fs "http://127.0.0.1:${port}/" | grep -qi "<html"; then echo "OK 画面"; else echo "::error::${app}: 画面が返らない"; fail=1; fi
+  curl -fs "http://127.0.0.1:${port}/" -o /tmp/page.html || true
+  if grep -qi "<html" /tmp/page.html; then echo "OK 画面"; else echo "::error::${app}: 画面が返らない"; fail=1; fi
   if ps -axo command | grep -F "${app}.app/Contents/MacOS/" | grep -v grep >/dev/null; then echo "OK アプリ名のプロセスで動いている"; else echo "::warning::${app}: プロセス名を確認できない"; fi
   screencapture -x "../smoke/${app}.png" 2>/dev/null || true
   open "${app}.app"   # Finder から開き直したとき：画面を開く
@@ -33,4 +34,22 @@ for app in "PADDOCK SCOUT" "PADDOCK SADDLE" "PADDOCK GATE"; do
   pkill -f -- "--app=http://127.0.0.1:${port}/" 2>/dev/null || true
   sleep 1
 done
+# GATE の Mac での開き方（PowerPoint・Keynote が無いランナーでは、スライドショーは「見つからない」と知らせること）
+cd ..
+PY="$PWD/build/mac-python/bin/python3.13"
+"$PY" - <<'PY' || fail=1
+import os, sys, tempfile
+sys.path.insert(0, os.getcwd())
+import sw_nas_operator as O
+d = tempfile.mkdtemp()
+p = os.path.join(d, "架空の発表.pptx")
+open(p, "wb").write(b"x")
+try:
+    O.mac_open(p, "show")
+    print("OK スライドショー（PowerPoint か Keynote がある）")
+except ValueError as e:
+    print("OK スライドショー：", e)
+O.mac_open(d, "file")
+print("OK フォルダを開く")
+PY
 exit $fail

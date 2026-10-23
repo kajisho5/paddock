@@ -1,4 +1,4 @@
-# PADDOCK SCOUT v1.16.13
+# PADDOCK SCOUT v1.17.0
 
 > **名前が変わりました（v1.15.0〜）**：旧名 **SW NAS WATCH** → **PADDOCK SCOUT**。PADDOCK（競馬の下見所）シリーズとして、PADDOCK SCOUT（下見＝監視）・PADDOCK SADDLE（装鞍＝受付で整える）・PADDOCK GATE（ゲート＝会場で発走）の3本になりました。中身・使い方は同じです。新しいZIPを前のフォルダと同じ場所に展開すると、最初の起動で前の設定を引き継ぎます（前のフォルダは変更しません）。
 
@@ -220,6 +220,7 @@ NAS上のファイルを作る・書く・消す・名前を変える処理は�
   - 起動用の `PADDOCK_SCOUT.exe` と、Python（`runtime\python`、python.org公式の「Windows embeddable package」3.13.16）を同梱しています。
   - フォルダの中だけで動き、レジストリやシステムには何も書き込みません。USBメモリに入れて持ち運んでも動きます。
   - 通知の表示には Microsoft Edge（Windows標準）か Google Chrome を使います。
+- **Mac（macOS 11 以降、Apple シリコン・Intel どちらも）**：`PADDOCK_SCOUT_Mac-<版>.dmg` を開き、「PADDOCK SCOUT.app」を「アプリケーション」フォルダにドラッグして起動します（Apple の署名・公証済み。Python は中に入っています）。動いている間はメニューバーにアイコンが出ます。設定は `~/ライブラリ/Application Support/PADDOCK SCOUT` に保存されます。画面は Chrome があれば専用ウィンドウ、無ければ既定のブラウザで開きます。
 
 ## 起動
 
@@ -280,6 +281,10 @@ PADDOCK_SCOUT.exe --legacy-ui          # 前の画面（v1.13 まで）で表示
 ```
 
 二重に起動した場合は、起動中の画面が開くだけです。
+
+## v1.17.0 の変更
+
+- Mac 版（.app、Apple の署名・公証済み）を追加。PADDOCK SADDLE・PADDOCK GATE も同じ。メニューバーにアイコンが出ます。
 
 ## v1.16.13 の変更
 
