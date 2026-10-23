@@ -13,8 +13,8 @@ import { Icon } from "./Icons";
 import { fuOf } from "../lib/layout";
 
 export function VenueSelect({ id }: { id: string }) {
-  const s = useApp(); const S = s.S!;
-  if (OPON()) return null;   // 会場の発表PC：自分の会場だけなので、会場の切り替えは出さない
+  const s = useApp(); const S = s.S;
+  if (!S || OPON()) return null;   // 会場の発表PC：自分の会場だけなので、会場の切り替えは出さない
   const opts: [string, string][] = [];
   for (const r of S.roots) {
     if (r.depth < 2) continue;
@@ -40,11 +40,10 @@ export function ListPane() {
   return <section id="left" className="pane left">
     <div className="ph"><div className="search"><Icon n="search" /><input id="q" type="text" placeholder="演者・セッションを検索" autoComplete="off" value={s.q} onChange={(e) => { s.q = e.target.value; s.emit(); }} /></div></div>
     {S && <div className="tools">
-      <VenueSelect id="venue" /><DaySelect id="lday" />
       <label><input type="checkbox" id="onlyU" checked={s.onlyU} onChange={(e) => setPref("onlyU", e.target.checked)} />未確認のみ</label>
       <label><input type="checkbox" id="onlyN" checked={s.onlyN} onChange={(e) => setPref("onlyN", e.target.checked)} />未受付のみ</label>
       <span style={{ flex: 1 }} />
-      <select id="sort" value={s.sort} onChange={(e) => setPref("sort", e.target.value as any)}><option value="name">会場・セッション順</option><option value="recent">変更が新しい順</option><option value="unread">未確認を上に</option></select>
+      <select id="sort" value={s.sort} onChange={(e) => setPref("sort", e.target.value as any)}><option value="name">会場・セッション順</option><option value="recent">新しい順</option><option value="unread">未確認を上に</option></select>
     </div>}
     <div className="scroll" id="groups">{S && <Groups />}</div>
   </section>;

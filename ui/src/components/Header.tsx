@@ -4,9 +4,10 @@ import { api } from "../api";
 import type { Root } from "../types";
 import { APP_SUB, APP_TITLE, IS_OP, IS_RX } from "../boot";
 import { hms, nfc, cx } from "../lib/util";
-import { askPerm, loadState, quitApp, markAllSeen, OPON, opDests, setFollow, setView, testNotify, toast, useApp } from "../store";
+import { allDays, askPerm, loadState, quitApp, markAllSeen, OPON, opDests, setFollow, setView, testNotify, toast, useApp } from "../store";
 import { Icon } from "./Icons";
 import { Bar, Segmented } from "../design/ui";
+import { DaySelect, VenueSelect } from "./ListView";
 import { openCfg } from "./Settings";
 import { netBadge, netOpen } from "../op/Net";
 
@@ -76,34 +77,45 @@ function LogButton() {
   if (s.logOpen) LOG_SEEN = last;
   const n = s.logOpen || LOG_SEEN < 0 ? 0 : evs.filter((e) => e.id > LOG_SEEN).length;
   return <button className="ghost" id="bLog" aria-expanded={s.logOpen} title="変更ログ（NAS上の変化の記録）" onClick={() => { s.logOpen = !s.logOpen; LOG_SEEN = last; s.emit(); }}>
-    <Icon n="list" />ログ{n > 0 && <span className="badge" aria-label={n + "件の新しい変更"}>{n > 99 ? "99+" : n}</span>}</button>;
+    <Icon n="list" /><span className="bt">ログ</span>{n > 0 && <span className="badge" aria-label={n + "件の新しい変更"}>{n > 99 ? "99+" : n}</span>}</button>;
 }
 
 export function Header() {
   const s = useApp();
-  return <header className="hdr">
+  // 幅が足りないときだけボタンを記号だけにする（はみ出しを測って決める）
+  const ref = useRef<HTMLElement>(null); const need = useRef(0); const [compact, setCompact] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current; if (!el) return;
+    const fit = () => {
+      if (!el.classList.contains("compact")) { if (el.scrollWidth > el.clientWidth + 1) { need.current = el.scrollWidth; setCompact(true); } }
+      else if (el.clientWidth >= need.current) setCompact(false);
+    };
+    fit(); const ro = new ResizeObserver(fit); ro.observe(el); return () => ro.disconnect();
+  });
+  return <header ref={ref} className={cx("hdr", compact && "compact")}>
     <div className="logo"><img className="mark" src={APP_ICON} alt="" width={34} height={34} />
       <span className="lt">{APP_TITLE}<small>SEVENTHWELL · {APP_SUB}</small></span></div>
     {IS_OP && OPON() ? <div className="rootsw">{!s.conn && <span className="conn">再接続中…</span>}</div> : <Roots />}
+    {s.S && !(IS_OP && OPON()) && <div className="hsel"><VenueSelect id="venue" /><DaySelect id="lday" /></div>}
     <Segmented label="表示の切り替え" value={s.view} onChange={(v) => setView(v)} items={[
       { v: "list", id: "vList", title: "会場・セッション・演者の一覧と、フォルダの中身", label: <><Icon n="list" /><span className="lb">リスト</span></> },
       { v: "board", id: "vBoard", title: "全会場を横に並べて受付状況を一覧", label: <><Icon n="cols" /><span className="lb">会場ボード</span></> },
     ]} />
     <div className="hbtns">
       {!IS_OP && !IS_RX && <label className="switch" title="更新があったフォルダを自動で表示（操作中の15秒間は切り替えない）">
-        <input type="checkbox" id="swFollow" checked={s.FOLLOW} onChange={(e) => setFollow(e.target.checked)} /><span className="track"><span className="thumb" /></span>自動表示</label>}
+        <input type="checkbox" id="swFollow" checked={s.FOLLOW} onChange={(e) => setFollow(e.target.checked)} /><span className="track"><span className="thumb" /></span><span className="bt">自動表示</span></label>}
       <LogButton />
-      {!IS_OP && !IS_RX && <button className="ghost" id="bTest" title="デスクトップ通知が出るか確認" onClick={testNotify}><Icon n="bell" />テスト通知</button>}
-      <button className="ghost" id="bAll" onClick={markAllSeen}><Icon n="check2" />すべて既読</button>
+      {!IS_OP && !IS_RX && <button className="ghost" id="bTest" title="デスクトップ通知が出るか確認" onClick={testNotify}><Icon n="bell" /><span className="bt">テスト通知</span></button>}
+      <button className="ghost" id="bAll" title="すべて既読にする" onClick={markAllSeen}><Icon n="check2" /><span className="bt">すべて既読</span></button>
       {IS_OP && <NetButton />}
-      <button id="bCfg" onClick={() => openCfg()}><Icon n="cog" />設定</button>
+      <button id="bCfg" title="設定" onClick={() => openCfg()}><Icon n="cog" /><span className="bt">設定</span></button>
       {s.S?.local && <button className="ghost icon" id="bQuit" title={IS_OP ? "アプリを終了（ウィンドウを閉じても、コピーは裏で続けます）" : IS_RX ? "アプリを終了（ウィンドウを閉じても裏で動いています）" : "アプリを終了（このウィンドウを閉じても終了します）"} onClick={quitApp}><Icon n="power" /></button>}
     </div>
   </header>;
 }
 function NetButton() {
   const b = netBadge();
-  return <button className={cx("ghost", b.has && "has")} id="bNet" title={b.title} onClick={() => netOpen()}><Icon n="net" />ネットワーク共有</button>;
+  return <button className={cx("ghost", b.has && "has")} id="bNet" title={b.title} onClick={() => netOpen()}><Icon n="net" /><span className="bt">ネットワーク共有</span></button>;
 }
 
 /* 会場オペレーター：自分の会場・いまの日・コピー先ごとの状況・コピー中 */
@@ -123,6 +135,7 @@ export function OpStrip() {
         try { const j: any = await api("/api/opday", { day: v }); toast("いまの日を「" + v + "」にしました（" + j.venue + " を監視・コピーします）", 5000); await loadState(); }
         catch (err: any) { toast(err.message, 6000); }
       }}>{o.days!.map((d) => <option key={d} value={d}>{d}</option>)}</select></span>}
+    {!(o.days || []).length && allDays().length > 0 && <span className="opday"><DaySelect id="lday" /></span>}
     {opDests().map((d) => {
       const c = d.count || {}; const okn = (c.ok || 0) + (c.edited || 0); const bad = (c.err || 0) + (c.off || 0); const busy = (c.busy || 0) + (c.srcbusy || 0);
       const dot = d.online === false || bad ? "off" : busy || c.copying || c.todo || c.wait ? "busy" : d.online ? "on" : "";

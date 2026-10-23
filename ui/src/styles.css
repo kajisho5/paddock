@@ -484,3 +484,18 @@ details.more summary{cursor:pointer;color:var(--muted);font-size:12.5px}
 input,textarea{caret-color:var(--accent)}
 :root[data-theme="dark"] input,:root[data-theme="dark"] textarea{caret-color:var(--ok)}
 .mono,.prog,.stime,.cnt,.rchip .m,.ev .t,table td{font-variant-numeric:tabular-nums}
+
+/* 会場・日の切り替えはヘッダーへ（一覧を縦に広く使う） */
+.hsel{display:flex;gap:6px;flex:none;align-items:center}
+.hsel:empty{display:none}
+.hsel select,.opday select{height:30px;font-size:12.5px;max-width:220px}
+.ph{padding:10px 12px 6px}
+.tools{flex-wrap:nowrap;gap:8px;padding:0 12px 8px;overflow:hidden}
+.tools label{white-space:nowrap}
+.tools select{min-width:0;flex:0 1 auto}
+
+/* 幅が足りないときはヘッダーのボタンを記号だけに（説明はマウスを乗せると出る） */
+.hdr{gap:10px}
+.hsel select{max-width:170px}
+.hdr.compact .hbtns .bt{display:none}.hdr.compact .hbtns button{padding:0 9px}
+@media (max-width:1240px){.hdr .seg .lb{display:none}.hsel select{max-width:130px}}
