@@ -94,7 +94,13 @@
 .gmain{display:flex;flex-direction:column;min-width:0;min-height:0}
 .gnow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:24px;align-items:center;padding:16px 16px 14px;border-bottom:1px solid var(--g-border)}
 .gnow .lb{font:500 11px var(--sans);color:var(--g-text-2);margin-bottom:4px;display:flex;align-items:center;gap:6px}
-.gnow .cur{min-width:0;animation:fade-up var(--dur-3) var(--ease-out) both}
+.gnow .cur{min-width:0}
+.swap{display:grid;overflow:hidden}
+.swap .sw{grid-area:1/1;min-width:0}
+.swap .sw.in{animation:sw-in var(--dur-3) var(--ease-out) both}
+.swap .sw.out{animation:sw-out 240ms var(--ease-out) both}
+@keyframes sw-in{from{opacity:0;transform:translateY(60%)}}
+@keyframes sw-out{to{opacity:0;transform:translateY(-60%)}}
 .gnow .who .o{font:500 13px var(--mono);color:var(--g-text-2);margin-right:8px}.gnow .who .no{font:400 12px var(--mono);color:var(--g-text-2);margin-left:10px}.gnow .who.dim2{color:var(--g-text-2)}
 .gnow .who{font:500 18px var(--sans);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gnow .tt{color:var(--g-text-2)}
@@ -104,6 +110,20 @@
 .ghd .legend{display:flex;gap:14px;align-items:center;margin-left:auto}
 .ghd .legend span{display:flex;align-items:center;gap:5px}
 .grows{position:relative;animation:fade-up var(--dur-3) var(--ease-out) both}
+.grows.from-r{animation:from-r var(--dur-3) var(--ease-out) both}.grows.from-l{animation:from-l var(--dur-3) var(--ease-out) both}
+@keyframes from-r{from{opacity:0;transform:translateX(28px)}}@keyframes from-l{from{opacity:0;transform:translateX(-28px)}}
+.gate .grow.flip{transition:transform var(--dur-3) var(--ease-out)}
+.gate .grow.a-new{animation:row-in var(--dur-3) var(--ease-out) both}
+@keyframes row-in{from{opacity:0;transform:translateY(-8px)}}
+.gate .grow.rflash::before{content:"";position:absolute;inset:0;background:rgba(242,201,76,.16);pointer-events:none;animation:flash-o 1600ms var(--ease-out) both;z-index:-1}
+.roll{display:inline-block;animation:sw-in var(--dur-3) var(--ease-out) both}
+.gt.a-new{animation:tag-in 220ms var(--ease-spring) both}
+.gt.a-new::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:0 0 0 1px var(--g-error);animation:ring 900ms var(--ease-out) 120ms both;pointer-events:none}
+.gt{position:relative}
+@keyframes tag-in{from{opacity:0;transform:scale(.85)}}
+@keyframes ring{0%{opacity:.7;transform:scale(1)}100%{opacity:0;transform:scale(1.7)}}
+.gchip.pop{animation:tag-in 220ms var(--ease-spring) both}
+.gate #bLog .badge{animation:tag-in 260ms var(--ease-spring) both}
 .nowind{position:absolute;left:0;right:0;top:0;background:var(--g-accent-dim);pointer-events:none;z-index:0;transition:transform var(--dur-3) var(--ease-inout),height var(--dur-3) var(--ease-inout)}
 .gate .grow.grp{display:flex;align-items:center;gap:10px;height:42px;padding:0 16px;border-bottom:1px solid var(--g-border);cursor:default;position:relative;z-index:1;background:transparent;user-select:none}
 .gate .grow.grp:hover{background:var(--g-hover)}
@@ -218,7 +238,10 @@
 @media (max-width:1360px){.gate{grid-template-columns:232px minmax(0,1fr) 320px}.gchip .gtrack{display:none}.gnow{gap:16px}}
 
 @media (prefers-reduced-motion: reduce){
-  .gnow .cur,.grows,.gdet,.gwarn,.ganalysis,.gmenu,.gate .glog .log{animation:fade-in 140ms linear both!important}
-  .nowind,.gate .gtrack i,.gate .gmore svg{transition-duration:1ms}
+  .swap .sw.in,.grows,.grows.from-r,.grows.from-l,.gate .grow.a-new,.roll,.gt.a-new,.gchip.pop,.gate #bLog .badge,.gdet,.gwarn,.ganalysis,.gmenu,.gate .glog .log{animation:fade-in 140ms linear both!important}
+  .nowind,.gate .gtrack i,.gate .gmore svg,.gate .grow.flip{transition-duration:1ms}
+  .swap .sw.out{animation:fadeout-q 100ms linear both!important}.gt.a-new::after{animation:none}
   .pc.pop{animation:none}
 }
+
+@keyframes fadeout-q{to{opacity:0}}

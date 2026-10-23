@@ -139,9 +139,9 @@ function tagsOf(g: Group): TagX[] {
   if (g.repl) out.push({ t: "差替 " + g.repl, k: "repl", p: 2 });
   return out.map((x, i) => ({ ...x, i })).sort((x, y) => x.p - y.p || x.i - y.i);
 }
-function Tags({ g, max = 2 }: { g: Group; max?: number }) {
+function Tags({ g, max = 2, fresh }: { g: Group; max?: number; fresh?: Set<string> }) {
   const all = tagsOf(g); const sh = all.slice(0, max); const rest = all.slice(max);
-  return <>{sh.map((x) => <span key={x.t} className="gt" data-k={x.k}>{x.t}</span>)}{rest.length > 0 && <span className="gt" data-k="more" title={rest.map((x) => x.t).join("・")}>+{rest.length}</span>}</>;
+  return <>{sh.map((x) => <span key={x.t} className={cx("gt", fresh?.has(x.t) && "a-new")} data-k={x.k}>{x.k === "repl" && g.repl ? <>差替 <span className="roll" key={g.repl}>{g.repl}</span></> : x.t}</span>)}{rest.length > 0 && <span className="gt" data-k="more" title={rest.map((x) => x.t).join("・")}>+{rest.length}</span>}</>;
 }
 
 /* ---------------------------------------------------------------- 選んでいるセッション（このPCに保存） */
@@ -269,12 +269,27 @@ function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
         {busy > 0 && <span className="sub2">差し替え待ち {busy}</span>}{bad > 0 && <b className="e">エラー {bad}</b>}</span>;
     })}
     {(() => { const n = L.filter((g) => copyOf(g).k === "run").length; return n > 0 && <span className="gchip"><i className="pc run" />コピー中<b>{n}</b></span>; })()}
-    {(() => { const n = L.filter((g) => rcOf(g) === "error").length; return n > 0 && <span className="gchip bad"><RIcon k="error" />要確認<b>{n}</b></span>; })()}
+    {(() => { const n = L.filter((g) => rcOf(g) === "error").length; return n > 0 && <span className="gchip bad pop" key={"w" + n}><RIcon k="error" />要確認<b>{n}</b></span>; })()}
     {S.op.active && (() => {   // いまコピーしているファイル・進み具合・残り
       const a = S.op.active!; const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; const here = L.some((g) => a.rel.startsWith(g.key + "/"));
       return <span className="gchip act" title={nfc(a.rel)}><Icon n="spin" className="spin" /><span className="fn">{here ? "" : "ほかのセッション · "}{nfc(a.rel.split("/").pop())}</span><b>{pct}%</b>{(S.op.queue || 0) > 1 && <span className="sub2">残り {(S.op.queue || 0) - 1}</span>}</span>;
     })()}
     <LogButton />
+  </div>;
+}
+
+/* 中身が変わったとき：前のものが上へ抜け、新しいものが下から入る（最初の表示では動かさない） */
+function Swap({ k, children }: { k: string; children: React.ReactNode }) {
+  const [gone, setGone] = useState<{ k: string; n: React.ReactNode }[]>([]);   // 抜けていく途中の前の中身
+  const last = useRef<{ k: string; n: React.ReactNode; moved: boolean }>({ k, n: children, moved: false });
+  if (last.current.k !== k) {   // 描くときに入れ替えを決める（effect で毎回 state を変えない）
+    const old = last.current; last.current = { k, n: children, moved: true };
+    queueMicrotask(() => setGone((a) => [...a.filter((x) => x.k !== k && x.k !== old.k), { k: old.k, n: old.n }]));
+  } else last.current.n = children;
+  useEffect(() => { if (!gone.length) return; const t = setTimeout(() => setGone([]), 260); return () => clearTimeout(t); }, [gone]);
+  return <div className="swap">
+    {gone.filter((x) => x.k !== k).map((x) => <div key={"o" + x.k} className="sw out" aria-hidden="true">{x.n}</div>)}
+    <div key={k} className={cx("sw", last.current.moved && "in")}>{children}</div>
   </div>;
 }
 
@@ -284,14 +299,14 @@ function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
   const L = ses.list.filter((g) => !g.mk_drop); const ci = cur ? L.indexOf(cur) : -1;
   const nx = ci >= 0 ? L[ci + 1] : L.find((g) => stageOf(M.r.id, g.key) !== "done");
   return <div className="gnow">
-    <div className="cur" key={cur ? cur.key : "-"}>
+    <div className="cur">
       <div className="lb">発表中</div>
-      {cur ? <div className="who"><span className="o">{ci + 1}</span>{nameOf(cur).name}<span className="no">{nameOf(cur).no}</span></div>
-        : <div className="tt">まだいません（右クリック「発表中にする」か ［次の人へ］）</div>}
+      <Swap k={cur ? cur.key : "-"}>{cur ? <div className="who"><span className="o">{ci + 1}</span>{nameOf(cur).name}<span className="no">{nameOf(cur).no}</span></div>
+        : <div className="tt">まだいません（右クリック「発表中にする」か ［次の人へ］）</div>}</Swap>
     </div>
     <div className="cur nxb">
       <div className="lb">次</div>
-      {nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span></div> : <div className="tt">—</div>}
+      <Swap k={nx ? nx.key : "-"}>{nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span></div> : <div className="tt">—</div>}</Swap>
     </div>
     <button className="gb big" id="bNext" onClick={() => nextUp(M.r, ses)} title="いまの人を発表済みにして、次の人を発表中にします（キー N）">
       {cur ? "次の人へ" : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
@@ -301,6 +316,24 @@ function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
 /* ---- 中央：発表順の一覧 */
 function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: number, g: string) => void }) {
   const s = store; const box = useRef<HTMLDivElement>(null);
+  // セッションを切り替えた向き：後ろのセッションなら右から、前なら左から
+  const sv = useRef({ key: ses.key, idx: M.sessions.indexOf(ses), dir: "" });
+  if (sv.current.key !== ses.key) { const idx = M.sessions.findIndex((x) => x.key === ses.key); sv.current = { key: ses.key, idx, dir: idx >= sv.current.idx ? "from-r" : "from-l" }; }
+  // 行が増えた・減ったとき：残る行はもとの位置から すっと移動、新しい行はふわっと入る（FLIP。transform だけ）
+  const pos = useRef<{ key: string; m: Map<string, number> }>({ key: "", m: new Map() });
+  useLayoutEffect(() => {
+    const el = box.current; if (!el) return;
+    const rows = [...el.querySelectorAll<HTMLElement>(".grows > .grow")]; const prev = pos.current; const same = prev.key === ses.key;
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      const g = r.dataset.g || ""; const y = r.offsetTop; m.set(g, y);
+      if (!same || !prev.m.size) continue;
+      const py = prev.m.get(g);
+      if (py == null) { r.classList.remove("a-new"); void r.offsetWidth; r.classList.add("a-new"); continue; }
+      if (py !== y) { r.style.transition = "none"; r.style.transform = `translateY(${py - y}px)`; void r.offsetWidth; r.style.transition = ""; r.style.transform = ""; r.classList.add("flip"); }
+    }
+    pos.current = { key: ses.key, m };
+  });
   const [ind, setInd] = useState<{ y: number; h: number } | null>(null);
   const curKey = ses.list.find((g) => stageOf(M.r.id, g.key) === "now")?.key || "";
   useLayoutEffect(() => {   // 発表中の帯：行から行へすべって移動する
@@ -311,7 +344,7 @@ function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: n
   const cnt = { r: L.filter((g) => ["received", "got", "direct"].includes(rcOf(g))).length, p: L.filter((g) => rcOf(g) === "pending").length, e: L.filter((g) => rcOf(g) === "error").length };
   return <div className="glist scroll" id="groups" ref={box}>
     <div className="ghd">発表順 · {L.length}人<span className="legend"><span><RIcon k="received" />受付済 {cnt.r}</span><span><RIcon k="pending" />未受付 {cnt.p}</span>{cnt.e > 0 && <span><RIcon k="error" />要確認 {cnt.e}</span>}</span></div>
-    <div className="grows" key={ses.key}>
+    <div className={cx("grows", sv.current.dir)} key={ses.key}>
       {ind && <span className="nowind" style={{ transform: `translateY(${ind.y}px)`, height: ind.h }} aria-hidden="true" />}
       {ses.list.map((g, i) => <Row key={g.key} r={M.r} g={g} ord={g.mk_drop ? 0 : L.indexOf(g) + 1} i={i} sel={!!s.SEL && s.SEL.root === M.r.id && s.SEL.group === g.key} onMenu={onMenu} />)}
     </div>
@@ -335,13 +368,23 @@ function Row({ r, g, ord, i, sel, onMenu }: { r: Root; g: Group; ord: number; i:
   useEffect(() => { if (prev.current !== cp.k && cp.k === "ok" && prev.current === "run") { setPop(true); const t = setTimeout(() => setPop(false), 700); prev.current = cp.k; return () => clearTimeout(t); } prev.current = cp.k; }, [cp.k]);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (sel) ref.current?.scrollIntoView({ block: "nearest" }); }, [sel]);
+  // 差し替えが届いた：行が一瞬光る
+  const pr = useRef(g.repl || 0);
+  useEffect(() => { const n = g.repl || 0; if (n > pr.current && ref.current) { const el = ref.current; el.classList.remove("rflash"); void el.offsetWidth; el.classList.add("rflash"); } pr.current = n; }, [g.repl]);
+  // 新しく出た赤いラベル（要確認）：小さく弾んで輪が一度広がる
+  const bad = tagsOf(g).filter((x) => x.k === "bad").map((x) => x.t).join("|");
+  const pb = useRef(new Set(bad ? bad.split("|") : [])); const [fresh, setFresh] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const now = new Set(bad ? bad.split("|") : []); const nw = new Set([...now].filter((x) => !pb.current.has(x))); pb.current = now;
+    if (nw.size) { setFresh(nw); const t = setTimeout(() => setFresh(new Set()), 1200); return () => clearTimeout(t); }
+  }, [bad]);
   return <div ref={ref} className={cx("grow grp", sel && "sel", st === "done" && "past", st === "now" && "now", g.mk_drop && "drop", store.flashKeys.has(r.id + "|" + g.key) && "flash")}
     data-r={r.id} data-g={g.key} style={{ ["--i" as any]: Math.min(i, 12) }}
     onClick={(e) => rowClick(e, r.id, g.key)}
     onContextMenu={(e) => { e.preventDefault(); selectGroup(r.id, g.key); onMenu(e.clientX, e.clientY, g.key); }}>
     <span className="ord">{ord || ""}</span><RIcon k={rc} /><span className={"rcv " + rc} title={RCT[rc]}>{RCL[rc]}</span>
     {nm.no && <span className="no">{nm.no}</span>}<span className="nm">{nm.name}</span>
-    <span className="tags"><Tags g={g} /></span><span className="gap" />
+    <span className="tags"><Tags g={g} fresh={fresh} /></span><span className="gap" />
     <span className="state">{st === "now" ? <span className="pill now">発表中</span>
       : st === "done" ? <><RIcon k="done" />発表済み</>
         : <><i className={cx("pc", cp.k, pop && "pop")} />{cp.t}{cp.pct != null && <Bar pct={cp.pct} className="gtrack sm" />}<OtherDests g={g} /></>}</span>

@@ -77,7 +77,7 @@ export function LogButton() {
   if (s.logOpen) LOG_SEEN = last;
   const n = s.logOpen || LOG_SEEN < 0 ? 0 : evs.filter((e) => e.id > LOG_SEEN).length;
   return <button className="ghost" id="bLog" aria-expanded={s.logOpen} title="変更ログ（NAS上の変化の記録）" onClick={() => { s.logOpen = !s.logOpen; LOG_SEEN = last; s.emit(); }}>
-    <Icon n="list" /><span className="bt">ログ</span>{n > 0 && <span className="badge" aria-label={n + "件の新しい変更"}>{n > 99 ? "99+" : n}</span>}</button>;
+    <Icon n="list" /><span className="bt">ログ</span>{n > 0 && <span className="badge" key={n} aria-label={n + "件の新しい変更"}>{n > 99 ? "99+" : n}</span>}</button>;
 }
 
 export function Header() {
