@@ -6,7 +6,6 @@ import { dayInfo } from "../lib/layout";
 import { nfc } from "../lib/util";
 import { OPON, toast } from "../store";
 import { Icon } from "../components/Icons";
-import { closeModal } from "../components/Settings";
 import { netOpen } from "./Net";
 
 export const opReady = () => OPON();
@@ -14,7 +13,7 @@ export let OP_DEST = "";   // コピー先の初期値（デスクトップ\講�
 export function opPrepare(c: Config, defDest = "") {
   OP_DEST = defDest;
   c.op = c.op || { enabled: false, root: "", venue: "", dests: [], max_mbps: 0 };
-  if (!c.op.dests.length) c.op.dests = [{ label: "メイン", path: "", enabled: true }, { label: "バックアップ", path: "", enabled: true }];
+  if (!c.op.dests.length) c.op.dests = [{ label: "このPC", path: "", enabled: true }];   // バックアップPCは、そのPCにも PADDOCK GATE を入れて自分でコピーする
   // はじめて（コピー先がどれも空）：メインはこのPCのデスクトップの「講演資料」フォルダ（コピーのときに自動で作る）
   if (OP_DEST && !c.op.dests.some((d) => String(d.path || "").trim())) c.op.dests[0].path = OP_DEST;
   c.op._dm = !!(c.op.days || []).length;
@@ -24,7 +23,7 @@ export function opPrepare(c: Config, defDest = "") {
 
 export function OpSetupGuide() {
   return <div className="opsetup"><b>はじめに、上から順に ①〜③ を入れて［保存］してください。</b>
-    <div className="alt">このPCが<b>バックアップPC（コピーされる側）</b>なら、ここの設定は不要です。<button className="ghost" onClick={() => { closeModal(); netOpen(); }}>ネットワーク共有</button> で［このPCを設定する］だけ押してください。</div></div>;
+    <div className="alt"><b>バックアップPC</b>にも PADDOCK GATE を入れて、同じように ①〜③（同じ会場）を設定してください。それぞれのPCが、NASから自分のデスクトップの「講演資料」へコピーします（PCどうしのファイル共有は不要です）。</div></div>;
 }
 
 const opJoin = (a: string, b: string) => { const sep = a.includes("\\") || /^[A-Za-z]:/.test(a) ? "\\" : "/"; return a.replace(/[\\/]+$/, "") + sep + b; };
@@ -97,17 +96,17 @@ export function OpSection({ c, up, part }: { c: Config; up: () => void; part: "v
   if (part === "dests") {
     const main = op.dests[0];
     return <>
-      <p className="hint" style={{ margin: "0 0 10px" }}>NASに演者のデータが入り終わったら、ここへ演者フォルダごと自動でコピーします。<b>メイン</b>は、このPCのデスクトップの「講演資料」フォルダが初期値です（無ければ自動で作ります）。</p>
+      <p className="hint" style={{ margin: "0 0 10px" }}>NASに演者のデータが入り終わったら、ここへ演者フォルダごと自動でコピーします。初期値は、このPCのデスクトップの「講演資料」フォルダです（無ければ自動で作ります）。バックアップPCは、そのPCに入れた PADDOCK GATE が自分でコピーするので、ここに入れる必要はありません。</p>
       <div id="dlist">{op.dests.map((d, i) => <div className="drow" key={i} data-i={i}>
         <input type="text" data-k="label" value={d.label} placeholder="名前（例: メイン）" onChange={(e) => { d.label = e.target.value; up(); }} />
-        <input type="text" data-k="path" className="pth mono" value={d.path} placeholder={i === 0 ? "デスクトップ\\講演資料" : "\\\\BACKUP-PC\\共有\\講演資料（バックアップPCの共有フォルダ。無ければ空のまま）"} onChange={(e) => { d.path = e.target.value; up(); }} />
+        <input type="text" data-k="path" className="pth mono" value={d.path} placeholder={i === 0 ? "デスクトップ\\講演資料" : "D:\\講演資料  /  \\\\別のPC\\共有\\講演資料"} onChange={(e) => { d.path = e.target.value; up(); }} />
         <button className="ghost" onClick={async () => { try { const j: any = await api("/api/pick", { dest: true }); if (j.path) { d.path = j.path; up(); } } catch (e: any) { toast(e.message, 5000); } }}>参照…</button>
         <label><input type="checkbox" data-k="enabled" checked={d.enabled} onChange={(e) => { d.enabled = e.target.checked; up(); }} />有効</label>
         <button className="ghost danger" onClick={() => { op.dests.splice(i, 1); up(); }}>削除</button></div>)}</div>
       <p className="hint" style={{ marginTop: 0 }}>
-        {op.dests.length < 4 && <button className="ghost" id="bDAdd" onClick={() => { op.dests.push({ label: "", path: "", enabled: true }); up(); }}><Icon n="plus" />コピー先を追加</button>}
-        {OP_DEST && main && main.path !== OP_DEST && <button className="ghost" id="bDDef" onClick={() => { main.path = OP_DEST; up(); }}>メインをデスクトップ\講演資料に戻す</button>}
-        <button className="ghost" id="bNetCfg" onClick={() => netOpen()}><Icon n="net" />バックアップPCとの接続・共有…</button></p>
+        {op.dests.length < 4 && <button className="ghost" id="bDAdd" onClick={() => { op.dests.push({ label: "", path: "", enabled: true }); up(); }}><Icon n="plus" />コピー先を追加（USBなど）</button>}
+        {OP_DEST && main && main.path !== OP_DEST && <button className="ghost" id="bDDef" onClick={() => { main.path = OP_DEST; up(); }}>デスクトップ\講演資料に戻す</button>}
+        <button className="ghost" id="bNetCfg" onClick={() => netOpen()}><Icon n="net" />別のPCへコピーするとき（接続・共有）…</button></p>
     </>;
   }
   return <>
