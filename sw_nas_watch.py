@@ -3656,13 +3656,32 @@ def pick_folder(dest=False):
         return r.stdout.strip() or None
     if IS_WIN:
         # Windows標準のフォルダ選択。監視フォルダ選択では「新しいフォルダー」ボタンを出さない＝NASに何も作らせない
+        # ダイアログがブラウザの裏に出ないように：見えない小さな最前面ウィンドウを作り、
+        # 前面にあるウィンドウ（ブラウザ）の入力に一時的につないでから前面に出し、それを親にしてダイアログを開く
         ps = ("Add-Type -AssemblyName System.Windows.Forms;"
-              "$f=New-Object System.Windows.Forms.Form -Property @{TopMost=$true;ShowInTaskbar=$false};"
+              "Add-Type -Namespace SW -Name U -MemberDefinition '"
+              "[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow();"
+              "[DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr p);"
+              "[DllImport(\"kernel32.dll\")] public static extern uint GetCurrentThreadId();"
+              "[DllImport(\"user32.dll\")] public static extern bool AttachThreadInput(uint a, uint b, bool f);"
+              "[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h);"
+              "[DllImport(\"user32.dll\")] public static extern bool BringWindowToTop(IntPtr h);"
+              "[DllImport(\"user32.dll\")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);';"
+              "$f=New-Object System.Windows.Forms.Form -Property @{TopMost=$true;ShowInTaskbar=$false;"
+              "FormBorderStyle='None';StartPosition='CenterScreen';Width=1;Height=1;Opacity=0};"
+              "$f.Show();"
+              "try{$fg=[SW.U]::GetForegroundWindow();$a=[SW.U]::GetWindowThreadProcessId($fg,[IntPtr]::Zero);"
+              "$b=[SW.U]::GetCurrentThreadId();$j=($a -ne 0 -and $a -ne $b);"
+              "if($j){[void][SW.U]::AttachThreadInput($b,$a,$true)};"
+              "[SW.U]::keybd_event(0x12,0,0,[UIntPtr]::Zero);[SW.U]::keybd_event(0x12,0,2,[UIntPtr]::Zero);"
+              "[void][SW.U]::SetForegroundWindow($f.Handle);[void][SW.U]::BringWindowToTop($f.Handle);$f.Activate();"
+              "if($j){[void][SW.U]::AttachThreadInput($b,$a,$false)}}catch{};"
               "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
               "$d.Description='%s（ネットワーク上のフォルダも選べます）';"
               "$d.ShowNewFolderButton=$%s;" % (title, "true" if dest else "false") +
               "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
-              "if($d.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Out.Write($d.SelectedPath)}")
+              "$r=$d.ShowDialog($f);$f.Close();"
+              "if($r -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Out.Write($d.SelectedPath)}")
         try:
             r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], capture_output=True,
                                text=True, encoding="utf-8", errors="replace", creationflags=0x08000000)
@@ -3678,7 +3697,9 @@ def pick_folder(dest=False):
         root = tk.Tk()
         root.withdraw()
         root.attributes("-topmost", True)
-        p = filedialog.askdirectory(title=title, mustexist=True)
+        root.lift()
+        root.focus_force()
+        p = filedialog.askdirectory(parent=root, title=title, mustexist=True)
         root.destroy()
         return os.path.normpath(p) if p else None
     if shutil.which("zenity"):
