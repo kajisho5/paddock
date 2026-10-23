@@ -7,30 +7,30 @@ fail=0
 i=0
 for app in "PADDOCK SCOUT" "PADDOCK SADDLE" "PADDOCK GATE"; do
   port=$((8941 + i)); i=$((i + 1))
-  data="$HOME/Library/Application Support/$app"
-  echo "=== $app（ポート $port）"
-  open -n "$app.app" --args --no-browser --port "$port"
+  data="$HOME/Library/Application Support/${app}"
+  echo "=== ${app}（ポート ${port}）"
+  open -n "${app}.app" --args --no-browser --port "${port}"
   ok=""
-  for t in $(seq 1 90); do curl -fs "http://127.0.0.1:$port/api/ping" && { ok=1; break; }; sleep 1; done
+  for t in $(seq 1 90); do curl -fs "http://127.0.0.1:${port}/api/ping" && { ok=1; break; }; sleep 1; done
   echo
   if [ -z "$ok" ]; then
-    echo "::error::$app が起動しない"; cat "$data/last_run.log" 2>/dev/null; fail=1; continue
+    echo "::error::${app} が起動しない"; cat "${data}/last_run.log" 2>/dev/null; fail=1; continue
   fi
   sleep 4
-  if grep -q "メニューバーにアイコンを出しました" "$data/last_run.log"; then echo "OK メニューバーのアイコン"; else echo "::error::$app: メニューバーのアイコンが出ていない"; fail=1; fi
-  if curl -fs "http://127.0.0.1:$port/" | grep -qi "<html"; then echo "OK 画面"; else echo "::error::$app: 画面が返らない"; fail=1; fi
-  if ps -axo command | grep -F "$app.app/Contents/MacOS/" | grep -v grep >/dev/null; then echo "OK アプリ名のプロセスで動いている"; else echo "::warning::$app: プロセス名を確認できない"; fi
-  screencapture -x "../smoke/$app.png" 2>/dev/null || true
-  open "$app.app"   # Finder から開き直したとき：画面を開く
+  if grep -q "メニューバーにアイコンを出しました" "${data}/last_run.log"; then echo "OK メニューバーのアイコン"; else echo "::error::${app}: メニューバーのアイコンが出ていない"; fail=1; fi
+  if curl -fs "http://127.0.0.1:${port}/" | grep -qi "<html"; then echo "OK 画面"; else echo "::error::${app}: 画面が返らない"; fail=1; fi
+  if ps -axo command | grep -F "${app}.app/Contents/MacOS/" | grep -v grep >/dev/null; then echo "OK アプリ名のプロセスで動いている"; else echo "::warning::${app}: プロセス名を確認できない"; fi
+  screencapture -x "../smoke/${app}.png" 2>/dev/null || true
+  open "${app}.app"   # Finder から開き直したとき：画面を開く
   sleep 6
-  if ps -axo command | grep -F -- "--app=http://127.0.0.1:$port/" | grep -v grep >/dev/null; then echo "OK 開き直しで画面が開いた"; else echo "::warning::$app: 開き直しで画面が開いたか確認できない"; fi
-  screencapture -x "../smoke/$app-reopen.png" 2>/dev/null || true
-  curl -fs -X POST -H "X-SW-Handover: 0.0.0" "http://127.0.0.1:$port/api/handover"; echo
-  for t in $(seq 1 20); do curl -fs "http://127.0.0.1:$port/api/ping" >/dev/null 2>&1 || break; sleep 1; done
+  if ps -axo command | grep -F -- "--app=http://127.0.0.1:${port}/" | grep -v grep >/dev/null; then echo "OK 開き直しで画面が開いた"; else echo "::warning::${app}: 開き直しで画面が開いたか確認できない"; fi
+  screencapture -x "../smoke/${app}-reopen.png" 2>/dev/null || true
+  curl -fs -X POST -H "X-SW-Handover: 0.0.0" "http://127.0.0.1:${port}/api/handover"; echo
+  for t in $(seq 1 20); do curl -fs "http://127.0.0.1:${port}/api/ping" >/dev/null 2>&1 || break; sleep 1; done
   sleep 3
-  if ps -axo command | grep -F "$app.app/Contents/MacOS/" | grep -v grep >/dev/null; then echo "::error::$app が終了しない"; fail=1; else echo "OK 終了"; fi
-  cp "$data/last_run.log" "../smoke/$app.log" 2>/dev/null || true
-  pkill -f -- "--app=http://127.0.0.1:$port/" 2>/dev/null || true
+  if ps -axo command | grep -F "${app}.app/Contents/MacOS/" | grep -v grep >/dev/null; then echo "::error::${app} が終了しない"; fail=1; else echo "OK 終了"; fi
+  cp "${data}/last_run.log" "../smoke/${app}.log" 2>/dev/null || true
+  pkill -f -- "--app=http://127.0.0.1:${port}/" 2>/dev/null || true
   sleep 1
 done
 exit $fail
