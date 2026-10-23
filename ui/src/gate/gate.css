@@ -95,7 +95,7 @@
 .gnow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:24px;align-items:center;padding:16px 16px 14px;border-bottom:1px solid var(--g-border)}
 .gnow .lb{font:500 11px var(--sans);color:var(--g-text-2);margin-bottom:4px;display:flex;align-items:center;gap:6px}
 .gnow .cur{min-width:0}
-.swap{display:grid;overflow:hidden}
+.swap{display:grid;grid-template-columns:minmax(0,1fr);overflow:hidden}
 .swap .sw{grid-area:1/1;min-width:0}
 .swap .sw.in{animation:sw-in var(--dur-3) var(--ease-out) both}
 .swap .sw.out{animation:sw-out 240ms var(--ease-out) both}
@@ -103,7 +103,7 @@
 @keyframes sw-out{to{opacity:0;transform:translateY(-60%)}}
 .gnow .who .o{font:500 13px var(--mono);color:var(--g-text-2);margin-right:8px}.gnow .who .no{font:400 12px var(--mono);color:var(--g-text-2);margin-left:10px}.gnow .who.dim2{color:var(--g-text-2)}
 .gnow .who{font:500 18px var(--sans);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.gnow .tt{color:var(--g-text-2)}
+.gnow .tt{color:var(--g-text-2);overflow-wrap:anywhere}
 .gnow .nx{color:var(--g-text-2);font-size:12px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .glist{flex:1;min-height:0;overflow:auto}
 .ghd{display:flex;align-items:center;gap:8px;height:32px;padding:0 16px;background:var(--g-panel);border-bottom:1px solid var(--g-border);font:500 11px var(--sans);color:var(--g-text-2);position:sticky;top:0;z-index:2}
