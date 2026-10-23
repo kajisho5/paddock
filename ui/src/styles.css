@@ -92,19 +92,18 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 .banner .bt{flex:1}.banner button{height:28px;margin-left:6px;vertical-align:middle}
 
 .main{flex:1;min-height:0;display:grid;gap:14px;padding:14px 18px 16px;position:relative}
-.app.v-list .main{grid-template-columns:minmax(330px,400px) minmax(0,1fr) 330px}
+.app.v-list .main{grid-template-columns:minmax(330px,400px) minmax(0,1fr)}
 .app.v-board .main{grid-template-columns:minmax(0,1fr)}
 .pane{background:var(--card);border:1px solid var(--border);border-radius:var(--r2);box-shadow:var(--shadow);min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .scroll{overflow:auto;flex:1;min-height:0}
-.log{display:flex}
-.app.v-board .log{display:none}
+.log{display:none}   /* 変更ログはふだん隠す（［ログ］で右から出す） */
 .app.showlog .log{display:flex;position:absolute;right:18px;top:14px;bottom:16px;width:min(420px,92vw);z-index:30;box-shadow:0 20px 60px rgba(0,0,0,.25)}
 #bLogClose{display:none}.app.showlog #bLogClose{display:inline-flex}
-@media (max-width:1400px){.app.v-list .main{grid-template-columns:minmax(300px,380px) minmax(0,1fr)}.app.v-list .log{display:none}.app.v-list.showlog .log{display:flex}}
+@media (max-width:1400px){.app.v-list .main{grid-template-columns:minmax(300px,380px) minmax(0,1fr)}}
 .app.v-board .center{position:absolute;right:18px;top:14px;bottom:16px;width:min(780px,58vw);z-index:20;box-shadow:-20px 0 60px rgba(0,0,0,.18)}
 :root[data-theme="dark"] .app.v-board .center{box-shadow:-20px 0 60px rgba(0,0,0,.6)}
 .app.v-board.drawer .boardcols{padding-right:calc(min(780px,58vw) + 12px)}
-@media (min-width:1401px){.app.v-list #bLog{display:none}}
+#bLog .badge{margin-left:2px;height:17px;min-width:17px;font-size:10.5px;padding:0 5px}
 #dhead{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 18px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);flex:none}
 
 /* ---------- リスト ---------- */

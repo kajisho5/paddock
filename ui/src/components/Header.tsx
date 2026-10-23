@@ -67,6 +67,18 @@ function Roots() {
   </div>;
 }
 
+/* 変更ログの開閉ボタン：閉じている間に増えた件数を小さく出す */
+let LOG_SEEN = -1;
+function LogButton() {
+  const s = useApp(); const evs = s.S ? s.S.events : [];
+  const last = evs.length ? evs[evs.length - 1].id : 0;
+  if (LOG_SEEN < 0 && s.S) LOG_SEEN = last;
+  if (s.logOpen) LOG_SEEN = last;
+  const n = s.logOpen || LOG_SEEN < 0 ? 0 : evs.filter((e) => e.id > LOG_SEEN).length;
+  return <button className="ghost" id="bLog" aria-expanded={s.logOpen} title="変更ログ（NAS上の変化の記録）" onClick={() => { s.logOpen = !s.logOpen; LOG_SEEN = last; s.emit(); }}>
+    <Icon n="list" />ログ{n > 0 && <span className="badge" aria-label={n + "件の新しい変更"}>{n > 99 ? "99+" : n}</span>}</button>;
+}
+
 export function Header() {
   const s = useApp();
   return <header className="hdr">
@@ -80,7 +92,7 @@ export function Header() {
     <div className="hbtns">
       {!IS_OP && !IS_RX && <label className="switch" title="更新があったフォルダを自動で表示（操作中の15秒間は切り替えない）">
         <input type="checkbox" id="swFollow" checked={s.FOLLOW} onChange={(e) => setFollow(e.target.checked)} /><span className="track"><span className="thumb" /></span>自動表示</label>}
-      <button className="ghost" id="bLog" onClick={() => { s.logOpen = !s.logOpen; s.emit(); }}><Icon n="list" />ログ</button>
+      <LogButton />
       {!IS_OP && !IS_RX && <button className="ghost" id="bTest" title="デスクトップ通知が出るか確認" onClick={testNotify}><Icon n="bell" />テスト通知</button>}
       <button className="ghost" id="bAll" onClick={markAllSeen}><Icon n="check2" />すべて既読</button>
       {IS_OP && <NetButton />}

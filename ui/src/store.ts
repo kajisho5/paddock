@@ -308,7 +308,7 @@ export async function loadFolder(scrollTop: boolean) {
   store.F = res; store.folderErr = ""; if (scrollTop) folderScrollTop = true; store.emit();
 }
 export function closeDrawer() { store.drawer = false; store.emit(); }
-export function showLog() { if (innerWidth <= 1400 || store.view === "board") { store.logOpen = true; store.emit(); } }
+export function showLog() { store.logOpen = true; store.emit(); }
 export function openOS(root: string, group: string) { api("/api/open", { root, rel: group }).catch((e) => toast(e.message, 5000)); }
 
 /* 演者をダブルクリック：WATCH・RECEPTION は Explorer / Finder で開く（設定でオンのときだけ）。OPERATOR は差し替え（op/opener） */
