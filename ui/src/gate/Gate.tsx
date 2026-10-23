@@ -4,7 +4,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { CpState, Folder, Group, Root } from "../types";
-import { cmpDay, dayInfo, dayOK, fmtT, isRecv, isTodayLabel, parts, sesStatus, sesTime, todayDay, type SStat, type STime } from "../lib/layout";
+import { cmpDay, dayInfo, dayOK, fmtT, isTodayLabel, parts, sesStatus, sesTime, todayDay, type SStat, type STime } from "../lib/layout";
 import { ago, cmpPath, copyText, cx, dtm, fmtSize, hms, mss, nfc } from "../lib/util";
 import { allDays, effDay, inVenue, loadState, opDests, quitApp, rateOf, rootById, selectGroup, setDay, store, toast, useApp } from "../store";
 import { Icon } from "../components/Icons";
@@ -89,7 +89,7 @@ function needCheck(g: Group) {
   return !!(a && (a.vfbad || a.abad || a.noclick || a.err)) || cp.includes("err") || (g.fl || []).some((f) => f[1] === "warn");
 }
 /* 受付済みか：目印（受付済・取得済・発表終了・会場直）があるか、発表に使うデータがあるか（メモの .txt だけでは受付済みにしない） */
-const isRecvG = (g: Group) => !!(g.mk_recv || g.mk_got || g.mk_done || g.mk_direct) || hasData(g) || (!!g.pending && isRecv(g));
+const isRecvG = (g: Group) => !!(g.mk_recv || g.mk_got || g.mk_done || g.mk_direct) || hasData(g);
 function rcOf(g: Group): RC {
   if (g.mk_drop) return "drop"; if (needCheck(g)) return "error";
   if (g.mk_got || g.mk_done) return "got"; if (g.mk_direct && !hasData(g) && !g.mk_recv) return "direct";
@@ -127,7 +127,7 @@ function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: strin
   if (st === "ok") return { k: "ok", t: isBYO(g) ? "DL済（バックアップ）" : "DL済" };
   if (st === "edited") return { k: "ok", t: "DL済（このPCで変更あり）" };
   const ps = g.cpp?.[mainDest()];
-  if (ps === "old") return { k: "run", t: "前の版あり・新しい版はまだ" };
+  if (ps === "old" || st === "old") return { k: "run", t: "前の版あり・新しい版はまだ" };
   if (st === "copying") return { k: "run", t: "コピー中" };
   if (st === "err" || st === "off") return { k: "bad", t: CPL[st][0] };
   return { k: "wait", t: CPL[st]?.[0] || st };
@@ -208,9 +208,9 @@ export function GateApp() {
       if (store.modal || (e.target as HTMLElement).closest("input,textarea,select")) return;
       if (e.key === "Escape") { if (menu) { setMenu(null); e.preventDefault(); e.stopImmediatePropagation(); } else if (store.q) { store.q = ""; store.emit(); e.preventDefault(); e.stopImmediatePropagation(); } return; }
       if (e.repeat) return;   // 押しっぱなしで何人も進めない
-      if (!M || !ses || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!M || !ses || e.ctrlKey || e.metaKey || e.altKey || menu) return;   // メニューを開いている間は、後ろの一覧を動かさない
       const sel = store.SEL && store.SEL.root === M.r.id ? ses.list.findIndex((g) => g.key === store.SEL!.group) : -1;
-      if (e.key === "n" || e.key === "N") { e.preventDefault(); if (Date.now() - lastN > 400) { lastN = Date.now(); nextUpGuard(M, ses); } }
+      if (e.key === "n" || e.key === "N") { e.preventDefault(); nextUpGuard(M, ses); }
       else if (e.key === "Enter" && sel >= 0 && !ses.list[sel].mk_drop && !menu && !store.q && !(e.target as HTMLElement).closest("button,a,[role=menu],[role=tab]")) { e.preventDefault(); setStage(M.r.id, ses.list[sel].key, "now"); }
       else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !store.q && !menu) {
         e.preventDefault(); const d = e.key === "ArrowDown" ? 1 : -1; let n = sel + d;
@@ -238,8 +238,10 @@ export function GateApp() {
 
 let lastN = 0; let warnN = 0;
 function nextUpGuard(M: Model, ses: Ses) {
+  if (Date.now() - lastN < 400) return;   // 連打・ダブルクリックで2人進めない
+  lastN = Date.now();
   const lv = liveSes(M);
-  if (lv && lv.key !== ses.key && Date.now() - warnN > 4000) {   // 進行中ではないセッションを見ているとき：もう一度押したら進める
+  if (lv && lv.key !== ses.key && (Date.now() - warnN > 4000 || Date.now() - warnN < 400)) {   // 確認は 0.4 秒以上あけて押したときだけ通す   // 進行中ではないセッションを見ているとき：もう一度押したら進める
     warnN = Date.now(); toast("いま表示しているのは進行中のセッションではありません（進行中：" + sesLabel(lv) + "）。このセッションで進めるなら、もう一度押してください", 4000); return;
   }
   warnN = 0; nextUp(M.r, ses);
