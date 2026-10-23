@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS RECEPTION"
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 DEFAULT_PORT = 8795
 RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（SW NAS WATCH は常に無視する）
 CHUNK = 1 << 20

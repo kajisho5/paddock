@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "SW NAS OPERATOR"
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 DEFAULT_PORT = 8797
 
 
@@ -126,6 +126,14 @@ class OpManager(W.Manager):
 
     def apply_config(self, new):
         super().apply_config(force_quiet(new))
+
+    def watch_roots(self, cfg):
+        # 会場の発表PC：自分の会場の監視フォルダだけを見る（ほかの監視フォルダまでNASに見に行かない）
+        op = cfg.get("op") or {}
+        roots = [r for r in cfg["roots"] if r["enabled"]]
+        if op.get("enabled") and op.get("root"):
+            return [r for r in roots if r["id"] == op["root"]]
+        return roots
 
     def folder_payload(self, rid, group):
         out = super().folder_payload(rid, group)

@@ -75,9 +75,20 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 .logo .mark svg{width:18px;height:18px}
 .logo .lt{font-weight:700;font-size:14.5px;letter-spacing:.02em;line-height:1.15}
 .logo small{display:block;font-size:9.5px;font-weight:600;letter-spacing:.18em;color:var(--dim);margin-top:3px}
-.roots{display:flex;gap:6px;flex:1;min-width:0;overflow:hidden;align-items:center}
-.rchip{display:inline-flex;align-items:center;gap:8px;padding:5px 11px;border-radius:999px;background:var(--card2);border:1px solid var(--border);font-size:12.5px;white-space:nowrap;min-width:0;overflow:hidden}
-.rchip .m{font:11.5px var(--mono);color:var(--muted)}
+.rootsw{flex:1;min-width:0;position:relative}
+.roots{display:flex;gap:6px;flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;align-items:center;scrollbar-width:none;padding:2px 0}
+.roots::-webkit-scrollbar{display:none}
+.rchip{display:inline-flex;align-items:center;gap:8px;padding:5px 11px;border-radius:999px;background:var(--card2);border:1px solid var(--border);font-size:12.5px;white-space:nowrap;flex:none;max-width:420px}
+.rchip .t{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.rchip.compact{max-width:230px;padding:4px 10px}
+.rchip.compact .t{max-width:140px}
+.rchip.agg{cursor:pointer}.rchip.agg svg{width:14px;height:14px;color:var(--muted)}
+.rootpop{position:absolute;top:calc(100% + 8px);left:0;z-index:60;min-width:360px;max-width:min(560px,90vw);background:var(--card);border:1px solid var(--border2);border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.3);padding:6px}
+.rootpop .rp{display:flex;gap:10px;align-items:flex-start;padding:9px 10px;border-radius:10px;font-size:13px}
+.rootpop .rp+.rp{border-top:1px solid var(--border)}
+.rootpop .rp .dot{margin-top:6px}.rootpop .st{margin-left:8px;color:var(--muted);font-size:12px}
+.rootpop .m{font:11.5px var(--mono);color:var(--muted)}.rootpop .p{font:11px var(--mono);color:var(--dim);word-break:break-all}.rootpop .e{color:var(--bad-fg);font-size:12px}
+.rchip .m{font:11.5px var(--mono);color:var(--muted);flex:none}
 .rchip.off{border-color:var(--bad);color:var(--bad-fg)}
 .conn{font-size:12px;color:var(--warn);font-weight:600}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
@@ -101,7 +112,8 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 .opstrip{display:flex;align-items:center;gap:8px;padding:8px 18px;border-bottom:1px solid var(--border);background:var(--bg2);flex:none;overflow-x:auto;font-size:12.5px}
 .opstrip>span{display:inline-flex;align-items:center;gap:8px;padding:5px 11px;border-radius:8px;border:1px solid var(--border);background:var(--card);white-space:nowrap}
 .opstrip .k{color:var(--muted);font-size:11px;letter-spacing:.06em}
-.opstrip .opt b{font-size:13.5px}
+.opstrip .opt b{font-size:13.5px}.opstrip .opt .m{font:11.5px var(--mono);color:var(--muted)}
+.opstrip .opt.off{border-color:var(--bad);background:var(--bad-bg)}
 .opstrip select{height:26px;font-weight:600}
 .opstrip .od .l{font-weight:700}.opstrip .od .m{font:11.5px var(--mono);color:var(--muted)}
 .opstrip .od .p{font:11px var(--mono);color:var(--dim);max-width:220px;overflow:hidden;text-overflow:ellipsis}

@@ -4,7 +4,7 @@ import type { Group, Root } from "../types";
 import { cmpDay, dayOK, isTodayLabel, isTodo, lay, parts, recvState, sesStatus, sesTime, todayDay, type SStat } from "../lib/layout";
 import { ago, cmpName, cmpPath, cx, fmtSize, nfc, whereText } from "../lib/util";
 import {
-  allDays, clickRow, effDay, effVenue, foldKeysOf, inVenue, isFold, OPON, opDests, rootById, setDay, setFold, setFoldMany,
+  allDays, clickRow, effDay, effVenue, foldKeysOf, inVenue, isFold, OPON, opDests, setDay, setFold, setFoldMany,
   setPref, setVenue, store, useApp, venueOf, vColor,
 } from "../store";
 import { AnaChips, Cats, CpPill, FlagChips, KindPill, Prog, GotProg, ReplTag, RowProg, SesStatus, StIcon, Tag, TimeChip } from "./Bits";
@@ -13,7 +13,7 @@ import { fuOf } from "../lib/layout";
 
 export function VenueSelect({ id }: { id: string }) {
   const s = useApp(); const S = s.S!;
-  if (OPON()) { const r = rootById(S.op.root!); return <select id={id} disabled><option>{nfc(S.op.venue || (r ? r.label : ""))}（会場オペレーター）</option></select>; }
+  if (OPON()) return null;   // 会場の発表PC：自分の会場だけなので、会場の切り替えは出さない
   const opts: [string, string][] = [];
   for (const r of S.roots) {
     if (r.depth < 2) continue;
