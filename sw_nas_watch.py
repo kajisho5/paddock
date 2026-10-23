@@ -1351,6 +1351,23 @@ def validate_cfg(raw, data_dir, old=None):
     return cfg
 
 
+def unc_server(p):
+    """\\\\server\\share\\… → server（小文字）。\\\\?\\UNC\\server\\… も同じ。ローカル（C:\\・\\\\?\\C:\\）は ""。"""
+    x = str(p or "").replace("/", "\\")
+    if x.lower().startswith("\\\\?\\unc\\"):
+        x = "\\\\" + x[8:]
+    elif x.startswith("\\\\?\\") or x.startswith("\\\\.\\"):
+        return ""
+    if not x.startswith("\\\\"):
+        return ""
+    return x[2:].split("\\")[0].lower()
+
+
+def same_unc_host(a, b):
+    ha = unc_server(a)
+    return bool(ha) and ha == unc_server(b)
+
+
 def validate_op(op, roots, data_dir):
     """会場オペレーターモードの設定。コピー先はNAS（監視フォルダ）の外だけ。"""
     op = op if isinstance(op, dict) else {}
@@ -1412,8 +1429,7 @@ def validate_op(op, roots, data_dir):
         for r in roots:
             if overlaps(p, r["path"]):     # ネットワークドライブ（Z:）など別の書き方で同じNASを指していないかも確かめる
                 raise ValueError("コピー先にNAS（監視フォルダ）の中や、監視フォルダを含む場所は指定できません: %s" % p)
-            uh = lambda x: (x.replace("/", "\\").lstrip("\\").split("\\")[0].lower() if x.replace("/", "\\").startswith("\\\\") else "")
-            if uh(p) and uh(p) == uh(r["path"]):   # 同じNASの別の共有（\\NAS\backup など）にも書かない
+            if same_unc_host(p, r["path"]):   # 同じNASの別の共有（\\NAS\backup など）にも書かない
                 raise ValueError("コピー先に NAS（監視している学会フォルダと同じサーバー）は指定できません。このアプリは NAS に書き込みません: %s" % p)
         if overlaps(p, data_dir):
             raise ValueError("コピー先にこのアプリの保存先は指定できません: %s" % p)
@@ -2622,7 +2638,7 @@ class Copier(threading.Thread):
         err = ""
         roots = [r["path"] for r in self.mgr.cfg.get("roots") or []]
         try:
-            if self._dest_is_nas(p, roots):   # NAS（監視フォルダ）の中には、フォルダも作らない
+            if self._dest_is_nas(p, roots) or any(same_unc_host(p, r) for r in roots):   # NAS（監視フォルダと同じサーバー）には、フォルダも作らない
                 raise OSError("コピー先が NAS（監視フォルダ）の中を指しています。コピーしません")
             os.makedirs(long_path(p), exist_ok=True)
             if not os.path.isdir(long_path(p)):
@@ -2814,6 +2830,7 @@ class Copier(threading.Thread):
                 cur = (w.committed or {}).get(rel)
                 g = group_of(rel, files[rel], w.depth)
                 busy_g = any(group_of(k, s if s is not None else w.committed.get(k), w.depth) == g
+                             and not self.mgr.marker_of(k, s if s is not None else w.committed.get(k))   # 目印の出し入れは待たない
                              for k, (s, _t, _f, *_q) in w.pending.items())
             if cur != files[rel] or busy_g:
                 for did in work[rel]:

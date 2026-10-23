@@ -1296,7 +1296,7 @@ def _bring_front(hint, show, before, gen, timeout=12.0):
                 if u.IsIconic(h):
                     u.ShowWindow(h, 9)                # 最小化されていたら戻す
                 u.BringWindowToTop(h)
-                if not u.SetForegroundWindow(h) or u.GetForegroundWindow() != h:
+                if not u.SetForegroundWindow(h) or (time.sleep(0.06) or u.GetForegroundWindow() != h):
                     u.keybd_event(0x12, 0, 0, 0)      # だめなときだけ Alt を一瞬押す（前に出すことを Windows に許してもらう）
                     u.keybd_event(0x12, 0, 2, 0)
                     u.SetForegroundWindow(h)
@@ -1374,9 +1374,10 @@ def ppt_open_com(path, show):
     with _PPT_LOCK:   # 2つ同時に頼まない（二重に開かないように）
         try:
             r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
-                               capture_output=True, timeout=20, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except subprocess.TimeoutExpired:
-            raise ValueError("PowerPoint が応答しません。PowerPoint にメッセージ（サインイン・パスワード・確認など）が出ていないか見てください")
+                               capture_output=True, timeout=45, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired:   # 二重に開かないよう、ほかの開き方には切り替えない
+            raise ValueError("PowerPoint で開くのに時間がかかっています。PowerPoint の画面を確かめてください（開いていればそのまま使えます。"
+                             "サインイン・パスワード・確認などのメッセージが出ていることもあります）")
         except OSError:
             return None
     txt = r.stdout.decode("utf-8", "replace").lstrip("\ufeff").strip()
@@ -1410,7 +1411,7 @@ def _front_hwnd(h, timeout=3.0):
                 if u.IsIconic(hw):
                     u.ShowWindow(hw, 9)
                 u.BringWindowToTop(hw)
-                if not u.SetForegroundWindow(hw) or u.GetForegroundWindow() != hw.value:
+                if not u.SetForegroundWindow(hw) or (time.sleep(0.06) or u.GetForegroundWindow() != hw.value):
                     u.keybd_event(0x12, 0, 0, 0)
                     u.keybd_event(0x12, 0, 2, 0)
                     u.SetForegroundWindow(hw)
@@ -1549,7 +1550,7 @@ class Opener:
     """演者のスライド・フォルダを、このPCのコピー先（コピー済みのもの）から開く。
     NAS上のファイルは開かない（会場側・受付の差し替えに影響を出さないため。PowerPointの鍵ファイルもNASに作らない）。"""
     LABELS = {"todo": "コピー待ち", "copying": "コピー中", "wait": "NASへの受信が終わるのを待っています", "srcbusy": "NAS側で使用中",
-              "busy": "差し替え待ち", "old": "新しい版をNASで受信中", "off": "コピー先に接続できません", "err": "コピーできませんでした"}
+              "busy": "差し替え待ち", "old": "新しい版はまだこのPCにありません", "off": "コピー先に接続できません", "err": "コピーできませんでした"}
 
     def __init__(self, mgr, data_dir):
         self.mgr = mgr
@@ -1638,13 +1639,13 @@ class Opener:
         st = self._state(target, d["id"])
         name = target["p"].split("/")[-1]
         path = os.path.join(base, *target["p"].split("/"))
-        have = os.path.isfile(W.long_path(path))   # コピー先のファイルは必ず書き終わったもの（書きかけは別名の一時ファイル）
+        have = st != "off" and os.path.isfile(W.long_path(path))   # つながらないコピー先は確かめない（待たされないように）   # コピー先のファイルは必ず書き終わったもの（書きかけは別名の一時ファイル）
         if st not in OPENABLE_STATES and not (have and st not in ("off",)):
             raise ValueError("「%s」は「%s」へまだコピーが終わっていません（%s）。終わってから開いてください"
                              % (name, d["label"], self.LABELS.get(st, "コピー待ち")))
         if not have:
             raise ValueError("「%s」の中に「%s」が見つかりません" % (d["label"], name))
-        if st not in ("ok", "edited"):   # 前にコピーした版を開く（新しい版はまだ）
+        if st not in ("ok", "edited", None):   # 前にコピーした版を開く（新しい版はまだ）
             msg = ((msg + "\n") if msg else "") + "前の版を開きました。新しい版はまだこのPCにありません（%s）" % self.LABELS.get(st, "コピー待ち")
         show = how == "show" and os.path.splitext(name)[1].lower() in SHOW_EXT
         OPEN_FN(path, "show" if show else "file")
