@@ -121,7 +121,6 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 .rhead .p{display:block;font:11px var(--mono);color:var(--dim);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
 .cnt{color:var(--got-fg);font-weight:600}
 .vhead{display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2;background:var(--card);font-weight:700}
-.vhead::before{content:"";width:4px;align-self:stretch;border-radius:4px;background:var(--vc)}
 .vhead .vic{color:var(--vc);display:flex}.vhead .vn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vhead:hover,.shead:hover{background:var(--hover)}
 .chev{display:flex;color:var(--dim);transition:transform .15s}
@@ -136,7 +135,7 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 .grp.hier{padding-left:34px}
 .grp:hover{background:var(--hover)}
 .grp.sel{background:var(--sel)}
-.grp.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent)}
+
 .grp .n{display:flex;align-items:center;gap:8px}
 .grp .nm{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .grp .pre{color:var(--muted);font-weight:400}
@@ -215,7 +214,7 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 .vchip.vis{border-color:var(--vc)}
 .boardcols{flex:1;min-height:0;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(300px,340px);gap:12px;overflow-x:auto;overflow-y:hidden;padding-bottom:4px}
 .col{display:flex;flex-direction:column;min-height:0;background:var(--card);border:1px solid var(--border);border-radius:var(--r2);box-shadow:var(--shadow);overflow:hidden}
-.col .vh{padding:12px 14px 10px;border-bottom:1px solid var(--border);border-top:4px solid var(--vc)}
+.col .vh{padding:12px 14px 10px;border-bottom:1px solid var(--border)}
 .col .vh .n{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px}
 .col .vh .n svg{color:var(--vc)}
 .col .vh .vn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -242,12 +241,12 @@ label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
 .bp .nm{flex:1;min-width:0;font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bp .tg{display:flex;flex-wrap:wrap;gap:4px;width:100%;padding-left:24px}
 .bp .tg:empty{display:none}
-.bp.st-recv{box-shadow:inset 4px 0 0 var(--ok)}
-.bp.st-got{box-shadow:inset 4px 0 0 var(--got);background:var(--got-bg)}
-.bp.st-copying{box-shadow:inset 4px 0 0 var(--warn);background:var(--warn-bg)}
+
+.bp.st-got{background:var(--got-bg)}
+.bp.st-copying{background:var(--warn-bg)}
 .bp.st-none{border-style:dashed;background:transparent}
 .bp.st-none .nm{font-weight:500;color:var(--muted)}
-.bp.st-direct{box-shadow:inset 4px 0 0 var(--vio)}
+
 .bp.st-done{opacity:.55}
 .bp.st-drop{opacity:.5}.bp.st-drop .nm{text-decoration:line-through}
 .bp.unread{outline:2px solid var(--got);outline-offset:-2px}
@@ -462,7 +461,6 @@ table.files button.oo.show{border-color:var(--ok);color:var(--ok-fg)}
 :root[data-theme="dark"] .bp{background:var(--card2)}
 :root[data-theme="dark"] .bp.st-none{border-color:var(--bad);border-style:dashed}
 :root[data-theme="dark"] .bp.st-none .nm{color:var(--fg2)}
-:root[data-theme="dark"] .bp.st-recv{box-shadow:inset 4px 0 0 var(--ok)}
 :root[data-theme="dark"] .grp.st-none .nm{color:var(--fg2)}
 :root[data-theme="dark"] .col .vh{background:var(--card)}
 :root[data-theme="dark"] .fh h1{font-size:32px}
