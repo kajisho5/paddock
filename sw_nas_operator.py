@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.8.6"
+VERSION = "1.8.7"
 DEFAULT_PORT = 8797
 
 
@@ -1181,7 +1181,7 @@ def valid_password(p):
 OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest"}
 PRES_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps", ".key", ".pdf")      # 発表ファイル（この順に優先）
 SHOW_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps")                      # スライドショーで開けるもの
-OPENABLE_STATES = ("ok", "edited")                                                     # コピー済み（コピー先で編集されたものも含む）
+OPENABLE_STATES = ("ok", "edited", "old")                                                   # コピー済み（コピー先で編集されたものも含む）
 
 
 def _powerpoint_exe():
@@ -1203,59 +1203,89 @@ def _powerpoint_exe():
 
 
 def _front_hint(path, how):
-    """開いたウィンドウを見つけるための手がかり（タイトルに入る名前）。フォルダはフォルダ名、ファイルは拡張子を除いた名前。"""
+    """開いたウィンドウを見つけるための手がかり（タイトルに入る名前）。フォルダはフォルダ名、ファイルは拡張子を除いた名前と拡張子。"""
     name = os.path.basename(path.rstrip("\\/"))
-    if how != "folder":
-        name = os.path.splitext(name)[0]
-    return unicodedata.normalize("NFC", name).casefold()
+    stem, ext = (name, "") if how == "folder" else os.path.splitext(name)
+    return unicodedata.normalize("NFC", stem).casefold(), ext.casefold()
 
 
-def _bring_front(hint, show, timeout=12.0):
+_FRONT_GEN = [0]      # 新しく開いたら、前に開いたものを前に出す処理はやめる
+
+
+def _title_has(title, stem, ext):
+    """タイトルに名前が「単語として」入っているか（「演題1」が「演題10」に当たらないように）"""
+    i = title.find(stem)
+    while i >= 0:
+        j = i + len(stem)
+        if ext and title.startswith(ext, j):
+            j += len(ext)
+        before = title[i - 1] if i > 0 else " "
+        after = title[j] if j < len(title) else " "
+        if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+            return True
+        i = title.find(stem, i + 1)
+    return False
+
+
+def _win_api():
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.WinDLL("user32", use_last_error=True)
+    k = ctypes.WinDLL("kernel32")
+    u.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    u.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    u.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    u.IsWindowVisible.argtypes = [wintypes.HWND]
+    u.GetForegroundWindow.restype = wintypes.HWND
+    u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    u.GetWindowThreadProcessId.restype = wintypes.DWORD
+    u.SetForegroundWindow.argtypes = [wintypes.HWND]
+    u.BringWindowToTop.argtypes = [wintypes.HWND]
+    u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    u.IsIconic.argtypes = [wintypes.HWND]
+    u.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+    return ctypes, wintypes, u, k
+
+
+def _find_windows(hint):
+    """タイトルに名前が入っている、見えているウィンドウ（[(hwnd, class)]、手前から順）"""
+    ctypes, wintypes, u, _k = _win_api()
+    stem, ext = hint
+    hits = []
+    EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(h, _):
+        if not u.IsWindowVisible(h):
+            return True
+        n = u.GetWindowTextLengthW(h)
+        if n <= 0:
+            return True
+        b = ctypes.create_unicode_buffer(n + 1)
+        u.GetWindowTextW(h, b, n + 1)
+        t = unicodedata.normalize("NFC", b.value).casefold()
+        if stem and _title_has(t, stem, ext):
+            c = ctypes.create_unicode_buffer(64)
+            u.GetClassNameW(h, c, 64)
+            hits.append((h, c.value))
+        return True
+    u.EnumWindows(EnumProc(cb), 0)
+    return hits
+
+
+def _snapshot(hint):
+    try:
+        return {h for h, _c in _find_windows(hint)} if W.IS_WIN else set()
+    except Exception:
+        return set()
+
+
+def _bring_front(hint, show, before, gen, timeout=12.0):
     """開いたアプリ（PowerPoint・Explorer など）のウィンドウを手前に出す（Windows）。
     このアプリの画面（ブラウザ）が前にあると、Windows は後から開いたウィンドウを裏に回すため。
-    タイトルに名前が入ったウィンドウを探し、見つかったら前へ。スライドショーは、スライドショーの画面が出るまで待つ。"""
+    開く前からあったウィンドウ（前の演者のスライドショーなど）は選ばない。ただしファイル・フォルダを開いたとき、
+    3秒たっても新しいウィンドウが出なければ（すでに開いていた）、そのウィンドウを前へ。"""
     try:
-        import ctypes
-        from ctypes import wintypes
-        u = ctypes.WinDLL("user32", use_last_error=True)
-        k = ctypes.WinDLL("kernel32")
-        EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-        u.GetWindowTextLengthW.argtypes = [wintypes.HWND]
-        u.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-        u.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-        u.IsWindowVisible.argtypes = [wintypes.HWND]
-        u.GetForegroundWindow.restype = wintypes.HWND
-        u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-        u.GetWindowThreadProcessId.restype = wintypes.DWORD
-        u.SetForegroundWindow.argtypes = [wintypes.HWND]
-        u.BringWindowToTop.argtypes = [wintypes.HWND]
-        u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
-        u.IsIconic.argtypes = [wintypes.HWND]
-        u.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
-
-        def find():
-            hits = []
-
-            def cb(h, _):
-                if not u.IsWindowVisible(h):
-                    return True
-                n = u.GetWindowTextLengthW(h)
-                if n <= 0:
-                    return True
-                b = ctypes.create_unicode_buffer(n + 1)
-                u.GetWindowTextW(h, b, n + 1)
-                t = unicodedata.normalize("NFC", b.value).casefold()
-                if hint and hint in t:
-                    c = ctypes.create_unicode_buffer(64)
-                    u.GetClassNameW(h, c, 64)
-                    hits.append((h, c.value))
-                return True
-            u.EnumWindows(EnumProc(cb), 0)
-            if show:   # スライドショーの画面（PowerPoint は screenClass）を優先
-                ss = [h for h, c in hits if c == "screenClass"]
-                if ss:
-                    return ss[0], True
-            return (hits[0][0], False) if hits else (None, False)
+        _ctypes, _wt, u, k = _win_api()
 
         def front(h):
             fg = u.GetForegroundWindow()
@@ -1273,11 +1303,20 @@ def _bring_front(hint, show, timeout=12.0):
                 if att:
                     u.AttachThreadInput(me, ft, False)
 
-        end = time.time() + timeout
+        t0 = time.time()
         tries = {}
-        while time.time() < end:
-            h, is_show = find()
-            if h:
+        while time.time() - t0 < timeout and _FRONT_GEN[0] == gen:
+            hits = _find_windows(hint)
+            new = [(h, c) for h, c in hits if h not in before]
+            if not new and not show and time.time() - t0 > 3:
+                new = hits[:1]                          # すでに開いていたファイル・フォルダ
+            cand = None
+            if show:   # スライドショーの画面（PowerPoint は screenClass）を優先
+                cand = next(((h, True) for h, c in new if c == "screenClass"), None)
+            if cand is None and new:
+                cand = (new[0][0], False)
+            if cand:
+                h, is_show = cand
                 ok = u.GetForegroundWindow() == h
                 if ok and (not show or is_show):
                     return
@@ -1294,6 +1333,10 @@ def _bring_front(hint, show, timeout=12.0):
 def open_native(path, how):
     """ファイル・フォルダを、このPCの既定のアプリで開く（how="show" は PowerPoint のスライドショー）。開いたウィンドウは手前に出す。"""
     if W.IS_WIN:
+        hint = _front_hint(path, how)
+        before = _snapshot(hint)
+        _FRONT_GEN[0] += 1
+        gen = _FRONT_GEN[0]
         if how == "show":
             try:
                 os.startfile(path, "show")       # PowerPoint の「スライド ショー」（右クリックメニューと同じ）
@@ -1302,13 +1345,11 @@ def open_native(path, how):
                 if not exe:
                     raise ValueError("PowerPoint が見つからないため、スライドショーで開けません（［開く］で開いてください）")
                 subprocess.Popen([exe, "/S", path])
-        elif how == "folder":
-            os.startfile(path)
         else:
             os.startfile(path)
-        threading.Thread(target=_bring_front, args=(_front_hint(path, how), how == "show"), daemon=True).start()
+        threading.Thread(target=_bring_front, args=(hint, how == "show", before, gen), daemon=True).start()
         return
-    elif W.IS_MAC:
+    if W.IS_MAC:
         subprocess.Popen(["open", path])
     else:
         subprocess.Popen(["xdg-open", path])
@@ -1406,7 +1447,7 @@ class Opener:
     """演者のスライド・フォルダを、このPCのコピー先（コピー済みのもの）から開く。
     NAS上のファイルは開かない（会場側・受付の差し替えに影響を出さないため。PowerPointの鍵ファイルもNASに作らない）。"""
     LABELS = {"todo": "コピー待ち", "copying": "コピー中", "wait": "NASへの受信が終わるのを待っています", "srcbusy": "NAS側で使用中",
-              "busy": "差し替え待ち", "off": "コピー先に接続できません", "err": "コピーできませんでした"}
+              "busy": "差し替え待ち", "old": "前の版（新しい版を受信中）", "off": "コピー先に接続できません", "err": "コピーできませんでした"}
 
     def __init__(self, mgr, data_dir):
         self.mgr = mgr
@@ -2582,7 +2623,7 @@ const _opRF=renderFolder;renderFolder=function(){_opRF();
   const rows=F.items.map(i=>Object.assign({k:sortKey(i.p,i.d)},i)).sort((a,b)=>cmpKeys(a.k,b.k));
   const trs=[...tb.querySelectorAll("tbody tr")];if(trs.length!==rows.length)return;
   rows.forEach((it,ix)=>{const td=document.createElement("td");td.style.whiteSpace="nowrap";
-    if(!it.d&&!it.mk){const st=it.cp&&it.cp[did]?it.cp[did][0]:"";const ok=st==="ok"||st==="edited";
+    if(!it.d&&!it.mk){const st=it.cp&&it.cp[did]?it.cp[did][0]:"";const ok=st==="ok"||st==="edited"||st==="old";
       const ext=(it.p.match(/\.[^.\/]+$/)||[""])[0].toLowerCase();const show=[".pptx",".ppsx",".pptm",".ppsm",".ppt",".pps"].includes(ext);
       const why=ok?"":"（"+((CPL[st]||["コピー待ち"])[0])+"。コピーが終わると開けます）";
       td.innerHTML=`<button class="ghost oo" data-oo="file" ${ok?"":"disabled"} title="このPCのコピーを開く${esc(why)}">開く</button>${show?` <button class="ghost oo" data-oo="show" ${ok?"":"disabled"} title="スライドショーで開く${esc(why)}">スライドショー</button>`:""}`;

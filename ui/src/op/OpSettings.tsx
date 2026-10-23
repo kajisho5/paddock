@@ -67,8 +67,10 @@ export function OpSection({ c, up, part }: { c: Config; up: () => void; part: "v
   }, [op._dm, rp]);
 
   const setMode = (dm: boolean) => {
+    if (dm === !!op._dm) return;
     op._dm = dm;
-    if (dm && rr && rr.depth < 4) { rr.depth = rr.depth + 1; toast("日のフォルダが1段増えるため、監視フォルダの「階層」を " + rr.depth + " にしました", 6000); }
+    if (dm && rr && rr.depth < 4) { rr.depth = rr.depth + 1; (rr as any)._bump = true; toast("日のフォルダが1段増えるため、監視フォルダの「階層」を " + rr.depth + " にしました", 6000); }
+    else if (!dm && rr && (rr as any)._bump) { rr.depth = rr.depth - 1; delete (rr as any)._bump; toast("監視フォルダの「階層」を " + rr.depth + " に戻しました", 5000); }   // 自動で増やした分を戻す
     up();
   };
   const days = op.days || [];

@@ -1,6 +1,6 @@
 /* サーバー（Python）が返すデータの形。フィールド名はサーバー側に合わせる（短い名前のまま） */
 
-export type CpState = "ok" | "todo" | "copying" | "wait" | "srcbusy" | "busy" | "edited" | "err" | "off";
+export type CpState = "ok" | "todo" | "copying" | "wait" | "srcbusy" | "busy" | "edited" | "old" | "err" | "off";
 
 export interface AnaSum {
   n: number; done: number; err: number; video: number; vwarn: number; vfbad: number; vfwarn: number;
@@ -18,6 +18,7 @@ export interface Group {
   ana?: AnaSum;
   unread: number;
   cp?: Record<string, CpState>;
+  cpp?: Record<string, CpState>;   // 発表ファイルだけで見た状態（どれか1つでも開ければ ok）
   last_ts?: number;
   last_kind?: string;
   recv_ts?: number;

@@ -18,7 +18,7 @@ export const OPS: Record<string, [string, string, string]> = {
 };
 export const CPL: Record<string, [string, string]> = {
   ok: ["コピー済み", "ok"], todo: ["コピー待ち", "dim"], copying: ["コピー中", "run"], wait: ["受信完了待ち", "dim"], srcbusy: ["NAS側で使用中", "warn"],
-  busy: ["差し替え待ち", "warn"], edited: ["コピー先で変更あり", "warn"], err: ["エラー", "bad"], off: ["接続できません", "bad"],
+  busy: ["差し替え待ち", "warn"], old: ["前の版（新しい版を受信中）", "warn"], edited: ["コピー先で変更あり", "warn"], err: ["エラー", "bad"], off: ["接続できません", "bad"],
 };
 export const MKC: Record<string, string> = { recv: "ok", got: "got", done: "done", drop: "drop", direct: "direct", warn: "warn", info: "dim", meta: "dim" };
 export const MKR: Record<string, string> = { recv: "受付済", got: "会場取得済", done: "発表終了", drop: "演題取り下げ", direct: "会場直", warn: "注意", info: "表示だけ", meta: "受付システムの付帯情報（データに数えない）" };

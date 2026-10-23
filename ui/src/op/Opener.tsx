@@ -49,7 +49,7 @@ export const OpFileButtons = {
   Cell({ F, it }: { F: Folder; it: FolderItem }) {
     const d = OPEN.dest; if (!OPEN.settings.enabled || !F.op || !d) return null;
     if (it.d || it.mk) return <td />;
-    const st = it.cp && it.cp[d.id] ? it.cp[d.id][0] : ""; const ok = st === "ok" || st === "edited";
+    const st = it.cp && it.cp[d.id] ? it.cp[d.id][0] : ""; const ok = st === "ok" || st === "edited" || st === "old";
     const ext = (it.p.match(/\.[^./]+$/) || [""])[0].toLowerCase(); const show = SHOW.includes(ext);
     const why = ok ? "" : "（" + (CPL[st] || ["コピー待ち"])[0] + "。コピーが終わると開けます）";
     return <td style={{ whiteSpace: "nowrap" }}>

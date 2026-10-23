@@ -114,23 +114,27 @@ function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: strin
   if (a && a.rel.startsWith(g.key + "/") && (!a.dests || a.dests.includes(mainDest()))) { const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; return { k: "run", t: "コピー中 " + pct + "%", pct }; }
   if (g.pending) {   // NASへ書き込み中：受信済みサイズ・速度・経過時間
     const r = rootById(S.op.root || ""); const v = r ? rateOf(r.id, g) : 0;
-    return { k: "run", t: "NASに受信中" + (g.pbytes ? " " + fmtSize(g.pbytes) : "") + (v ? " · " + fmtSize(v) + "/s" : "") + (g.pstart ? " · " + mss(Date.now() / 1000 + store.SKEW - g.pstart) : "") };
+    return { k: "run", t: (canOpen(g) ? "DL済・差し替えを受信中" : "NASに受信中") + (g.pbytes ? " " + fmtSize(g.pbytes) : "") + (v ? " · " + fmtSize(v) + "/s" : "") + (g.pstart ? " · " + mss(Date.now() / 1000 + store.SKEW - g.pstart) : "") };
   }
   if (!hasData(g)) return { k: "none", t: isBYO(g) ? "PC持込（データなし）" : g.files ? "データなし（メモだけ）" : "データなし" };
   const st: CpState | undefined = g.cp?.[mainDest()];
   if (!st) return { k: "wait", t: "確認中" };
   if (st === "ok" || st === "edited") return { k: "ok", t: isBYO(g) ? "DL済（バックアップ）" : "DL済" };
+  if (st === "old") return { k: "run", t: "前の版あり・新しい版を受信中" };
   if (st === "copying") return { k: "run", t: "コピー中" };
   if (st === "err" || st === "off") return { k: "bad", t: CPL[st][0] };
   return { k: "wait", t: CPL[st]?.[0] || st };
 }
 
 /* このPCのコピーから開けるか：メインのコピー先の状態だけで決める（バックアップへのコピー中・差し替えの受信中でも、前の版は開ける） */
-const canOpen = (g: Group) => { const st = g.cp?.[mainDest()]; return hasData(g) && (st === "ok" || st === "edited"); };
+const OPENABLE = ["ok", "edited", "old"];
+/* 開けるか：発表ファイルの状態で決める（大きな動画のコピー中・差し替えの受信中でも、コピー済みのスライドは開ける）。サーバーの判定と同じ */
+const canOpen = (g: Group) => { const st = (g.cpp || g.cp)?.[mainDest()]; return hasData(g) && !!st && OPENABLE.includes(st); };
 /* 発表に使うデータがあるか（メモの .txt などだけなら「データなし」） */
 const hasData = (g: Group) => g.files > 0 && Object.keys(g.cats || {}).some((c) => c !== "他");
 /* PC持込（本人のPCで発表）：入っているデータは「バックアップ」として扱う */
-const isBYO = (g: Group) => (g.fl || []).some((f) => /持込/.test(nfc(f[0])));
+const BYO_RE = /^(?:PC|Win|Mac)?持込(?:リモプレ)?$/i;   // 既定の目印（PC持込・Mac持込・持込…）だけ。「持込不可」などは含めない
+const isBYO = (g: Group) => (g.fl || []).some((f) => BYO_RE.test(nfc(f[0]).replace(/[\s　]/g, "")));
 
 /* ほかのコピー先（バックアップPCなど）の状態：小さな点で */
 function OtherDests({ g }: { g: Group }) {
@@ -289,7 +293,7 @@ function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
       const has = L; const ok = L.filter((g) => hasData(g) && (g.cp?.[d.id] === "ok" || g.cp?.[d.id] === "edited")).length;   // 分母は演者の人数（データのない人も数える）
       const nod = L.filter((g) => !hasData(g)).length;
       const c = d.count || {}; const busy = (c.busy || 0) + (c.srcbusy || 0); const bad = c.err || 0;
-      return <span key={d.id} className={cx("gchip", has.length && ok === has.length && "full", bad && "bad")}
+      return <span key={d.id} className={cx("gchip", ok > 0 && ok === has.length - nod && "full", bad && "bad")}
         title={d.path + `\nこのセッション：DL済 ${ok}/${has.length}人` + (nod ? `（データなし ${nod}人）` : "") + `\n会場全体：コピー済み ${(c.ok || 0) + (c.edited || 0)}/${d.total || 0}` + (busy ? `\n差し替え待ち ${busy}（コピー先で開かれているため、閉じたら差し替えます）` : "") + (bad ? `\nエラー ${bad}` : "")}>
         <i className="pc ok" />{d.label}<b>{ok}/{has.length}</b>DL済<Bar pct={has.length ? (ok * 100) / has.length : 0} className="gtrack" />
         {busy > 0 && <span className="sub2">差し替え待ち {busy}</span>}{bad > 0 && <b className="e">エラー {bad}</b>}</span>;
@@ -479,7 +483,7 @@ function FileTable({ F }: { F: Folder }) {
   const rows = F.items.filter((i) => !i.d).sort((a, b) => cmpPath(a.p, b.p)); const ds = (F.op?.dests || []).filter((d) => d.enabled); const on = OPEN.settings.enabled;
   if (!rows.length) return <div className="dim" style={{ padding: "4px 0 8px" }}>空のフォルダです</div>;
   return <table className="gft"><tbody>{rows.map((i) => {
-    const c = i.cp?.[mainDest()]?.[0]; const ok = on && !i.mk && (c === "ok" || c === "edited");
+    const c = i.cp?.[mainDest()]?.[0]; const ok = on && !i.mk && !!c && OPENABLE.includes(c);
     return <tr key={i.p} className={cx(i.st === "pending" && "pend")}>
       <td className="fn" title={nfc(i.p)}>{nfc(i.p)}{i.mk && <span className="gt" data-k="info">{i.mk === "meta" ? "付帯情報" : "目印"}</span>}{i.st && i.st !== "pending" && <span className="gt" data-k="repl">{i.st === "add" ? "追加" : i.st === "mod" ? "更新" : "名前変更"}</span>}{i.st === "pending" && <span className="gt" data-k="warn">受信中</span>}</td>
       <td className="num">{i.mk ? "" : fmtSize(i.s)}</td><td className="tm">{i.m ? dtm(i.m) : ""}</td>
@@ -555,7 +559,7 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
       })}
       {!(F.op?.dests || []).length && <div className="r"><dt>コピー</dt><dd><i className={"pc " + cp.k} />{cp.t}{d ? <span className="dim"> · {d.label}</span> : null}</dd></div>}
       {shows.length > 1 && <div className="r files"><dt>ファイル</dt><dd><ul className="gfiles">{shows.map((it) => {
-        const c = it.cp?.[mainDest()]?.[0]; const ok = on && (c === "ok" || c === "edited");
+        const c = it.cp?.[mainDest()]?.[0]; const ok = on && !!c && OPENABLE.includes(c);
         return <li key={it.p} data-p={it.p}><span className="fn" title={nfc(it.p)}>{nfc(it.p.split("/").pop())}{pres && pres.newest === it.p && <span className="gt" data-k="info">後から入った</span>}</span>
           {SHOWX.test(it.p) && <button className="gb icon sm" disabled={!ok} title="スライドショーで開く" onClick={() => opOpen(F.root, F.group, it.p, "show")}><Icon n="play" /></button>}
           <button className="gb icon sm" disabled={!ok} title="開く" onClick={() => opOpen(F.root, F.group, it.p, "file")}><Icon n="file" /></button></li>;
