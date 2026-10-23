@@ -1,12 +1,12 @@
 /* PADDOCK GATE の本番画面（会場の発表PC）。
    左：その日のセッション（DAY の切り替えつき）／中央：残り時間・発表中の人・発表順／右：選んだ演者の本番用の情報。
    発表中・発表済みは このPC の記録だけ（/api/op/stage）。NAS には何も書かない */
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { CpState, Folder, Group, Root } from "../types";
 import { cmpDay, dayInfo, dayOK, fmtT, isRecv, isTodayLabel, parts, sesStatus, sesTime, todayDay, type SStat, type STime } from "../lib/layout";
-import { cmpPath, copyText, cx, dtm, hms, nfc } from "../lib/util";
-import { allDays, effDay, inVenue, loadState, opDests, quitApp, rootById, selectGroup, setDay, store, toast, useApp } from "../store";
+import { ago, cmpPath, copyText, cx, dtm, fmtSize, hms, mss, nfc } from "../lib/util";
+import { allDays, effDay, inVenue, loadState, opDests, quitApp, rateOf, rootById, selectGroup, setDay, store, toast, useApp } from "../store";
 import { Icon } from "../components/Icons";
 import { LogButton } from "../components/Header";
 import { LogPane } from "../components/LogPane";
@@ -14,7 +14,7 @@ import { AnaCard } from "../components/Folder";
 import { openCfg } from "../components/Settings";
 import { netBadge, netOpen } from "../op/Net";
 import { OPEN, opOpen } from "../op/Opener";
-import { CPL } from "../components/Bits";
+import { CPL, KindPill, OPS } from "../components/Bits";
 import { Bar, Segmented } from "../design/ui";
 import { APP_ICON } from "../lib/appIcon";
 import "./gate.css";
@@ -31,7 +31,7 @@ export async function setStage(root: string, group: string, st: Stage | "") {
   try { const j: any = await api("/api/op/stage", { root, group, st }); STG.st = j.st || n; store.emit(); }
   catch (e: any) { STG.st = prev; store.emit(); toast("発表の状態を保存できませんでした：" + e.message, 6000); }
 }
-const stageOf = (root: string, g: string): Stage | "" => STG.st[root + "|" + g]?.st || "";
+const stageOf = (root: string, g: string): Stage | "" => STG.st[root + "|" + g]?.st || (rootById(root)?.groups || []).find((x) => x.key === g)?.mk_done && "done" || "";
 
 /* ---------------------------------------------------------------- データの組み立て */
 interface Ses { key: string; name: string; day: string; t: STime | null; list: Group[] }
@@ -69,14 +69,20 @@ function splitName(seg: string) {
 const nameOf = (g: Group) => splitName(g.key.split("/").pop() || "");
 
 /* 受付の状態（行の左） */
-type RC = "received" | "pending" | "error" | "drop";
+type RC = "received" | "got" | "direct" | "pending" | "error" | "drop";
 function needCheck(g: Group) {
   const a = g.ana; const cp = Object.values(g.cp || {});
   return !!(a && (a.vfbad || a.abad || a.noclick || a.err)) || cp.includes("err") || (g.fl || []).some((f) => f[1] === "warn");
 }
-function rcOf(g: Group): RC { if (g.mk_drop) return "drop"; if (needCheck(g)) return "error"; return isRecv(g) ? "received" : "pending"; }
-const RCL: Record<RC, string> = { received: "受付済", pending: "未受付", error: "要確認", drop: "取下げ" };
+function rcOf(g: Group): RC {
+  if (g.mk_drop) return "drop"; if (needCheck(g)) return "error";
+  if (g.mk_got || g.mk_done) return "got"; if (g.mk_direct && !g.files && !g.mk_recv) return "direct";
+  return isRecv(g) ? "received" : "pending";
+}
+const RCL: Record<RC, string> = { received: "受付済", got: "取得済", direct: "会場直", pending: "未受付", error: "要確認", drop: "取下げ" };
+const RCT: Record<RC, string> = { received: "受付済み", got: "会場取得済（「取得済」の目印あり）", direct: "会場直（データは会場で受け取る）", pending: "まだ受付していません", error: "要確認（下のラベル・右の注意を見てください）", drop: "演題取り下げ" };
 function RIcon({ k }: { k: RC | "done" | "live" | "progress" }) {
+  if (k === "got" || k === "direct") k = "received";
   if (k === "received") return <svg className="ri" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="var(--g-received)" strokeWidth="1.5" /><path d="M4.4 7.1 6.2 8.9 9.6 5.3" fill="none" stroke="var(--g-received)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
   if (k === "error") return <svg className="ri" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="var(--g-error)" strokeWidth="1.5" /><path d="M7 4v3.6" stroke="var(--g-error)" strokeWidth="1.6" strokeLinecap="round" /><circle cx="7" cy="9.9" r=".9" fill="var(--g-error)" /></svg>;
   if (k === "done") return <svg className="ri" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="7" fill="var(--g-done)" /><path d="M4.3 7.1 6.1 8.9 9.7 5.2" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
@@ -91,7 +97,10 @@ const mainDest = () => OPEN.dest?.id || opDests()[0]?.id || "";
 function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: string; pct?: number } {
   const S = store.S!; const a = S.op.active;
   if (a && a.rel.startsWith(g.key + "/")) { const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; return { k: "run", t: "コピー中 " + pct + "%", pct }; }
-  if (g.pending) return { k: "run", t: "NASに受信中" };
+  if (g.pending) {   // NASへ書き込み中：受信済みサイズ・速度・経過時間
+    const r = rootById(S.op.root || ""); const v = r ? rateOf(r.id, g) : 0;
+    return { k: "run", t: "NASに受信中" + (g.pbytes ? " " + fmtSize(g.pbytes) : "") + (v ? " · " + fmtSize(v) + "/s" : "") + (g.pstart ? " · " + mss(Date.now() / 1000 + store.SKEW - g.pstart) : "") };
+  }
   if (!g.files) return { k: "none", t: "データなし" };
   const st: CpState | undefined = g.cp?.[mainDest()];
   if (!st) return { k: "wait", t: "確認中" };
@@ -101,13 +110,24 @@ function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: strin
   return { k: "wait", t: CPL[st]?.[0] || st };
 }
 
+/* ほかのコピー先（バックアップPCなど）の状態：小さな点で */
+function OtherDests({ g }: { g: Group }) {
+  const ds = opDests().filter((d) => d.id !== mainDest()); if (!ds.length || !g.files) return null;
+  return <span className="odots">{ds.map((d) => {
+    const st = d.online === false ? "off" : g.cp?.[d.id]; const x = st ? CPL[st] : null;
+    const k = !x ? "wait" : x[1] === "ok" ? "ok" : x[1] === "run" ? "run" : x[1] === "bad" ? "bad" : "wait";
+    return <i key={d.id} className={"pc " + k} title={d.label + "：" + (x ? x[0] : "確認中")} aria-label={d.label + "：" + (x ? x[0] : "確認中")} />;
+  })}</span>;
+}
+
 /* ラベル：多くても2つまで（赤い注意 → オペの対応 → 差し替え → そのほか）。残りは「+N」 */
-interface TagX { t: string; k: "bad" | "op" | "repl" | "info"; p: number }
+interface TagX { t: string; k: "bad" | "warn" | "op" | "repl" | "info"; p: number }
 function tagsOf(g: Group): TagX[] {
   const out: TagX[] = []; const a = g.ana;
   for (const [l, role] of g.fl || []) out.push(role === "warn" ? { t: nfc(l), k: "bad", p: 0 } : role === "op" ? { t: nfc(l), k: "op", p: 1 } : { t: nfc(l), k: "info", p: 3 });
   if (a) {
     if (a.vfbad) out.push({ t: "動画の形式", k: "bad", p: 0 });
+    else if (a.vfwarn || a.vwarn) out.push({ t: "動画 要試写", k: "warn", p: 1.5 });
     if (a.abad) out.push({ t: "音声リンク切れ", k: "bad", p: 0 });
     if (a.noclick) out.push({ t: "クリック無効", k: "bad", p: 0 });
     if (a.err) out.push({ t: "解析できない", k: "bad", p: 0 });
@@ -163,7 +183,7 @@ export function GateApp() {
     <main className="gmain">
       {M && ses ? <>
         <NowBlock M={M} ses={ses} />
-        <List M={M} ses={ses} onMenu={(x, y, g) => setMenu({ x, y, g })} />
+        {s.q.trim() ? <Found M={M} onMenu={(x, y, g) => setMenu({ x, y, g })} /> : <List M={M} ses={ses} onMenu={(x, y, g) => setMenu({ x, y, g })} />}
       </> : <div className="gempty"><Icon n="shoe" /><b>{M ? "この日の演者フォルダはまだありません" : "会場が設定されていません"}</b>
         <span>{M ? "NASに演者フォルダができると、ここに発表順で並びます。" : "［設定］で NAS の学会フォルダと、このPCの会場を選んでください。"}</span></div>}
     </main>
@@ -195,7 +215,10 @@ function Side({ M, ses }: { M: Model | null; ses: Ses | null }) {
     catch (e: any) { toast(e.message, 6000); }
   };
   return <aside className="gside">
-    <div className="gws"><img src={APP_ICON} alt="" width={20} height={20} /><b>PADDOCK GATE</b><span className="sub" title={nfc(o.venue || "")}>{venue}</span></div>
+    <div className="gws"><img src={APP_ICON} alt="" width={20} height={20} /><b>PADDOCK GATE</b><span className="sub" title={rootTip(M)}>{M && <i className={"pc " + (M.r.online === false ? "bad" : M.r.online ? "ok" : "run")} />}{venue}</span></div>
+    <div className="gsearch"><Icon n="search" /><input id="q" type="text" placeholder="演者・セッションを検索" autoComplete="off" value={s.q}
+      onChange={(e) => { s.q = e.target.value; s.emit(); }} onKeyDown={(e) => { if (e.key === "Escape") { s.q = ""; s.emit(); (e.target as HTMLInputElement).blur(); } }} />
+      {s.q && <button className="x" title="検索をやめる（Esc）" onClick={() => { s.q = ""; s.emit(); }}><Icon n="x" /></button>}</div>
     {M && M.days.length > 0 && <div className="gdays">
       <Segmented label="日の切り替え" value={M.day} onChange={daySet} className="gseg"
         items={M.days.map((d) => ({ v: d, id: "gday-" + d, title: isTodayLabel(d) ? "今日" : d, label: <>{nfc(dayInfo(d)?.tok || d)}{isTodayLabel(d) && <i className="today" aria-label="今日" />}</> }))} />
@@ -220,6 +243,13 @@ function Side({ M, ses }: { M: Model | null; ses: Ses | null }) {
   </aside>;
 }
 
+/* NAS（監視フォルダ）の状態：会場名にマウスを乗せると出す */
+function rootTip(M: Model | null) {
+  if (!M) return ""; const r = M.r;
+  const st = !r.enabled ? "停止中" : r.online === false ? "接続できません" : r.online === null ? "確認中…" : r.pending ? "変化を確認中 " + r.pending : "監視中";
+  return nfc(store.S!.op.venue || "") + "\n" + nfc(r.label) + "　" + st + (r.online ? `\n${(r.count || 0).toLocaleString()}件${r.scan_ms != null ? " · " + (r.scan_ms / 1000).toFixed(1) + "s" : ""}${r.last_scan ? " · " + hms(r.last_scan) : ""}` : "") + "\n" + r.path + (r.error ? "\n" + r.error : "") + (r.n_warns ? "\n読めないフォルダ " + r.n_warns + "件" : "");
+}
+
 /* ---- 上：セッション名とコピーの状況 */
 function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
   const S = store.S!; const L = ses ? ses.list.filter((g) => !g.mk_drop) : [];
@@ -230,13 +260,20 @@ function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
     {M && M.r.online === false && <span className="gchip bad" title={nfc(M.r.path) + (M.r.error ? "\n" + M.r.error : "")}><RIcon k="error" /><b>NASに接続できません</b></span>}
     <span className="sp" />
     {ds.map((d) => {
-      if (d.online === false) return <span key={d.id} className="gchip bad" title={d.path + (d.error ? "\n" + d.error : "")}><RIcon k="error" />{d.label}<b>接続できません</b></span>;
+      if (d.online === false) return <button key={d.id} className="gchip bad btn" title={d.path + (d.error ? "\n" + d.error : "") + "\nクリックで原因を調べます（つながったら自動でコピーします）"} onClick={() => netOpen()}><RIcon k="error" />{d.label}<b>接続できません</b><span className="lnk">原因を調べる</span></button>;
       const has = L.filter((g) => g.files > 0); const ok = has.filter((g) => g.cp?.[d.id] === "ok" || g.cp?.[d.id] === "edited").length;
-      return <span key={d.id} className={cx("gchip", has.length && ok === has.length && "full")} title={d.path}><i className="pc ok" />{d.label}<b>{ok}/{has.length}</b>コピー済み<Bar pct={has.length ? (ok * 100) / has.length : 0} className="gtrack" /></span>;
+      const c = d.count || {}; const busy = (c.busy || 0) + (c.srcbusy || 0); const bad = c.err || 0;
+      return <span key={d.id} className={cx("gchip", has.length && ok === has.length && "full", bad && "bad")}
+        title={d.path + `\nこのセッション：コピー済み ${ok}/${has.length}\n会場全体：コピー済み ${(c.ok || 0) + (c.edited || 0)}/${d.total || 0}` + (busy ? `\n差し替え待ち ${busy}（コピー先で開かれているため、閉じたら差し替えます）` : "") + (bad ? `\nエラー ${bad}` : "")}>
+        <i className="pc ok" />{d.label}<b>{ok}/{has.length}</b>コピー済み<Bar pct={has.length ? (ok * 100) / has.length : 0} className="gtrack" />
+        {busy > 0 && <span className="sub2">差し替え待ち {busy}</span>}{bad > 0 && <b className="e">エラー {bad}</b>}</span>;
     })}
     {(() => { const n = L.filter((g) => copyOf(g).k === "run").length; return n > 0 && <span className="gchip"><i className="pc run" />コピー中<b>{n}</b></span>; })()}
     {(() => { const n = L.filter((g) => rcOf(g) === "error").length; return n > 0 && <span className="gchip bad"><RIcon k="error" />要確認<b>{n}</b></span>; })()}
-    {S.op.active && !L.some((g) => S.op.active!.rel.startsWith(g.key + "/")) && <span className="gchip dim" title={nfc(S.op.active.rel)}><Icon n="spin" className="spin" />ほかのセッションをコピー中</span>}
+    {S.op.active && (() => {   // いまコピーしているファイル・進み具合・残り
+      const a = S.op.active!; const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; const here = L.some((g) => a.rel.startsWith(g.key + "/"));
+      return <span className="gchip act" title={nfc(a.rel)}><Icon n="spin" className="spin" /><span className="fn">{here ? "" : "ほかのセッション · "}{nfc(a.rel.split("/").pop())}</span><b>{pct}%</b>{(S.op.queue || 0) > 1 && <span className="sub2">残り {(S.op.queue || 0) - 1}</span>}</span>;
+    })()}
     <LogButton />
   </div>;
 }
@@ -281,13 +318,25 @@ function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: n
     setInd(el ? { y: el.offsetTop, h: el.offsetHeight } : null);
   }, [curKey, ses.key, ses.list.length]);
   const L = ses.list.filter((g) => !g.mk_drop);
-  const cnt = { r: L.filter((g) => rcOf(g) === "received").length, p: L.filter((g) => rcOf(g) === "pending").length, e: L.filter((g) => rcOf(g) === "error").length };
+  const cnt = { r: L.filter((g) => ["received", "got", "direct"].includes(rcOf(g))).length, p: L.filter((g) => rcOf(g) === "pending").length, e: L.filter((g) => rcOf(g) === "error").length };
   return <div className="glist scroll" id="groups" ref={box}>
     <div className="ghd">発表順 · {L.length}人<span className="legend"><span><RIcon k="received" />受付済 {cnt.r}</span><span><RIcon k="pending" />未受付 {cnt.p}</span>{cnt.e > 0 && <span><RIcon k="error" />要確認 {cnt.e}</span>}</span></div>
     <div className="grows" key={ses.key}>
       {ind && <span className="nowind" style={{ transform: `translateY(${ind.y}px)`, height: ind.h }} aria-hidden="true" />}
       {ses.list.map((g, i) => <Row key={g.key} r={M.r} g={g} ord={g.mk_drop ? 0 : L.indexOf(g) + 1} i={i} sel={!!s.SEL && s.SEL.root === M.r.id && s.SEL.group === g.key} onMenu={onMenu} />)}
     </div>
+  </div>;
+}
+/* 検索：その日の全セッションから（演者名・番号・セッション名） */
+function Found({ M, onMenu }: { M: Model; onMenu: (x: number, y: number, g: string) => void }) {
+  const s = store; const q = nfc(s.q).toLowerCase().trim();
+  const hits = M.sessions.flatMap((x) => x.list.filter((g) => nfc(g.key.split("/").slice(-2).join("/")).toLowerCase().includes(q) || sesLabel(x).toLowerCase().includes(q)).map((g) => ({ x, g })));
+  return <div className="glist scroll" id="groups">
+    <div className="ghd">検索「{s.q.trim()}」 · {hits.length}人<span className="legend"><span>Esc で戻る</span></span></div>
+    {!hits.length ? <div className="gempty sm"><span>見つかりません</span></div>
+      : <div className="grows">{hits.map(({ x, g }, i) => <Fragment key={g.key}>
+        {(i === 0 || hits[i - 1].x !== x) && <div className="gsesh"><button onClick={() => { s.q = ""; pickSes(x.key); }}>{sesLabel(x)}{x.t ? "　" + fmtT(x.t.s) : ""}<Icon n="chev" /></button></div>}
+        <Row r={M.r} g={g} ord={x.list.filter((y) => !y.mk_drop).indexOf(g) + 1} i={i} sel={!!s.SEL && s.SEL.root === M.r.id && s.SEL.group === g.key} onMenu={onMenu} /></Fragment>)}</div>}
   </div>;
 }
 function Row({ r, g, ord, i, sel, onMenu }: { r: Root; g: Group; ord: number; i: number; sel: boolean; onMenu: (x: number, y: number, g: string) => void }) {
@@ -300,12 +349,12 @@ function Row({ r, g, ord, i, sel, onMenu }: { r: Root; g: Group; ord: number; i:
     data-r={r.id} data-g={g.key} style={{ ["--i" as any]: Math.min(i, 12) }}
     onClick={(e) => rowClick(e, r.id, g.key)}
     onContextMenu={(e) => { e.preventDefault(); selectGroup(r.id, g.key); onMenu(e.clientX, e.clientY, g.key); }}>
-    <span className="ord">{ord || ""}</span><RIcon k={rc} /><span className={"rcv " + rc}>{RCL[rc]}</span>
+    <span className="ord">{ord || ""}</span><RIcon k={rc} /><span className={"rcv " + rc} title={RCT[rc]}>{RCL[rc]}</span>
     {nm.no && <span className="no">{nm.no}</span>}<span className="nm">{nm.name}</span>
     <span className="tags"><Tags g={g} /></span><span className="gap" />
     <span className="state">{st === "now" ? <span className="pill now">発表中</span>
       : st === "done" ? <><RIcon k="done" />発表済み</>
-        : <><i className={cx("pc", cp.k, pop && "pop")} />{cp.t}{cp.pct != null && <Bar pct={cp.pct} className="gtrack sm" />}</>}</span>
+        : <><i className={cx("pc", cp.k, pop && "pop")} />{cp.t}{cp.pct != null && <Bar pct={cp.pct} className="gtrack sm" />}<OtherDests g={g} /></>}</span>
   </div>;
 }
 
@@ -351,7 +400,7 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
     <div className="hd">{nameOf(g).no} {nameOf(g).name}</div>
     {st !== "now" && it("発表中にする", () => setStage(M.r.id, g.key, "now"), { k: "Enter", ic: <RIcon k="live" />, id: "mNow" })}
     {st !== "done" && it("発表済みにする", () => setStage(M.r.id, g.key, "done"), { ic: <RIcon k="done" />, id: "mDone" })}
-    {st && it("未発表に戻す", () => setStage(M.r.id, g.key, ""), { ic: <Icon n="chevL" />, id: "mReset" })}
+    {STG.st[M.r.id + "|" + g.key] && it("未発表に戻す", () => setStage(M.r.id, g.key, ""), { ic: <Icon n="chevL" />, id: "mReset" })}
     <div className="sep" />
     {it("スライドショーで開く", () => opOpen(M.r.id, g.key, "", "show"), { dis: !has || !ok, ic: <Icon n="play" />, id: "mShow" })}
     {it("発表ファイルを開く", () => opOpen(M.r.id, g.key, "", "file"), { dis: !has || !ok, ic: <Icon n="file" /> })}
@@ -359,6 +408,22 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
     <div className="sep" />
     {it("NASのパスをコピー", () => copyText(nfc(M.r.path.replace(/[\\/]+$/, "") + (M.r.path.includes("\\") ? "\\" + g.key.split("/").join("\\") : "/" + g.key))).then(() => toast("パスをコピーしました"), () => toast("コピーできませんでした")), { ic: <Icon n="copy" /> })}
   </div>;
+}
+
+/* 準備用：ファイルの一覧（大きさ・更新・NASで追加/更新・コピー先ごとの状態・開く） */
+function FileTable({ F }: { F: Folder }) {
+  const rows = F.items.filter((i) => !i.d).sort((a, b) => cmpPath(a.p, b.p)); const ds = (F.op?.dests || []).filter((d) => d.enabled); const on = OPEN.settings.enabled;
+  if (!rows.length) return <div className="dim" style={{ padding: "4px 0 8px" }}>空のフォルダです</div>;
+  return <table className="gft"><tbody>{rows.map((i) => {
+    const c = i.cp?.[mainDest()]?.[0]; const ok = on && !i.mk && (c === "ok" || c === "edited");
+    return <tr key={i.p} className={cx(i.st === "pending" && "pend")}>
+      <td className="fn" title={nfc(i.p)}>{nfc(i.p)}{i.mk && <span className="gt" data-k="info">目印</span>}{i.st && i.st !== "pending" && <span className="gt" data-k="repl">{i.st === "add" ? "追加" : i.st === "mod" ? "更新" : "名前変更"}</span>}{i.st === "pending" && <span className="gt" data-k="warn">受信中</span>}</td>
+      <td className="num">{i.mk ? "" : fmtSize(i.s)}</td><td className="tm">{i.m ? dtm(i.m) : ""}</td>
+      <td className="cps">{!i.mk && ds.map((d) => { const x = i.cp?.[d.id]; const y = x ? CPL[x[0]] : null; const k = !y ? "wait" : y[1] === "ok" ? "ok" : y[1] === "run" ? "run" : y[1] === "bad" ? "bad" : "wait";
+        return <i key={d.id} className={"pc " + k} title={d.label + "：" + (y ? y[0] : "確認中") + (x && x[1] ? " — " + x[1] : "")} />; })}</td>
+      <td className="op">{!i.mk && <>{SHOWX.test(i.p) && <button className="gb icon sm" disabled={!ok} title="スライドショーで開く" onClick={() => opOpen(F.root, F.group, i.p, "show")}><Icon n="play" /></button>}
+        <button className="gb icon sm" disabled={!ok} title="開く" onClick={() => opOpen(F.root, F.group, i.p, "file")}><Icon n="file" /></button></>}</td></tr>;
+  })}</tbody></table>;
 }
 
 /* ---- 右：選んだ演者（本番で使うものだけ。解析の詳細はたたんでおく） */
@@ -404,6 +469,7 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
         <button className="gb" id="bFold" disabled={!on || !g.files} onClick={() => opOpen(F.root, F.group, "", "folder")} title="この演者のフォルダを開く（このPCのコピー）"><Icon n="folder" /></button>
       </div>
     </div>
+    {!F.exists && <div className="gwarn" role="alert"><RIcon k="error" /><div><div><b>NAS にこのフォルダが見つかりません</b><span>削除・名前変更された可能性があります。このPCにコピーしたファイルは消していません。</span></div></div></div>}
     {ws.length > 0 && <div className="gwarn" role="alert"><RIcon k="error" /><div>{ws.map((w, i) => <div key={i}><b>{w[0]}</b><span>{w[1]}</span></div>)}</div></div>}
     {memo.length > 0 && <><div className="sec">メモ</div>{memo.map((m, i) => <div key={i} className="gmemo"><small>{nfc(m.p)}</small>
       {m.pending ? <span className="dim">受信中</span> : m.error != null ? <span className="dim">読めませんでした</span> : <pre>{m.text || "（空のファイル）"}</pre>}</div>)}</>}
@@ -417,7 +483,12 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
     <div className="sec">このPC</div>
     <dl className="gdl">
       <div className="r"><dt>発表ファイル</dt><dd className="mono" title={presFile}>{presFile ? nfc(presFile.split("/").pop()) : pres && pres.n > 1 ? `${pres.n}個（フォルダから選ぶ）` : g.files ? "—" : "データなし"}</dd></div>
-      <div className="r"><dt>コピー</dt><dd><i className={"pc " + cp.k} />{cp.t}{d ? <span className="dim"> · {d.label}</span> : null}</dd></div>
+      {(F.op?.dests || []).filter((x) => x.enabled).map((x) => {
+        const c = x.id === mainDest() ? cp : (() => { const y = x.state ? CPL[x.state] : null; return { k: !y ? "wait" : y[1] === "ok" ? "ok" : y[1] === "run" ? "run" : y[1] === "bad" ? "bad" : "wait", t: y ? y[0] : g.files ? "確認中" : "ファイルなし" }; })();
+        return <div className="r" key={x.id}><dt>{x.id === mainDest() ? "コピー" : x.label}</dt><dd><i className={"pc " + c.k} />{c.t}{x.id === mainDest() && <span className="dim"> · {x.label}</span>}
+          <button className="gb icon sm cpy" title={"コピー先のパスをコピー\n" + nfc(x.path)} onClick={() => copyText(nfc(x.path)).then(() => toast("コピー先のパスをコピーしました"), () => toast("コピーできませんでした"))}><Icon n="copy" /></button></dd></div>;
+      })}
+      {!(F.op?.dests || []).length && <div className="r"><dt>コピー</dt><dd><i className={"pc " + cp.k} />{cp.t}{d ? <span className="dim"> · {d.label}</span> : null}</dd></div>}
       {shows.length > 1 && <div className="r files"><dt>ファイル</dt><dd><ul className="gfiles">{shows.map((it) => {
         const c = it.cp?.[mainDest()]?.[0]; const ok = on && (c === "ok" || c === "edited");
         return <li key={it.p} data-p={it.p}><span className="fn" title={nfc(it.p)}>{nfc(it.p.split("/").pop())}{pres && pres.newest === it.p && <span className="gt" data-k="info">後から入った</span>}</span>
@@ -427,9 +498,17 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
       {g.repl ? <div className="r"><dt>差し替え</dt><dd>{g.repl}回{g.repl_ts ? `（最終 ${dtm(g.repl_ts)}）` : ""}</dd></div> : null}
       {g.recv_ts ? <div className="r"><dt>受付</dt><dd>{hms(g.recv_ts)}</dd></div> : null}
     </dl>
-    {ana.length > 0 && <>
-      <button className={cx("gmore", more && "open")} aria-expanded={more} onClick={() => setMore(!more)}><span>準備用の詳細（PowerPoint 解析）</span><Icon n="chev" /></button>
-      {more && <div className="ganalysis">{ana.map((it) => <AnaCard key={it.p} it={it} />)}</div>}</>}
+    <button className={cx("gmore", more && "open")} id="bMore" aria-expanded={more} onClick={() => setMore(!more)}><span>準備用の詳細（ファイル{ana.length ? "・PowerPoint 解析" : ""}{F.events.length ? "・変更" : ""}）</span><Icon n="chev" /></button>
+    {more && <div className="ganalysis">
+      {ana.length > 0 && <><div className="sub">PowerPoint 解析</div>{ana.map((it) => <AnaCard key={it.p} it={it} />)}</>}
+      <div className="sub">ファイル（{F.items.filter((i) => !i.d && !i.mk).length}）</div><FileTable F={F} />
+      {F.events.length > 0 && <><div className="sub">最近の変更</div><div className="gev">{F.events.slice(0, 8).map((e) => <div key={e.id} className="e">
+        <div className="t"><span className="mono">{dtm(e.ts)}</span><span className="dim">（{ago(e.ts)}）</span><KindPill k={e.kind} />{e.repl ? <span className="gt" data-k="repl">差替 {e.repl}回目</span> : null}</div>
+        <div className="sm">{e.summary}</div>
+        {(e.items || []).slice(0, 12).map((it, i) => { const o = OPS[it.op] || ["", "", ""]; return <div key={i} className="it"><span className={"o o-" + o[1]} title={o[2]}>{o[0] && <Icon n={o[0]} />}</span><span className="fn">{it.op === "rename" || it.op === "folder_rename" ? nfc(it.path) + " → " + nfc(it.to) : nfc(it.path)}</span></div>; })}
+      </div>)}</div></>}
+      <div className="path"><span className="mono">{nfc(F.path)}</span><button className="gb icon sm" title="NASのパスをコピー" onClick={() => copyText(F.path).then(() => toast("パスをコピーしました"), () => toast("コピーできませんでした"))}><Icon n="copy" /></button></div>
+    </div>}
     <div style={{ height: 24 }} />
   </>;
 }

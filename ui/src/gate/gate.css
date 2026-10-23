@@ -56,6 +56,16 @@
 .gfoot{margin-top:auto;border-top:1px solid var(--g-border);padding:10px 12px;display:flex;gap:6px;flex:none}
 .gfoot .gb:first-child{flex:1}
 
+.gsearch{margin:10px 12px 0;display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;border:1px solid var(--g-border);border-radius:6px;background:var(--g-input);color:var(--g-text-2)}
+.gsearch:focus-within{border-color:var(--g-border-strong)}
+.gate .gsearch input{flex:1;min-width:0;height:28px;border:0;background:transparent;padding:0;color:var(--g-text);font:400 13px var(--sans);outline:0}
+.gate .gsearch input::placeholder{color:var(--g-text-2)}
+.gate .gsearch .x{height:22px;width:22px;padding:0;border:0;background:transparent;justify-content:center;color:var(--g-text-2)}
+.gws .sub{display:flex;align-items:center;gap:6px}
+.gsesh{padding:10px 16px 4px;border-bottom:1px solid var(--g-border);background:var(--g-bg)}
+.gate .gsesh button{height:22px;padding:0;border:0;background:transparent;color:var(--g-text-2);font:500 11px var(--sans);gap:4px}
+.gate .gsesh button:hover{color:var(--g-text)}
+
 /* ---- 上の帯 ---- */
 .gbar{grid-column:2/4;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--g-border);min-width:0}
 .gbar .st-t{font:600 15px var(--sans);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -66,6 +76,12 @@
 .gchip.bad{border-color:var(--g-error-line);color:var(--g-text)}.gchip.bad b{color:var(--g-error)}
 .gchip.dim{color:var(--g-text-2)}
 .gchip.full b{color:var(--g-text)}
+.gchip .sub2{color:var(--g-progress)}.gchip b.e{color:var(--g-error)}
+.gate .gchip.btn{background:transparent;cursor:pointer;font:inherit;font-size:12.5px}
+.gate .gchip.btn:hover{background:var(--g-hover)}
+.gchip .lnk{color:var(--g-text-2);text-decoration:underline;text-underline-offset:3px}
+.gchip.act{min-width:0;flex:0 1 auto}.gchip.act .fn{overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:220px}
+.gbar .gchip{flex-shrink:1}
 .gate .gtrack{display:block;width:84px;height:4px;border-radius:999px;background:var(--g-active);overflow:hidden;position:relative}
 .gate .gtrack.sm{width:44px}
 .gate .gtrack i{display:block;height:100%;border-radius:999px;background:var(--g-done);width:100%;transform:scaleX(var(--p,0));transform-origin:left center;transition:transform var(--dur-3) var(--ease-out)}
@@ -112,6 +128,9 @@
 .pc.pop{animation:pc-pop 700ms var(--ease-spring) both}
 @keyframes pc-pop{0%{transform:scale(1)}35%{transform:scale(2.2)}100%{transform:scale(1)}}
 
+.odots{display:inline-flex;gap:3px;margin-left:4px}
+.grow .rcv.got,.grow .rcv.direct{color:var(--g-received)}
+.gt[data-k=warn]{color:var(--g-progress)}
 /* ラベル */
 .gt{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;background:var(--g-active);color:var(--g-text-2);font:500 11px var(--sans);white-space:nowrap}
 .gt[data-k=bad]{color:var(--g-error)}
@@ -162,6 +181,23 @@
 .gate .gmore.open svg{transform:rotate(90deg)}
 .ganalysis{padding:10px 16px 0;animation:fade-up var(--dur-2) var(--ease-out) both}
 .gate .ana{border-radius:8px}
+.ganalysis .sub{font:500 11px var(--sans);color:var(--g-text-2);padding:10px 0 6px}
+.gdl dd .cpy{margin-left:auto;opacity:.7}.gdl dd .cpy:hover{opacity:1}
+.gft{width:100%;border-collapse:collapse;font-size:12px}
+.gft td{padding:5px 4px;border-bottom:1px solid var(--g-border);vertical-align:middle}
+.gft td.fn{font-family:var(--mono);word-break:break-all}.gft td.fn .gt{margin-left:6px}
+.gft td.num,.gft td.tm{color:var(--g-text-2);white-space:nowrap;text-align:right}
+.gft td.cps{white-space:nowrap}.gft td.cps .pc{margin-right:3px}
+.gft td.op{white-space:nowrap;text-align:right}
+.gft tr.pend td{color:var(--g-progress)}
+.gev{display:flex;flex-direction:column;gap:8px}
+.gev .e{border:1px solid var(--g-border);border-radius:8px;padding:8px 10px}
+.gev .t{display:flex;align-items:center;gap:6px;font-size:12px;flex-wrap:wrap}
+.gev .sm{font-size:12px;margin-top:2px}
+.gev .it{display:flex;gap:6px;align-items:center;font:400 11.5px var(--mono);color:var(--g-text-2)}
+.gev .it .o svg{width:12px;height:12px}
+.gev .o-add{color:var(--g-received)}.gev .o-mod{color:var(--g-progress)}.gev .o-del{color:var(--g-error)}.gev .o-ren{color:var(--g-text)}
+.ganalysis .path{display:flex;align-items:center;gap:6px;margin-top:10px;font-size:11px;color:var(--g-text-2);word-break:break-all}
 
 /* ---- 右クリックのメニュー ---- */
 .gmenu{position:fixed;width:240px;padding:4px;background:var(--g-raise);border:1px solid var(--g-border-strong);border-radius:8px;box-shadow:var(--g-pop);z-index:60;transform-origin:top left;animation:menu-in var(--dur-2) var(--ease-out) both}
