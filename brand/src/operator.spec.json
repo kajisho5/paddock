@@ -12,7 +12,7 @@
     "specular": true,
     "shadow": {
      "kind": "neutral",
-     "opacity": 0.3
+     "opacity": 0.35
     }
    },
    "layers": [
@@ -23,8 +23,8 @@
       "glass": true,
       "fill": {
        "linear-gradient": [
-        "#2EDB74",
-        "#0FA24C"
+        "#5CF09A",
+        "#22C463"
        ]
       }
      }
@@ -32,31 +32,32 @@
    ]
   },
   {
-   "name": "Folder",
+   "name": "Shoe",
    "props": {
     "translucency": {
      "enabled": true,
-     "value": 0.1
+     "value": 0.25
     },
-    "blur-material": 0.2,
+    "blur-material": 0.3,
     "specular": true,
     "shadow": {
      "kind": "neutral",
-     "opacity": 0.45
+     "opacity": 0.4
     }
    },
    "layers": [
     {
-     "file": "folder.svg",
-     "name": "1 Folder",
+     "file": "shoe.svg",
+     "name": "1 Horseshoe",
      "props": {
       "glass": true,
       "fill": {
        "linear-gradient": [
         "#FFFFFF",
-        "#E6ECF5"
+        "#D9E2EE"
        ]
-      }
+      },
+      "opacity": 0.85
      }
     }
    ]

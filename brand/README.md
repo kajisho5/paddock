@@ -2,9 +2,9 @@
 
 fresnel（kajisho5/fresnel, fresnel-icon 0.2.2）で作成。Apple HIG の App icons に沿った作り。
 
-- 1024×1024 の正方形、角丸なし（角丸はOS・書き出し時に付く）。背景グラデーション＋前景2グループ（フォルダ／アプリごとの記号）
+- 1024×1024 の正方形、角丸なし（角丸はOS・書き出し時に付く）。背景グラデーション＋前景2グループ（蹄鉄／アプリごとの記号）
 - 影・ハイライト・ぼかしは描かない（Liquid Glass がシステム側で付ける）。文字なし
-- 3アプリ共通の「フォルダ」に、役割の記号を重ねる：SCOUT（監視）＝目（見るだけ）、SADDLE（受付）＝受け取り（矢印とトレイ）、GATE（会場）＝再生（スライドショー）。ファイル名の watch / reception / operator はそれぞれ SCOUT / SADDLE / GATE
+- 3アプリ共通の「蹄鉄（PADDOCK＝馬）」の中に、役割の記号を置く：SCOUT（監視）＝目（見るだけ）、SADDLE（受付）＝受け取り（矢印とトレイ）、GATE（会場）＝再生（スライドショー）。ファイル名の watch / reception / operator はそれぞれ SCOUT / SADDLE / GATE
 - Default / Dark / Mono（Tinted）を設定済み。`fresnel validate --strict` で問題なし
 
 | フォルダ | 中身 |
