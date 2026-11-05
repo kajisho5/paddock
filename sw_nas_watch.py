@@ -52,7 +52,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 APP_NAME = "PADDOCK SCOUT"
-VERSION = "1.17.5"
+VERSION = "1.17.6"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -3763,7 +3763,9 @@ class Manager:
         """演者フォルダの中の .txt（演者・受付からのメモ）。受信中のものは読まない。内容は大きさ・更新日時が変わるまで覚えておく"""
         cache = self.__dict__.setdefault("_memo_cache", {})
         out = []
-        txt = [it for it in items if not it["d"] and not it.get("mk") and it["p"].lower().endswith(".txt")]
+        # 目印の名前の .txt（読んでください.txt・連絡.txt など）も、中身があればメモとして出す
+        txt = [it for it in items if not it["d"] and it["p"].lower().endswith(".txt") and (not it.get("mk") or (it.get("s") or 0) > 0)
+               and it.get("mk") != "meta"]
         txt.sort(key=lambda it: (it["p"].count("/"), nat_key(it["p"])))
         for it in txt[:MEMO_FILES]:
             m = {"p": it["p"], "s": it.get("s", 0), "m": it.get("m", 0)}
