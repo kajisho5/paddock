@@ -496,8 +496,8 @@ function Swap({ k, children }: { k: string; children: React.ReactNode }) {
   } else last.current.n = children;
   useEffect(() => { if (!gone.length) return; const t = setTimeout(() => setGone([]), 260); return () => clearTimeout(t); }, [gone]);
   return <div className="swap">
-    {gone.filter((x) => x.k !== k).map((x) => <div key={"o" + x.k} className="sw out" aria-hidden="true">{x.n}</div>)}
-    <div key={k} className={cx("sw", last.current.moved && "in")}>{children}</div>
+    {gone.filter((x) => x.k !== k).map((x) => <div key={"o" + x.k} className="swp out" aria-hidden="true">{x.n}</div>)}
+    <div key={k} className={cx("swp", last.current.moved && "in")}>{children}</div>
   </div>;
 }
 
@@ -780,7 +780,8 @@ function warnsOf(F: Folder) {
   return out.slice(0, 6);
 }
 function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
-  const [more, setMore] = useState(false);
+  const [more, setMoreS] = useState(() => { try { return localStorage.getItem("gate.more") !== "0"; } catch { return true; } });   // 準備用の詳細：最初から開いておく（閉じたらこのPCで覚える）
+  const setMore = (v: boolean) => { setMoreS(v); try { localStorage.setItem("gate.more", v ? "1" : "0"); } catch { /* */ } };
   const nm = nameOf(g); const ses = parts(r, g.key).ses; const st = stageOf(r.id, g.key, g);
   const ws = warnsOf(F); const memo = (F.memo || []).filter((m) => !m.more);
   const fl = g.fl || []; const ops = fl.filter((f) => f[1] === "op"); const oth = fl.filter((f) => f[1] !== "op");

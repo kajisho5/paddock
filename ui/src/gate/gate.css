@@ -96,9 +96,9 @@
 .gnow .lb{font:500 11px var(--sans);color:var(--g-text-2);margin-bottom:4px;display:flex;align-items:center;gap:6px}
 .gnow .cur{min-width:0}
 .swap{display:grid;grid-template-columns:minmax(0,1fr);overflow:hidden}
-.swap .sw{grid-area:1/1;min-width:0}
-.swap .sw.in{animation:sw-in var(--dur-3) var(--ease-out) both}
-.swap .sw.out{animation:sw-out 240ms var(--ease-out) both}
+.swap .swp{grid-area:1/1;min-width:0}
+.swap .swp.in{animation:sw-in var(--dur-3) var(--ease-out) both}
+.swap .swp.out{animation:sw-out 240ms var(--ease-out) both}
 @keyframes sw-in{from{opacity:0;transform:translateY(60%)}}
 @keyframes sw-out{to{opacity:0;transform:translateY(-60%)}}
 .gnow .who .o{font:500 13px var(--mono);color:var(--g-text-2);margin-right:8px}.gnow .who .no{font:400 12px var(--mono);color:var(--g-text-2);margin-left:10px}.gnow .who.dim2{color:var(--g-text-2)}
@@ -244,9 +244,9 @@
 @media (max-width:1360px){.gate{grid-template-columns:232px minmax(0,1fr) 320px}.gchip .gtrack{display:none}.gnow{gap:16px}}
 
 @media (prefers-reduced-motion: reduce){
-  .swap .sw.in,.grows,.grows.from-r,.grows.from-l,.gate .grow.a-new,.roll,.gt.a-new,.gchip.pop,.gate #bLog .badge,.gdet,.gwarn,.ganalysis,.gmenu,.gate .glog .log{animation:fade-in 140ms linear both!important}
+  .swap .swp.in,.grows,.grows.from-r,.grows.from-l,.gate .grow.a-new,.roll,.gt.a-new,.gchip.pop,.gate #bLog .badge,.gdet,.gwarn,.ganalysis,.gmenu,.gate .glog .log{animation:fade-in 140ms linear both!important}
   .nowind,.gate .gtrack i,.gate .gmore svg,.gate .grow.flip{transition-duration:1ms}
-  .swap .sw.out{animation:fadeout-q 100ms linear both!important}.gt.a-new::after{animation:none}
+  .swap .swp.out{animation:fadeout-q 100ms linear both!important}.gt.a-new::after{animation:none}
   .pc.pop{animation:none}
 }
 
