@@ -41,10 +41,15 @@ export function setStage(root: string, group: string, st: Stage | "") {
     finally { stPending--; }
   });
 }
-const stageOf = (root: string, g: string, gr?: Group): Stage | "" => STG.st[root + "|" + g]?.st || ((gr ?? (rootById(root)?.groups || []).find((x) => x.key === g))?.mk_done ? "done" : "");
+const stageOf = (root: string, g: string, gr?: Group): Stage | "" => STG.st[root + "|" + g]?.st || ((gr ?? gfind(rootById(root), g))?.mk_done ? "done" : "");
+/* 演者フォルダの無いセッション：直接置かれた発表ファイル1つを演者1人として並べる（key はファイルのパス） */
+const SYN = new Map<string, Group & { syn?: boolean }>();
+const gfind = (r: Root | null | undefined, key: string): (Group & { syn?: boolean }) | undefined =>
+  r ? (r.groups || []).find((x) => x.key === key) || SYN.get(r.id + "|" + key) : undefined;
+const PRES_RE = /\.(pptx?|pptm|ppsx?|ppsm|potx?|potm|key|pdf)$/i;
 
 /* ---------------------------------------------------------------- データの組み立て */
-interface Ses { key: string; name: string; day: string; t: STime | null; list: Group[]; custom?: boolean; loose?: [string, number, number, Record<string, CpState>?][] }
+interface Ses { key: string; name: string; day: string; t: STime | null; list: Group[]; custom?: boolean; loose?: [string, number, number, Record<string, CpState>?][]; flat?: boolean }
 /* 当日の発表順の変更（このPCに保存。NAS のフォルダ名は変えない） */
 let ORDER: Record<string, string[]> = {};
 try { ORDER = JSON.parse(localStorage.getItem("gate.order") || "{}") || {}; } catch { ORDER = {}; }
@@ -82,6 +87,21 @@ function build(): Model | null {
     if (!m.has(k)) { if (!p.ses) continue; m.set(k, { key: k, name: p.ses, day: p.day, t: sesTime(p.ses), list: [] }); }
     if (sd.loose.length) m.get(k)!.loose = sd.loose;
   }
+  // 演者フォルダが1つも無く、発表ファイルが直接置かれているセッション：ファイル1つ＝演者1人として並べる（名前順）
+  for (const x of m.values()) {
+    if (x.list.length || !x.loose?.length) continue;
+    const pres = x.loose.filter((f) => PRES_RE.test(f[0]));
+    if (!pres.length) continue;
+    x.list = pres.map(([name, size, mt, cp]) => {
+      const key = x.key + "/" + name; const sk = r.id + "|" + key;
+      const ext = (name.match(/\.([^.]+)$/) || ["", ""])[1].toLowerCase();
+      const cat = ext === "key" ? "KEY" : ext === "pdf" ? "PDF" : "PPT";
+      const g: Group & { syn?: boolean } = { key, files: 1, size, mtime: mt, unread: 0, cats: { [cat]: 1 }, cp: cp || undefined, cpp: cp || undefined, syn: true } as Group & { syn?: boolean };
+      SYN.set(sk, g); return g;
+    });
+    x.loose = x.loose.filter((f) => !PRES_RE.test(f[0]));   // 残り（動画・資料など）は、これまでどおり上の枠に
+    x.flat = true;
+  }
   // 並び：全部に時刻があれば時刻順、時刻のないセッションが混じるときは名前順（S01・S02… の番号順）
   const all = [...m.values()]; const timed = all.filter((x) => !sesEmpty(x)).every((x) => x.t);   // 時刻の無い空のフォルダ（「資料」など）は並びの決め方に入れない
   const sessions = all.sort((a, b) => cmpDay(a.day, b.day) || (timed ? (a.t ? 0 : 1) - (b.t ? 0 : 1) || (a.t && b.t ? a.t.s - b.t.s : 0) : 0) || cmpPath(a.name, b.name));
@@ -107,7 +127,7 @@ function splitName(seg: string) {
   const n = nfc(seg); const m = /^([A-Za-z]*\d[\w-]*)[\s_.、]+(.+)$/.exec(n);
   return m ? { no: m[1], name: m[2] } : { no: "", name: n };
 }
-const nameOf = (g: Group) => splitName(g.key.split("/").pop() || "");
+const nameOf = (g: Group) => { const b = g.key.split("/").pop() || ""; return splitName((g as { syn?: boolean }).syn ? b.replace(/\.[^.]+$/, "") : b); };
 
 /* 受付の状態（行の左） */
 type RC = "received" | "got" | "direct" | "byo" | "pending" | "error" | "drop";
@@ -197,6 +217,7 @@ function tagsOf(g: Group): TagX[] {
   }
   if (Object.values(g.cp || {}).includes("err")) out.push({ t: "コピーエラー", k: "bad", p: 0 });
   if (g.repl) out.push({ t: "差替 " + g.repl, k: "repl", p: 2 });
+  if ((g as { syn?: boolean }).syn) out.push({ t: "フォルダなし", k: "info", p: 4 });
   return out.map((x, i) => ({ ...x, i })).sort((x, y) => x.p - y.p || x.i - y.i);
 }
 function Tags({ g, max = 2, fresh }: { g: Group; max?: number; fresh?: Set<string> }) {
@@ -556,7 +577,7 @@ function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: n
   const L = ses.list.filter((g) => !g.mk_drop);
   const r = recvCount(L); const cnt = { r, p: L.length - r, e: L.filter((g) => rcOf(g) === "error").length };
   return <div className="glist scroll" id="groups" ref={box}>
-    <div className="ghd">発表順 · {L.length}人{ses.custom && <button className="reorder" onClick={() => { saveOrder(M.r.id, ses, null); toast("発表順を元に戻しました（フォルダ名の順）"); }} title="ドラッグで変えた発表順をやめて、フォルダ名の順に戻します">順番を変更中 · 元に戻す</button>}<span className="legend"><span><RIcon k="received" />受付済 {cnt.r}</span><span><RIcon k="pending" />未受付 {cnt.p}</span>{cnt.e > 0 && <span><RIcon k="error" />要確認 {cnt.e}</span>}</span></div>
+    <div className="ghd">発表順 · {L.length}人{ses.flat && <span className="dim" title="このセッションには演者フォルダが無いため、セッションのフォルダに直接入っている発表ファイルを、名前の順に1人ずつ並べています">（演者フォルダが無いため、ファイルごとに並べています）</span>}{ses.custom && <button className="reorder" onClick={() => { saveOrder(M.r.id, ses, null); toast("発表順を元に戻しました（フォルダ名の順）"); }} title="ドラッグで変えた発表順をやめて、フォルダ名の順に戻します">順番を変更中 · 元に戻す</button>}<span className="legend"><span><RIcon k="received" />受付済 {cnt.r}</span><span><RIcon k="pending" />未受付 {cnt.p}</span>{cnt.e > 0 && <span><RIcon k="error" />要確認 {cnt.e}</span>}</span></div>
     {ses.loose && ses.loose.length > 0 && <Loose r={M.r} ses={ses} />}
     {!ses.list.length && <div className="gempty sm" id="sesEmpty"><Icon n="shoe" /><b>このセッションには、まだ演者フォルダがありません</b>
       <span>{ses.loose && ses.loose.length ? "セッションのフォルダに直接入っているファイルは、上から開けます。" : "NASのセッションのフォルダに演者フォルダができると、ここに発表順で並びます。"}</span></div>}
@@ -637,7 +658,7 @@ const SHOWX = /\.(pptx?|ppsx?|pptm|ppsm)$/i, PRESX = /\.(pptx?|ppsx?|pptm|ppsm|k
 /* ---- 右クリックのメニュー */
 function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: string; s?: string }; close: () => void }) {
   const ref = useRef<HTMLDivElement>(null); const [pos, setPos] = useState({ x: at.x, y: at.y });
-  const g = (M.r.groups || []).find((x) => x.key === at.g); const st = stageOf(M.r.id, at.g);
+  const g = gfind(M.r, at.g); const st = stageOf(M.r.id, at.g);
   useLayoutEffect(() => {   // 画面からはみ出さないように
     const el = ref.current; if (!el) return; const w = el.offsetWidth, h = el.offsetHeight;
     // 画面が広いと .gate を 1.08 倍にしているので、座標を倍率で割って合わせる
@@ -709,7 +730,7 @@ function FileTable({ F }: { F: Folder }) {
 
 /* 差し替えが届いた（発表中・次の人）：上に大きく。開いている前の版を閉じると新しい版に入れ替わる */
 function ReplAlert({ M, a, close }: { M: Model; a: { key: string; who: string; role: string; n: number }; close: () => void }) {
-  const g = (M.r.groups || []).find((x) => x.key === a.key); if (!g) return null;
+  const g = gfind(M.r, a.key); if (!g) return null;
   const st = g.cp?.[mainDest()]; const ps = (g.cpp || g.cp)?.[mainDest()];
   const msg = st === "busy" ? "PowerPoint などで開いている前の版を閉じると、新しい版に入れ替わります"
     : ps === "ok" || ps === "edited" ? "新しい版はこのPCにコピー済みです。開いているなら開き直してください"
@@ -741,7 +762,7 @@ function Loose({ r, ses }: { r: Root; ses: Ses }) {
   const F = { root: r.id, group: ses.key } as unknown as Folder;
   const md = mainDest();
   return <div className="gloose" id="gloose">
-    <div className="lh"><Icon n="folder" />セッションのフォルダに直接入っているファイル<span className="dim">（演者フォルダの外）</span></div>
+    <div className="lh"><Icon n="folder" />{ses.flat ? "そのほかのファイル（セッションのフォルダに直接）" : "セッションのフォルダに直接入っているファイル"}<span className="dim">（演者フォルダの外）</span></div>
     {ses.loose!.map(([name, size, , cp]) => {
       const st = cp?.[md]; const ok = OPEN.settings.enabled && !!st && st !== "off";   // 開けるかはアプリが確かめる（差し替え中でも前の版があれば開く）
       const done = !!st && OPENABLE.includes(st);
@@ -759,7 +780,7 @@ function Loose({ r, ses }: { r: Root; ses: Ses }) {
 /* ---- 右：選んだ演者（本番で使うものだけ。解析の詳細はたたんでおく） */
 function Detail() {
   const s = store; const F = s.F; const r = F ? rootById(F.root) : null;
-  const g = F && r ? (r.groups || []).find((x) => x.key === F.group) : null;
+  const g = F && r ? gfind(r, F.group) || null : null;
   if (!F || !g || !s.SEL || F.group === "" || !inVenue(F.root, F.group)) return <aside className="gdet"><div className="gempty sm"><Icon n="shoe" /><span>演者を選ぶと、ここにスライドショーのボタンと注意点が出ます。</span></div></aside>;
   return <aside className="gdet" key={F.root + "|" + F.group}><DetailBody F={F} r={r!} g={g} /></aside>;
 }

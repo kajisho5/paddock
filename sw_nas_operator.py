@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.12.1"
+VERSION = "1.12.2"
 DEFAULT_PORT = 8797
 
 
@@ -1969,6 +1969,16 @@ class Opener:
         if any(x in ("", ".", "..") or any(c in x for c in '\\:*?"<>|') for x in group.split("/")) or \
                 any(x in (".", "..") or any(c in x for c in '\\:*?"<>|') for x in str(rel or "").split("/") if rel):
             raise ValueError("演者フォルダの指定が正しくありません")
+        w0 = self.mgr.watchers.get(root)
+        if w0 and "/" in group:   # 演者1人＝セッションのフォルダに直接置かれたファイル1つ（演者フォルダの無いセッション）
+            with w0.lock:
+                gsig = (w0.current or {}).get(group)
+            if gsig is not None and gsig != W.DIR:
+                group, name = group.rsplit("/", 1)
+                if how == "folder" or not rel or rel == name:
+                    rel = "" if how == "folder" else name
+                else:
+                    raise ValueError("ファイルの指定が正しくありません")
         sub = W.op_sub(op, group)
         base = os.path.join(d["path"], *sub.split("/"))
         msg = ""
