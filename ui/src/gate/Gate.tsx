@@ -233,15 +233,16 @@ function curSes(M: Model): Ses | null {
   const hit = !GS.auto && ss.find((x) => x.key === GS.ses); if (hit) return hit;
   const now = ss.find((x) => x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now"));   // 発表中の人がいるセッション（時間が延びていても）
   if (now) return now;
-  const live = ss.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x));
+  const live = ss.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x) && !sesEmpty(x)) || ss.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x));
   if (live) return live;
   let ld = -1; ss.forEach((x, i) => { if (sesDone(M, x)) ld = i; });   // 終了にしたセッションの次（時刻より早く終わったとき・時刻がないとき）
   const aft = ld >= 0 ? ss.slice(ld + 1).find((x) => !sesDone(M, x) && !sesEmpty(x)) : undefined;
   if (aft) return aft;
   const nxt = ss.find((x) => M.tl.get(x.key)?.st === "next" && !sesDone(M, x));
   if (nxt) return nxt;
-  if (ld >= 0 && ss.every((x) => sesDone(M, x))) return ss[ss.length - 1];
-  return M.tl.size && [...M.tl.values()].every((x) => x.st === "done") ? ss[ss.length - 1] : ss[0];
+  const real = ss.filter((x) => !sesEmpty(x)); const rs = real.length ? real : ss;   // 空のフォルダ（「資料」など）は数えない
+  if (ld >= 0 && rs.every((x) => sesDone(M, x))) return rs[rs.length - 1];
+  return M.tl.size && rs.every((x) => !M.tl.has(x.key) || M.tl.get(x.key)!.st === "done") && [...M.tl.values()].some((x) => x.st === "done") ? rs[rs.length - 1] : rs[0];
 }
 
 /* ---------------------------------------------------------------- 画面 */

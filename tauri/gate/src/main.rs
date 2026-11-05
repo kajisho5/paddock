@@ -125,6 +125,46 @@ fn ping_version(port: u16) -> Option<String> {
     }
 }
 
+/// 版の比べ方（1.12.0 → [1, 12, 0]）
+fn vt(v: &str) -> Vec<u32> {
+    v.split('.').map(|x| x.parse().unwrap_or(0)).collect()
+}
+
+/// 応えたエンジンを起動したプロセス（前の版の窓・ランチャー）
+fn ping_ppid(port: u16) -> u32 {
+    match http(port, "GET", "/api/ping", &[], Duration::from_millis(1500)) {
+        Some((200, body)) => serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("ppid").and_then(|x| x.as_u64()))
+            .unwrap_or(0) as u32,
+        _ => 0,
+    }
+}
+
+/// プロセスが終わるのを待つ（最大 limit）。自分自身・分からないときは待たない
+fn wait_exit(pid: u32, limit: Duration) {
+    if pid == 0 || pid == std::process::id() {
+        return;
+    }
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+        let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if !h.is_null() {
+            WaitForSingleObject(h, limit.as_millis() as u32);
+            CloseHandle(h);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let t0 = Instant::now();
+        while Path::new(&format!("/proc/{}", pid)).exists() && t0.elapsed() < limit {
+            thread::sleep(Duration::from_millis(300));
+        }
+    }
+}
+
 /// ポートが使われているか（応えないが動いている＝重い処理の最中、を見分ける）
 fn port_busy(port: u16) -> bool {
     TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(800)).is_ok()
@@ -170,6 +210,9 @@ fn spawn_engine(st: &Shared, fallback: bool) -> Result<(Child, PathBuf), String>
         ));
     }
     let _ = fs::create_dir_all(&rt);
+    if !fallback {
+        let _ = fs::remove_file(st.key_file()); // 前に止まったときの鍵は使わない
+    }
     // 記録：ほかで書いている最中のもの（起動中のもう1つ）は消さない
     let mut logp = rt.join("last_run.log");
     let mut out = None;
@@ -243,11 +286,29 @@ fn hwnd_of(w: &tauri::Window) -> isize {
     }
 }
 
+/// いま実際に最前面か（Windows では窓の状態をじかに読む。ずれても次の見直しで直る）
+fn is_top(st: &Shared, w: &tauri::Window) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = st;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TOPMOST};
+        let h = hwnd_of(w);
+        h != 0 && unsafe { (GetWindowLongPtrW(h as _, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST) != 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = w;
+        st.applied.load(Ordering::SeqCst)
+    }
+}
+
+/// 最前面を、あるべき状態にそろえる（メインのスレッドで呼ぶ）
 fn refresh_top(st: &Shared, w: &tauri::Window) {
     let on = want_top(st, hwnd_of(w));
-    if st.applied.swap(on, Ordering::SeqCst) != on || on {
+    if is_top(st, w) != on {
         let _ = w.set_always_on_top(on);
     }
+    st.applied.store(on, Ordering::SeqCst);
 }
 
 /// GATE と同じ画面に、全画面の窓（PowerPoint のスライドショー・動画の全画面など）があるか。
@@ -263,7 +324,7 @@ fn fullscreen_beside(gate: isize) -> bool {
     }
     struct Ctx {
         gate: isize,
-        mon: RECT,
+        grect: RECT,
         found: bool,
     }
     unsafe extern "system" fn cb(h: HWND, l: LPARAM) -> BOOL {
@@ -285,25 +346,38 @@ fn fullscreen_beside(gate: isize) -> bool {
         if matches!(name.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
             return 1; // デスクトップ・タスクバー
         }
+        let style = GetWindowLongPtrW(h, GWL_STYLE) as u32;
+        if IsZoomed(h) != 0 && style & WS_CAPTION == WS_CAPTION {
+            return 1; // 最大化しただけの普通の窓（編集中の PowerPoint・Explorer など）
+        }
         let mut r: RECT = std::mem::zeroed();
         if GetWindowRect(h, &mut r) == 0 {
             return 1;
         }
-        let m = &c.mon;
-        if r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom {
+        // その窓のある画面を、まるごと覆っているか
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mut mi) == 0 {
+            return 1;
+        }
+        let m = mi.rcMonitor;
+        if !(r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom) {
+            return 1;
+        }
+        // その画面と GATE の窓が重なっているか（GATE が2つの画面にまたがっていても見つける）
+        let g = &c.grect;
+        if g.left < m.right && g.right > m.left && g.top < m.bottom && g.bottom > m.top {
             c.found = true;
             return 0;
         }
         1
     }
     unsafe {
-        let mon = MonitorFromWindow(gate as HWND, MONITOR_DEFAULTTONEAREST);
-        let mut mi: MONITORINFO = std::mem::zeroed();
-        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if GetMonitorInfoW(mon, &mut mi) == 0 {
+        let mut grect: RECT = std::mem::zeroed();
+        if GetWindowRect(gate as HWND, &mut grect) == 0 {
             return false;
         }
-        let mut c = Ctx { gate, mon: mi.rcMonitor, found: false };
+        let mut c = Ctx { gate, grect, found: false };
         EnumWindows(Some(cb), &mut c as *mut Ctx as LPARAM);
         c.found
     }
@@ -314,18 +388,17 @@ fn fullscreen_beside(_gate: isize) -> bool {
     false
 }
 
-/// 最前面の状態を 1 秒ごとに見直す（全画面の窓が出た・消えた）
+/// 最前面の状態を 1 秒ごとに見直す（全画面の窓が出た・消えた）。そろえるのはメインのスレッドで
+/// （開く前の「外す」・設定の切り替え・フォーカスの処理と順番がずれないように）
 fn top_loop(app: AppHandle, st: Arc<Shared>) {
     loop {
         thread::sleep(Duration::from_secs(1));
-        if let Some(w) = main_window(&app) {
-            let ww = w.as_ref().window();
-            let on = want_top(&st, hwnd_of(&ww));
-            if st.applied.load(Ordering::SeqCst) != on {
-                st.applied.store(on, Ordering::SeqCst);
-                let _ = w.set_always_on_top(on);
+        let (a, s2) = (app.clone(), Arc::clone(&st));
+        let _ = app.run_on_main_thread(move || {
+            if let Some(w) = main_window(&a) {
+                refresh_top(&s2, &w.as_ref().window());
             }
-        }
+        });
     }
 }
 
@@ -334,7 +407,6 @@ fn drop_for_open(st: &Shared, w: &WebviewWindow) {
     if st.pinned.load(Ordering::SeqCst) {
         st.dropped.store(true, Ordering::SeqCst);
         st.blurred.store(false, Ordering::SeqCst);
-        st.applied.store(false, Ordering::SeqCst);
         let _ = w.set_always_on_top(false);
     }
     #[cfg(windows)]
@@ -378,12 +450,16 @@ fn get_pinned(app: AppHandle, st: State<'_, Arc<Shared>>) -> bool {
 
 #[tauri::command]
 fn set_pinned(on: bool, app: AppHandle, st: State<'_, Arc<Shared>>) -> bool {
+    let st: Arc<Shared> = Arc::clone(&st);
     st.pinned.store(on, Ordering::SeqCst);
     st.dropped.store(false, Ordering::SeqCst);
     st.save_settings();
-    if let Some(w) = main_window(&app) {
-        refresh_top(&st, &w.as_ref().window());
-    }
+    let (a, s2) = (app.clone(), Arc::clone(&st));
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = main_window(&a) {
+            refresh_top(&s2, &w.as_ref().window());
+        }
+    });
     if let Some(item) = app.try_state::<PinItem>() {
         let _ = item.0.set_checked(on);
     }
@@ -506,10 +582,15 @@ fn start_and_watch(app: AppHandle, st: Arc<Shared>) {
     //   鍵が残ったまま止まった（異常終了）なら起動し直す。応えないがポートは使っている（重い処理の最中）なら待つ
     let mut misses = 0u32;
     let mut up_since = Instant::now();
+    let mut need_nav = false; // 起動し直したが、まだ画面を開き直せていない
     loop {
         thread::sleep(Duration::from_secs(2));
         if ping(st.port) {
             misses = 0;
+            if need_nav {
+                need_nav = false;
+                navigate(&app, &st);
+            }
             if up_since.elapsed() > Duration::from_secs(600) {
                 st.restarts.store(0, Ordering::SeqCst); // 10 分動き続けたら数え直す
             }
@@ -564,7 +645,11 @@ fn start_and_watch(app: AppHandle, st: Arc<Shared>) {
         }
         misses = 0;
         up_since = Instant::now();
-        navigate(&app, &st);
+        if ping(st.port) {
+            navigate(&app, &st);
+        } else {
+            need_nav = true; // 応えたら開き直す
+        }
     }
 }
 
@@ -671,17 +756,22 @@ fn main() {
         return;
     }
 
-    // 別の版（前の版など）が動いていたら、先に終わってもらう（前の版の窓もいっしょに閉じる）
+    // 別の版が動いているとき：前の版なら先に終わってもらう（前の版の窓もいっしょに閉じる）。新しい版なら、この古い版は起動しない
     if let Some(v) = ping_version(port) {
+        if !v.is_empty() && vt(&v) > vt(VERSION) {
+            plain_message(APP, &format!("新しい版（v{}）が動いています。この古い版（v{}）は起動しません。\n新しい版の PADDOCK_GATE.exe を使ってください。", v, VERSION));
+            return;
+        }
         if v != VERSION {
+            let ppid = ping_ppid(port); // 前の版の窓（エンジンを起動したもの）
             st.note(&format!("別の版（v{}）が動いているため入れ替えます", v));
             match http(port, "POST", "/api/handover", &[("X-SW-Handover", VERSION)], Duration::from_secs(5)) {
                 Some((200, _)) => {
                     let t0 = Instant::now();
-                    while ping(port) && t0.elapsed() < Duration::from_secs(20) {
+                    while (ping(port) || port_busy(port)) && t0.elapsed() < Duration::from_secs(40) {
                         thread::sleep(Duration::from_millis(300));
                     }
-                    thread::sleep(Duration::from_secs(8)); // 前の版の窓が閉じるのを待つ
+                    wait_exit(ppid, Duration::from_secs(30)); // 前の版の窓が閉じるのを待つ（同じ窓が2つにならないように）
                 }
                 Some((409, body)) => {
                     let msg = serde_json::from_str::<serde_json::Value>(&body)
@@ -717,6 +807,15 @@ fn main() {
                 .always_on_top(st.pinned.load(Ordering::SeqCst))
                 .build()?;
             st.applied.store(st.pinned.load(Ordering::SeqCst), Ordering::SeqCst);
+            // 画面が小さい PC（1366×768 など）では、はみ出さない大きさにして真ん中へ（隣の画面＝プロジェクターにかからないように）
+            if let Ok(Some(m)) = w.current_monitor() {
+                let sf = m.scale_factor();
+                let (mw, mh) = (m.size().width as f64 / sf, m.size().height as f64 / sf);
+                if mw < 1460.0 || mh < 960.0 {
+                    let _ = w.set_size(tauri::LogicalSize::new((mw * 0.92).max(800.0), (mh * 0.88).max(560.0)));
+                    let _ = w.center();
+                }
+            }
             let _ = w.set_focus();
 
             // タスクバー右下のアイコン

@@ -1220,7 +1220,7 @@ class RxHandler(W.Handler):
             if u.path in ("/", "/index.html"):
                 return self.send_page()
             if u.path == "/api/ping":
-                return self.send_json({"app": APP_NAME, "version": VERSION})
+                return self.send_json({"app": APP_NAME, "version": VERSION, "ppid": os.getppid()})
             if not u.path.startswith("/api/rx/"):
                 return super().do_GET()
             RX = self.RX
@@ -1422,7 +1422,6 @@ def main():
         mgr.stop()
         srv.server_close()
         srv.closed = True
-        W.remove_shell_key()
 
 
 # ---------------------------------------------------------------- UI（PADDOCK SCOUT の画面に足す部分）

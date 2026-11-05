@@ -2044,7 +2044,7 @@ class OpHandler(W.Handler):
         if u.path in ("/", "/index.html"):
             return self.send_page()
         if u.path == "/api/ping":
-            return self.send_json({"app": APP_NAME, "version": VERSION})
+            return self.send_json({"app": APP_NAME, "version": VERSION, "ppid": os.getppid()})
         if u.path == "/api/op/open/settings":
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
@@ -2253,7 +2253,6 @@ def main():
         mgr.stop()
         srv.server_close()
         srv.closed = True
-        W.remove_shell_key()
 
 
 # ---------------------------------------------------------------- 共有のワンボタン設定（管理者として実行する PowerShell）
