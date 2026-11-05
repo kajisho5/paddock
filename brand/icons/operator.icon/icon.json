@@ -4,8 +4,8 @@
       "layers" : [
         {
           "glass" : true,
-          "image-name" : "play.svg",
-          "name" : "2 Glyph",
+          "image-name" : "dot.svg",
+          "name" : "2 Horse",
           "fill-specializations" : [
             {
               "value" : {
@@ -27,7 +27,7 @@
           ]
         }
       ],
-      "name" : "Glyph",
+      "name" : "Horse",
       "shadow" : {
         "kind" : "neutral",
         "opacity" : 0.35
@@ -42,9 +42,9 @@
       "layers" : [
         {
           "glass" : true,
-          "image-name" : "shoe.svg",
-          "name" : "1 Horseshoe",
-          "opacity" : 0.85,
+          "image-name" : "ring.svg",
+          "name" : "1 Parade ring",
+          "opacity" : 0.9,
           "fill-specializations" : [
             {
               "value" : {
@@ -66,7 +66,7 @@
           ]
         }
       ],
-      "name" : "Shoe",
+      "name" : "Ring",
       "shadow" : {
         "kind" : "neutral",
         "opacity" : 0.4

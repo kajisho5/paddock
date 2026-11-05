@@ -3,7 +3,7 @@
  "darkBackground": "gradient:#164A33,#061A12",
  "groups": [
   {
-   "name": "Glyph",
+   "name": "Horse",
    "props": {
     "translucency": {
      "enabled": false,
@@ -17,8 +17,8 @@
    },
    "layers": [
     {
-     "file": "tray.svg",
-     "name": "2 Glyph",
+     "file": "dot.svg",
+     "name": "2 Horse",
      "props": {
       "glass": true,
       "fill": {
@@ -32,7 +32,7 @@
    ]
   },
   {
-   "name": "Shoe",
+   "name": "Ring",
    "props": {
     "translucency": {
      "enabled": true,
@@ -47,8 +47,8 @@
    },
    "layers": [
     {
-     "file": "shoe.svg",
-     "name": "1 Horseshoe",
+     "file": "ring.svg",
+     "name": "1 Parade ring",
      "props": {
       "glass": true,
       "fill": {
@@ -57,7 +57,7 @@
         "#D9E2EE"
        ]
       },
-      "opacity": 0.85
+      "opacity": 0.9
      }
     }
    ]

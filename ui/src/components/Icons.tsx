@@ -6,7 +6,7 @@ const P: Record<string, string> = {
   cog: '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
   cols: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/>',
   list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
-  shoe: '<path fill="currentColor" stroke="none" fill-rule="evenodd" d="M16.88 4.80A9.2 9.2 0 1 1 7.12 4.80A1.80 1.80 0 0 1 9.03 7.85A5.6 5.6 0 1 0 14.97 7.85A1.80 1.80 0 0 1 16.88 4.80ZM18.33 10.07a0.62 0.62 0 1 0 1.24 0a0.62 0.62 0 1 0 -1.24 0ZM17.79 16.30a0.62 0.62 0 1 0 1.24 0a0.62 0.62 0 1 0 -1.24 0ZM4.97 16.30a0.62 0.62 0 1 0 1.24 0a0.62 0.62 0 1 0 -1.24 0ZM4.43 10.07a0.62 0.62 0 1 0 1.24 0a0.62 0.62 0 1 0 -1.24 0Z"/>',
+  shoe: '<g transform="scale(0.09375)" fill="currentColor" stroke="none"><path d="M82 60.0H80.0A68.0 68.0 0 0 0 80.0 196.0H176.0A68.0 68.0 0 0 0 176.0 60.0H174A18.0 18.0 0 0 0 174 96.0H176.0A32.0 32.0 0 0 1 176.0 160.0H80.0A32.0 32.0 0 0 1 80.0 96.0H82A18.0 18.0 0 0 0 82 60.0Z"/><circle cx="128" cy="78.0" r="18"/></g>',
   minus: '<path d="M5 12h14"/>',
   pen: '<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   swap: '<path d="M16 3l4 4-4 4"/><path d="M20 7H4"/><path d="M8 21l-4-4 4-4"/><path d="M4 17h16"/>',
