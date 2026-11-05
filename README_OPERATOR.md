@@ -325,4 +325,4 @@ PADDOCK_GATE\
 
 ## 利用条件
 
-LICENSE.txt を参照してください。
+**有償ソフトウェアです。** 使用には SEVENTHWELL との有償の使用許諾契約が必要で、無償では使えません。詳しくは LICENSE.txt、お問い合わせは info@seventh-well.com へ。

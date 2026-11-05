@@ -112,4 +112,4 @@ jobs:
           notes=$(awk -v v="$v" '$0 ~ "^- \\*\\*v"v"\\*\\*" {f=1} f && /^- \*\*v/ && $0 !~ "v"v {exit} f' README_OPERATOR.md)
           gh release create "$tag" dist/PADDOCK_GATE_v${v}_Windows.zip \
             --title "PADDOCK GATE v$v（Windows）" --target "$GITHUB_SHA" \
-            --notes "${notes:-PADDOCK GATE v$v}"$'\n\n'"ダウンロード：下の PADDOCK_GATE_v${v}_Windows.zip を保存し、「すべて展開」してから PADDOCK_GATE.exe を起動してください。"
+            --notes "${notes:-PADDOCK GATE v$v}"$'\n\n'"ダウンロード：下の PADDOCK_GATE_v${v}_Windows.zip を保存し、「すべて展開」してから PADDOCK_GATE.exe を起動してください。"$'\n\n'"有償ソフトウェアです。使用には SEVENTHWELL との有償の使用許諾契約が必要です（無償での使用はできません。LICENSE.txt を参照、お問い合わせは info@seventh-well.com）。"
