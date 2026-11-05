@@ -26,7 +26,7 @@ for app in "PADDOCK SCOUT" "PADDOCK SADDLE" "PADDOCK GATE"; do
   sleep 6
   if ps -axo command | grep -F -- "--app=http://127.0.0.1:${port}/" | grep -v grep >/dev/null; then echo "OK 開き直しで画面が開いた"; else echo "::warning::${app}: 開き直しで画面が開いたか確認できない"; fi
   screencapture -x "../smoke/${app}-reopen.png" 2>/dev/null || true
-  curl -fs -X POST -H "X-SW-Handover: 0.0.0" "http://127.0.0.1:${port}/api/handover"; echo
+  curl -fs -X POST -H "X-SW-Handover: 999.0.0" "http://127.0.0.1:${port}/api/handover"; echo   # 新しい版からの入れ替えとして頼む（古い版からは断るため）
   for t in $(seq 1 20); do curl -fs "http://127.0.0.1:${port}/api/ping" >/dev/null 2>&1 || break; sleep 1; done
   sleep 3
   if ps -axo command | grep -F "${app}.app/Contents/MacOS/" | grep -v grep >/dev/null; then echo "::error::${app} が終了しない"; fail=1; else echo "OK 終了"; fi
