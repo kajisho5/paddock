@@ -1,0 +1,89 @@
+# PADDOCK GATE（Tauri 版）の Windows 用ビルドと起動確認
+#   push（GATE・共通部分・Tauri 版を変えたとき）／ Actions → gate-windows → Run workflow
+#   できた zip は Artifacts（PADDOCK_GATE_Windows）に出る
+name: gate-windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sw_nas_watch.py"
+      - "sw_nas_operator.py"
+      - "build_app.py"
+      - "build_protected.py"
+      - "build_operator.py"
+      - "exe/**"
+      - "tauri/gate/**"
+      - ".github/workflows/gate-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PY_EMBED: "3.13.16"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 版がそろっているか
+        shell: bash
+        run: |
+          set -euo pipefail
+          a=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' sw_nas_operator.py | head -n1)
+          b=$(sed -n 's/^version = "\(.*\)"/\1/p' tauri/gate/Cargo.toml | head -n1)
+          c=$(python -c "import json;print(json.load(open('tauri/gate/tauri.conf.json'))['version'])")
+          echo "GATE $a / Cargo $b / tauri.conf $c"
+          [ "$a" = "$b" ] && [ "$a" = "$c" ] || { echo "::error::版がそろっていません（sw_nas_operator.py・tauri/gate/Cargo.toml・tauri.conf.json）"; exit 1; }
+          echo "GATE_VERSION=$a" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tauri/gate/target
+          key: tauri-gate-${{ runner.os }}-${{ hashFiles('tauri/gate/Cargo.lock') }}
+
+      - name: Tauri 版の窓をビルド
+        working-directory: tauri/gate
+        run: cargo build --release --locked
+
+      - name: 同梱の Python と配布 zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet ziglang
+          curl -fsSL -o embed.zip "https://www.python.org/ftp/python/${PY_EMBED}/python-${PY_EMBED}-embed-amd64.zip"
+          PADDOCK_SHELL="tauri/gate/target/release/PADDOCK_GATE.exe" python build_operator.py embed.zip dist
+          ls -la dist
+
+      - name: 起動の確認
+        shell: pwsh
+        run: ./tauri/gate/ci/smoke.ps1 -Zip "dist/PADDOCK_GATE_v${env:GATE_VERSION}_Windows.zip" -Out smoke
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: PADDOCK_GATE_Windows
+          path: dist/PADDOCK_GATE_v*_Windows.zip
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-windows-smoke
+          path: smoke/
+          retention-days: 7

@@ -11,6 +11,7 @@ import { Icon } from "../components/Icons";
 import { LogButton } from "../components/Header";
 import { LogPane } from "../components/LogPane";
 import { AnaCard } from "../components/Folder";
+import { shellPinned, shellSetPinned } from "../lib/shell";
 import { openCfg } from "../components/Settings";
 import { netBadge, netOpen } from "../op/Net";
 import { OPEN, opOpen } from "../op/Opener";
@@ -43,7 +44,7 @@ export function setStage(root: string, group: string, st: Stage | "") {
 const stageOf = (root: string, g: string, gr?: Group): Stage | "" => STG.st[root + "|" + g]?.st || ((gr ?? (rootById(root)?.groups || []).find((x) => x.key === g))?.mk_done ? "done" : "");
 
 /* ---------------------------------------------------------------- データの組み立て */
-interface Ses { key: string; name: string; day: string; t: STime | null; list: Group[]; custom?: boolean }
+interface Ses { key: string; name: string; day: string; t: STime | null; list: Group[]; custom?: boolean; loose?: [string, number, number, Record<string, CpState>?][] }
 /* 当日の発表順の変更（このPCに保存。NAS のフォルダ名は変えない） */
 let ORDER: Record<string, string[]> = {};
 try { ORDER = JSON.parse(localStorage.getItem("gate.order") || "{}") || {}; } catch { ORDER = {}; }
@@ -71,6 +72,15 @@ function build(): Model | null {
     const p = parts(r, g.key); const k = p.sesKey;
     if (!m.has(k)) m.set(k, { key: k, name: p.ses || k.split("/").pop() || "（セッションなし）", day: p.day, t: sesTime(p.ses), list: [] });
     m.get(k)!.list.push(g);
+  }
+  // 演者フォルダがまだ無いセッションも出す。セッション直下に置かれたファイルも開けるように
+  for (const sd of r.sdirs || []) {
+    const probe = sd.key + "/_";   // 演者フォルダがあるつもりで、会場・日・セッションを読む
+    if (!inVenue(r.id, probe) || (dayMode === "path" && !dayOK(r, probe, day))) continue;
+    const p = parts(r, probe); const k = p.sesKey;
+    if (k !== sd.key) continue;
+    if (!m.has(k)) { if (!p.ses) continue; m.set(k, { key: k, name: p.ses, day: p.day, t: sesTime(p.ses), list: [] }); }
+    if (sd.loose.length) m.get(k)!.loose = sd.loose;
   }
   // 並び：全部に時刻があれば時刻順、時刻のないセッションが混じるときは名前順（S01・S02… の番号順）
   const all = [...m.values()]; const timed = all.every((x) => x.t);
@@ -342,6 +352,7 @@ function nextUpGuard(M: Model, ses: Ses) {
 }
 function nextUp(r: Root, ses: Ses, M?: Model) {
   const L = ses.list.filter((g) => !g.mk_drop);
+  if (!L.length) { toast("このセッションには演者フォルダがありません", 3000); return; }
   const i = L.findIndex((g) => stageOf(r.id, g.key, g) === "now");
   const nx = i >= 0 ? L[i + 1] : L.find((g) => stageOf(r.id, g.key, g) !== "done");
   if (i >= 0 && !nx) {   // 最後の人が終わった＝セッション終了
@@ -421,6 +432,21 @@ function PairChip() {
     <i className={"pc " + (ok ? "ok" : "run")} />{ok ? <>連携中<b>{p.rx_from}</b></> : <>連携先から応答なし</>}</button>;
 }
 
+/* Tauri 版の窓：常に最前面の切り替え（スライドを開くときは自動で外れ、GATE に戻ると戻る） */
+const PIN: { v: boolean | null } = { v: null };
+function PinChip() {
+  useApp();
+  useEffect(() => {
+    const f = () => shellPinned().then((v) => { PIN.v = v; store.emit(); });
+    f(); window.addEventListener("paddock-pin", f);   // タスクバーのアイコンで切り替えたとき
+    return () => window.removeEventListener("paddock-pin", f);
+  }, []);
+  if (PIN.v == null) return null;
+  const tog = async () => { const v = await shellSetPinned(!PIN.v); if (v != null) { PIN.v = v; store.emit(); toast(v ? "常に最前面に表示します（スライドを開くと、スライドが前に出ます）" : "常に最前面をやめました", 3500); } };
+  return <button className={cx("gchip btn", PIN.v && "on")} id="bPin" onClick={tog} title={"このウィンドウを常に最前面に表示する（いま：" + (PIN.v ? "オン" : "オフ") + "）\nスライド・ファイルを開くと最前面は一時的に外れ、開いた窓が前に出ます。GATE に戻ると最前面に戻ります。"}>
+    <Icon n="pin" />{PIN.v ? "最前面" : "最前面オフ"}</button>;
+}
+
 /* ---- 上：セッション名とコピーの状況 */
 function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
   const S = store.S!; const L = ses ? ses.list.filter((g) => !g.mk_drop) : [];
@@ -448,6 +474,7 @@ function TopBar({ M, ses }: { M: Model | null; ses: Ses | null }) {
       return <span className="gchip act" title={nfc(a.rel)}><Icon n="spin" className="spin" /><span className="fn">{here ? "" : "ほかのセッション · "}{nfc(a.rel.split("/").pop())}</span><b>{pct}%</b>{(S.op.queue || 0) > 1 && <span className="sub2">残り {(S.op.queue || 0) - 1}</span>}</span>;
     })()}
     <PairChip />
+    <PinChip />
     <LogButton />
   </div>;
 }
@@ -478,13 +505,14 @@ function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
       <div className="lb">発表中</div>
       <Swap k={cur ? cur.key : "-"}>{cur ? <div className="who"><span className="o">{ci + 1}</span>{nameOf(cur).name}<span className="no">{nameOf(cur).no}</span></div>
         : fin ? <div className="tt fin"><RIcon k="done" />このセッションは終了しました</div>
+        : !L.length ? <div className="tt">このセッションには演者フォルダがありません</div>
         : <div className="tt">まだいません（右クリック「発表中にする」か ［次の人へ］）</div>}</Swap>
     </div>
     <div className="cur nxb">
       <div className="lb">次</div>
       <Swap k={nx ? nx.key : ns ? "s:" + ns.key : "-"}>{nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span></div> : ns ? <div className="tt">次のセッション：{sesLabel(ns)}</div> : <div className="tt">—</div>}</Swap>
     </div>
-    <button className="gb big" id="bNext" onMouseUp={(e) => e.currentTarget.blur()} onClick={() => nextUpGuard(M, ses)} title={fin ? "次のセッションを表示します（キー N）" : "いまの人を発表済みにして、次の人を発表中にします（キー N）"}>
+    <button className="gb big" id="bNext" disabled={!L.length} onMouseUp={(e) => e.currentTarget.blur()} onClick={() => nextUpGuard(M, ses)} title={fin ? "次のセッションを表示します（キー N）" : "いまの人を発表済みにして、次の人を発表中にします（キー N）"}>
       {fin ? (ns ? "次のセッションへ" : "終了") : cur ? (nx ? "次の人へ" : "終えてセッション終了") : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
     <div className="keys">↑↓ 選ぶ・Enter 発表中にする・右クリック メニュー</div>
   </div>;
@@ -522,6 +550,9 @@ function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: n
   const r = recvCount(L); const cnt = { r, p: L.length - r, e: L.filter((g) => rcOf(g) === "error").length };
   return <div className="glist scroll" id="groups" ref={box}>
     <div className="ghd">発表順 · {L.length}人{ses.custom && <button className="reorder" onClick={() => { saveOrder(M.r.id, ses, null); toast("発表順を元に戻しました（フォルダ名の順）"); }} title="ドラッグで変えた発表順をやめて、フォルダ名の順に戻します">順番を変更中 · 元に戻す</button>}<span className="legend"><span><RIcon k="received" />受付済 {cnt.r}</span><span><RIcon k="pending" />未受付 {cnt.p}</span>{cnt.e > 0 && <span><RIcon k="error" />要確認 {cnt.e}</span>}</span></div>
+    {ses.loose && ses.loose.length > 0 && <Loose r={M.r} ses={ses} />}
+    {!ses.list.length && <div className="gempty sm" id="sesEmpty"><Icon n="shoe" /><b>このセッションには、まだ演者フォルダがありません</b>
+      <span>{ses.loose && ses.loose.length ? "セッションのフォルダに直接入っているファイルは、上から開けます。" : "NASのセッションのフォルダに演者フォルダができると、ここに発表順で並びます。"}</span></div>}
     <div className={cx("grows", sv.current.dir)} key={ses.key}>
       {ind && <span className="nowind" style={{ transform: `translateY(${ind.y}px)`, height: ind.h }} aria-hidden="true" />}
       {ses.list.map((g, i) => <Row key={g.key} r={M.r} g={g} ord={g.mk_drop ? 0 : L.indexOf(g) + 1} i={i} sel={!!s.SEL && s.SEL.root === M.r.id && s.SEL.group === g.key} onMenu={onMenu}
@@ -696,6 +727,25 @@ function OpenBtn({ id, cls, how, F, rel = "", disabled, title, children, done }:
   return <button id={id} className={cx(cls, "ob", st && "is-" + st)} disabled={disabled} title={title} onClick={go} aria-busy={st === "run" || undefined}>
     <span className="ob-in">{st === "run" ? <><Icon n="spin" className="spin" />{done ? "開いています…" : null}</> : st === "ok" ? <><Icon n="chk" />{done || null}</> : children}</span>
   </button>;
+}
+
+/* セッションのフォルダに直接置かれたファイル（演者フォルダに入っていないもの）：一覧の上に出して、ここから開ける */
+function Loose({ r, ses }: { r: Root; ses: Ses }) {
+  const F = { root: r.id, group: ses.key } as unknown as Folder;
+  const md = mainDest();
+  return <div className="gloose" id="gloose">
+    <div className="lh"><Icon n="folder" />セッションのフォルダに直接入っているファイル<span className="dim">（演者フォルダの外）</span></div>
+    {ses.loose!.map(([name, size, , cp]) => {
+      const st = cp?.[md]; const ok = OPEN.settings.enabled && !!st && OPENABLE.includes(st);
+      const lb = !st ? "確認中" : CPL[st]?.[0] || st;
+      return <div className="lf" key={name} data-f={name}>
+        <span className="fn" title={nfc(name)}>{nfc(name)}</span><span className="num">{fmtSize(size)}</span>
+        <span className={cx("st", ok ? "ok" : "wait")}>{ok ? "DL済" : lb}</span>
+        {SHOWX.test(name) && <OpenBtn cls="gb icon sm" how="show" F={F} rel={name} disabled={!ok} title="スライドショーで開く"><Icon n="play" /></OpenBtn>}
+        <OpenBtn cls="gb icon sm" how="file" F={F} rel={name} disabled={!ok} title="開く"><Icon n="file" /></OpenBtn>
+      </div>;
+    })}
+  </div>;
 }
 
 /* ---- 右：選んだ演者（本番で使うものだけ。解析の詳細はたたんでおく） */

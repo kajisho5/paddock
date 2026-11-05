@@ -294,3 +294,14 @@
 .gs.fin .nm{color:var(--g-text-2)}
 .gs .tm .end{color:var(--g-done);font-family:var(--sans);font-weight:500}
 .gnow .tt.fin{display:flex;align-items:center;gap:6px;color:var(--g-text)}
+
+/* セッション直下のファイル・演者フォルダの無いセッション */
+.gloose{margin:0 0 10px;padding:8px 10px;border:1px dashed var(--g-border-strong);border-radius:8px;background:var(--g-raise)}
+.gloose .lh{display:flex;align-items:center;gap:6px;font:500 12px var(--sans);color:var(--g-text-2);margin-bottom:4px}
+.gloose .lf{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto auto;align-items:center;gap:8px;padding:3px 0}
+.gloose .fn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gloose .num{font:400 12px var(--mono);color:var(--g-text-2)}
+.gloose .st{font-size:12px;color:var(--g-text-2)}.gloose .st.ok{color:var(--g-done)}
+#sesEmpty{padding:28px 12px}
+
+.gchip.btn.on{border-color:var(--g-accent);color:var(--g-text)}

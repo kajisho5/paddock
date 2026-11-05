@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK SADDLE"
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 DEFAULT_PORT = 8795
 RX_TMP = ".swnr_"                      # NASへ書く途中の一時ファイル（PADDOCK SCOUT は常に無視する）
 CHUNK = 1 << 20
@@ -1381,6 +1381,7 @@ def main():
         return
     store.roots = [r["path"] for r in cfg["roots"]]
     store.write_json("config.json", cfg)      # 2つ目の起動（すでに起動中）では設定ファイルに触れない
+    W.write_shell_key()
 
     mgr = RxManager(store, cfg)
     srv = W.Server(("127.0.0.1", a.port), RxHandler)

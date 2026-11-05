@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.11.0"
+VERSION = "1.12.0"
 DEFAULT_PORT = 8797
 
 
@@ -2182,6 +2182,7 @@ def main():
         return
     store.roots = [r["path"] for r in cfg["roots"]]
     store.write_json("config.json", cfg)      # 2つ目の起動（すでに起動中）では設定ファイルに触れない
+    W.write_shell_key()
 
     mgr = OpManager(store, cfg)
     srv = W.Server(("127.0.0.1", a.port), OpHandler)

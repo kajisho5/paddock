@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-slide-opening"
+description = "Enables the slide_opening command without any pre-configured scope."
+commands.allow = ["slide_opening"]
+
+[[permission]]
+identifier = "deny-slide-opening"
+description = "Denies the slide_opening command without any pre-configured scope."
+commands.deny = ["slide_opening"]

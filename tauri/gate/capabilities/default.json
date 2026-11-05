@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "gate-main",
+  "description": "GATE の画面（このPCで動く PADDOCK GATE のエンジン）から、窓の操作（最前面の切り替え・開く前の準備）を呼べるようにする",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*"]
+  },
+  "permissions": [
+    "core:default",
+    "allow-slide-opening",
+    "allow-slide-open-failed",
+    "allow-get-pinned",
+    "allow-set-pinned"
+  ]
+}

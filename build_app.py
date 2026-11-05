@@ -76,7 +76,9 @@ def compile_to(src, name, outdir):
     return pyc
 
 
-def build(kind, emb, outdir):
+def build(kind, emb, outdir, shell=None):
+    """shell：Tauri 版の窓（PADDOCK_GATE.exe）。指定すると、起動用ランチャーの代わりにこれを入れる（環境変数 PADDOCK_SHELL でも可）"""
+    shell = shell or os.environ.get("PADDOCK_SHELL") or None
     if sys.version_info[:2] != (3, 13):
         raise SystemExit("同梱Pythonと同じ 3.13 で実行してください（現在 %d.%d）" % sys.version_info[:2])
     app = APPS[kind]
@@ -88,7 +90,12 @@ def build(kind, emb, outdir):
     with tempfile.TemporaryDirectory() as work:
         pyc_w = compile_to(build_protected.transform(open(SRC_W, encoding="utf-8").read()), "sw_nas_watch", work)
         pyc_a = compile_to(transform_app(src, app["blocks"]), app["mod"], work)
-        exe = build_launcher.build(os.path.join(work, v["exe"]), version, v)
+        if shell:
+            if not os.path.isfile(shell):
+                raise SystemExit("Tauri 版の窓が見つかりません: %s" % shell)
+            exe = shell
+        else:
+            exe = build_launcher.build(os.path.join(work, v["exe"]), version, v)
         core = build_launcher.build_core(os.path.join(work, build_launcher.core_name(v)), version, v, emb)
         lic = open(os.path.join(HERE, "LICENSE.txt"), encoding="utf-8").read()
         if "PADDOCK SCOUT 利用条件" not in lic:

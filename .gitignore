@@ -5,3 +5,5 @@ __pycache__/
 ui/dist-design/
 build/
 dist/
+tauri/gate/target/
+tauri/gate/gen/

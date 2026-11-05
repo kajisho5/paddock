@@ -1,4 +1,5 @@
 /* OPERATOR：演者のスライドを開く（このPCのコピーから。NASのファイルは開かない） */
+import { shellBeforeOpen, shellOpenFailed } from "../lib/shell";
 import { useState } from "react";
 import { api } from "../api";
 import { IS_OP } from "../boot";
@@ -15,10 +16,11 @@ export function openLoad() { return api<any>("/api/op/open/settings").then((j) =
 export async function opOpen(root: string, group: string, rel: string, how: "file" | "show" | "folder"): Promise<boolean> {
   if (!store.S?.local) { toast("開くのは、このアプリを動かしているPCでのみできます", 4000); return false; }
   try {
+    await shellBeforeOpen();   // Tauri 版：常に最前面を外して、開いた窓を前に出せるように
     const j: any = await api("/api/op/open", { root, group, rel: rel || "", how });
     toast((j.what === "folder" ? "フォルダを開いています（" + j.dest + "）" : j.what === "show" ? "スライドショーで開いています: " + j.name + "（" + j.dest + "）" : "開いています: " + j.name + "（" + j.dest + "）") + (j.msg ? "\n" + j.msg : ""), j.msg ? 7000 : 3000);
     return true;
-  } catch (e: any) { toast(e.message, 8000); return false; }
+  } catch (e: any) { shellOpenFailed(); toast(e.message, 8000); return false; }
 }
 if (IS_OP) {
   openLoad();
