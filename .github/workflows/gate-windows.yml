@@ -87,3 +87,29 @@ jobs:
           name: gate-windows-smoke
           path: smoke/
           retention-days: 7
+
+  # main に入った版がまだ出ていなければ、Releases に zip を置く（タグ gate-v<版>）
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: PADDOCK_GATE_Windows
+          path: dist
+      - name: Releases に出す
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' sw_nas_operator.py | head -n1)
+          tag="gate-v$v"
+          if gh release view "$tag" >/dev/null 2>&1; then echo "$tag はもう出ています"; exit 0; fi
+          notes=$(awk -v v="$v" '$0 ~ "^- \\*\\*v"v"\\*\\*" {f=1} f && /^- \*\*v/ && $0 !~ "v"v {exit} f' README_OPERATOR.md)
+          gh release create "$tag" dist/PADDOCK_GATE_v${v}_Windows.zip \
+            --title "PADDOCK GATE v$v（Windows）" --target "$GITHUB_SHA" \
+            --notes "${notes:-PADDOCK GATE v$v}"$'\n\n'"ダウンロード：下の PADDOCK_GATE_v${v}_Windows.zip を保存し、「すべて展開」してから PADDOCK_GATE.exe を起動してください。"
