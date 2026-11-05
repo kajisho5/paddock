@@ -83,8 +83,8 @@ function build(): Model | null {
     if (sd.loose.length) m.get(k)!.loose = sd.loose;
   }
   // 並び：全部に時刻があれば時刻順、時刻のないセッションが混じるときは名前順（S01・S02… の番号順）
-  const all = [...m.values()]; const timed = all.every((x) => x.t);
-  const sessions = all.sort((a, b) => cmpDay(a.day, b.day) || (timed ? a.t!.s - b.t!.s : 0) || cmpPath(a.name, b.name));
+  const all = [...m.values()]; const timed = all.filter((x) => !sesEmpty(x)).every((x) => x.t);   // 時刻の無い空のフォルダ（「資料」など）は並びの決め方に入れない
+  const sessions = all.sort((a, b) => cmpDay(a.day, b.day) || (timed ? (a.t ? 0 : 1) - (b.t ? 0 : 1) || (a.t && b.t ? a.t.s - b.t.s : 0) : 0) || cmpPath(a.name, b.name));
   sessions.forEach((x) => {
     x.list.sort((a, b) => cmpPath(a.key, b.key));
     const o = ORDER[r.id + "|" + x.key];   // 当日の順番変更（このPCだけ）
@@ -211,7 +211,8 @@ try { const v = localStorage.getItem("gate.ses"); if (v) { GS.ses = v; GS.auto =
 /* セッションの終了：取り下げ以外の全員が発表済み（時刻より優先。バックアップPCとも発表済みでそろう） */
 function sesDone(M: Model, x: Ses) { const L = x.list.filter((g) => !g.mk_drop); return L.length > 0 && L.every((g) => stageOf(M.r.id, g.key, g) === "done"); }
 /* 終わったセッションの次（まだ終わっていないもの） */
-function sesAfter(M: Model, x: Ses): Ses | null { const i = M.sessions.indexOf(x); return M.sessions.slice(i + 1).find((y) => !sesDone(M, y)) || null; }
+const sesEmpty = (x: Ses) => !x.list.length && !x.loose?.length;   // 演者フォルダもファイルも無い（自動で選ばない）
+function sesAfter(M: Model, x: Ses): Ses | null { const i = M.sessions.indexOf(x); return M.sessions.slice(i + 1).find((y) => !sesDone(M, y) && !sesEmpty(y)) || null; }
 function liveSes(M: Model): Ses | null {
   return M.sessions.find((x) => x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now")) || M.sessions.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x)) || null;
 }
@@ -235,7 +236,7 @@ function curSes(M: Model): Ses | null {
   const live = ss.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x));
   if (live) return live;
   let ld = -1; ss.forEach((x, i) => { if (sesDone(M, x)) ld = i; });   // 終了にしたセッションの次（時刻より早く終わったとき・時刻がないとき）
-  const aft = ld >= 0 ? ss.slice(ld + 1).find((x) => !sesDone(M, x)) : undefined;
+  const aft = ld >= 0 ? ss.slice(ld + 1).find((x) => !sesDone(M, x) && !sesEmpty(x)) : undefined;
   if (aft) return aft;
   const nxt = ss.find((x) => M.tl.get(x.key)?.st === "next" && !sesDone(M, x));
   if (nxt) return nxt;
@@ -345,14 +346,19 @@ function nextUpGuard(M: Model, ses: Ses) {
   if (Date.now() - lastN < 400) return;   // 連打・ダブルクリックで2人進めない
   lastN = Date.now(); pressFx("bNext");
   const lv = liveSes(M);
-  if (lv && lv.key !== ses.key && !sesDone(M, ses) && Date.now() - warnN > 4000) {   // 終了したセッションで押したとき（次のセッションへ移るだけ）は聞かない   // 進行中ではないセッションを見ているとき：もう一度押したら進める
+  if (lv && lv.key !== ses.key && !sesDone(M, ses) && ses.list.some((g) => !g.mk_drop) && Date.now() - warnN > 4000) {   // 終了したセッションで押したとき（次のセッションへ移るだけ）は聞かない   // 進行中ではないセッションを見ているとき：もう一度押したら進める
     warnN = Date.now(); toast("いま表示しているのは進行中のセッションではありません（進行中：" + sesLabel(lv) + "）。このセッションで進めるなら、もう一度押してください", 4000); return;
   }
   warnN = 0; nextUp(M.r, ses, M);
 }
 function nextUp(r: Root, ses: Ses, M?: Model) {
   const L = ses.list.filter((g) => !g.mk_drop);
-  if (!L.length) { toast("このセッションには演者フォルダがありません", 3000); return; }
+  if (!L.length) {   // 演者フォルダの無いセッション：次のセッションへ
+    const ns = M ? sesAfter(M, ses) : null;
+    if (ns) { pickSes(ns.key); toast("次のセッション「" + sesLabel(ns) + "」にしました", 3000); }
+    else toast("このセッションには演者フォルダがありません", 3000);
+    return;
+  }
   const i = L.findIndex((g) => stageOf(r.id, g.key, g) === "now");
   const nx = i >= 0 ? L[i + 1] : L.find((g) => stageOf(r.id, g.key, g) !== "done");
   if (i >= 0 && !nx) {   // 最後の人が終わった＝セッション終了
@@ -512,8 +518,8 @@ function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
       <div className="lb">次</div>
       <Swap k={nx ? nx.key : ns ? "s:" + ns.key : "-"}>{nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span></div> : ns ? <div className="tt">次のセッション：{sesLabel(ns)}</div> : <div className="tt">—</div>}</Swap>
     </div>
-    <button className="gb big" id="bNext" disabled={!L.length} onMouseUp={(e) => e.currentTarget.blur()} onClick={() => nextUpGuard(M, ses)} title={fin ? "次のセッションを表示します（キー N）" : "いまの人を発表済みにして、次の人を発表中にします（キー N）"}>
-      {fin ? (ns ? "次のセッションへ" : "終了") : cur ? (nx ? "次の人へ" : "終えてセッション終了") : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
+    <button className="gb big" id="bNext" disabled={!L.length && !sesAfter(M, ses)} onMouseUp={(e) => e.currentTarget.blur()} onClick={() => nextUpGuard(M, ses)} title={fin ? "次のセッションを表示します（キー N）" : "いまの人を発表済みにして、次の人を発表中にします（キー N）"}>
+      {fin || !L.length ? (sesAfter(M, ses) ? "次のセッションへ" : fin ? "終了" : "次のセッションはありません") : cur ? (nx ? "次の人へ" : "終えてセッション終了") : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
     <div className="keys">↑↓ 選ぶ・Enter 発表中にする・右クリック メニュー</div>
   </div>;
 }
@@ -736,11 +742,12 @@ function Loose({ r, ses }: { r: Root; ses: Ses }) {
   return <div className="gloose" id="gloose">
     <div className="lh"><Icon n="folder" />セッションのフォルダに直接入っているファイル<span className="dim">（演者フォルダの外）</span></div>
     {ses.loose!.map(([name, size, , cp]) => {
-      const st = cp?.[md]; const ok = OPEN.settings.enabled && !!st && OPENABLE.includes(st);
+      const st = cp?.[md]; const ok = OPEN.settings.enabled && !!st && st !== "off";   // 開けるかはアプリが確かめる（差し替え中でも前の版があれば開く）
+      const done = !!st && OPENABLE.includes(st);
       const lb = !st ? "確認中" : CPL[st]?.[0] || st;
       return <div className="lf" key={name} data-f={name}>
         <span className="fn" title={nfc(name)}>{nfc(name)}</span><span className="num">{fmtSize(size)}</span>
-        <span className={cx("st", ok ? "ok" : "wait")}>{ok ? "DL済" : lb}</span>
+        <span className={cx("st", done ? "ok" : "wait")}>{done ? "DL済" : lb}</span>
         {SHOWX.test(name) && <OpenBtn cls="gb icon sm" how="show" F={F} rel={name} disabled={!ok} title="スライドショーで開く"><Icon n="play" /></OpenBtn>}
         <OpenBtn cls="gb icon sm" how="file" F={F} rel={name} disabled={!ok} title="開く"><Icon n="file" /></OpenBtn>
       </div>;

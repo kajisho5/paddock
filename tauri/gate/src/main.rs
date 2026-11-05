@@ -36,6 +36,7 @@ struct Shared {
     pinned: AtomicBool,        // 常に最前面（設定）
     dropped: AtomicBool,       // 開くために一時的に最前面を外している
     blurred: AtomicBool,       // 外したあと、ほかの窓に移った
+    applied: AtomicBool,       // いま実際に最前面にしているか
     quitting: AtomicBool,
     restarts: AtomicU32,
     child: Mutex<Option<Child>>,
@@ -108,10 +109,40 @@ fn http(port: u16, method: &str, path: &str, headers: &[(&str, &str)], timeout: 
 
 /// エンジンが応えるか（ほかのアプリが同じポートを使っていたら false）
 fn ping(port: u16) -> bool {
+    ping_version(port).is_some()
+}
+
+/// 応えたエンジンの版
+fn ping_version(port: u16) -> Option<String> {
     match http(port, "GET", "/api/ping", &[], Duration::from_millis(1500)) {
-        Some((200, body)) => body.contains(APP),
-        _ => false,
+        Some((200, body)) if body.contains(APP) => Some(
+            serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from))
+                .unwrap_or_default(),
+        ),
+        _ => None,
     }
+}
+
+/// ポートが使われているか（応えないが動いている＝重い処理の最中、を見分ける）
+fn port_busy(port: u16) -> bool {
+    TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(800)).is_ok()
+}
+
+/// Tauri を使わずに知らせる（起動の前・WebView2 が無いとき）
+fn plain_message(title: &str, msg: &str) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND};
+        let w = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let (t, m) = (w(title), w(msg));
+        unsafe {
+            MessageBoxW(std::ptr::null_mut(), m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+        }
+    }
+    #[cfg(not(windows))]
+    eprintln!("{}: {}", title, msg);
 }
 
 fn log_tail(path: &Path) -> String {
@@ -195,9 +226,107 @@ fn show_main(app: &AppHandle) {
     }
 }
 
-fn apply_pin(st: &Shared, w: &tauri::Window) {
-    let on = st.pinned.load(Ordering::SeqCst) && !st.dropped.load(Ordering::SeqCst);
-    let _ = w.set_always_on_top(on);
+/// 最前面にしてよいか：設定がオン・開いている最中でない・同じ画面に全画面の窓（スライドショーなど）が無い
+fn want_top(st: &Shared, hwnd: isize) -> bool {
+    st.pinned.load(Ordering::SeqCst) && !st.dropped.load(Ordering::SeqCst) && !fullscreen_beside(hwnd)
+}
+
+fn hwnd_of(w: &tauri::Window) -> isize {
+    #[cfg(windows)]
+    {
+        w.hwnd().map(|h| h.0 as isize).unwrap_or(0)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = w;
+        0
+    }
+}
+
+fn refresh_top(st: &Shared, w: &tauri::Window) {
+    let on = want_top(st, hwnd_of(w));
+    if st.applied.swap(on, Ordering::SeqCst) != on || on {
+        let _ = w.set_always_on_top(on);
+    }
+}
+
+/// GATE と同じ画面に、全画面の窓（PowerPoint のスライドショー・動画の全画面など）があるか。
+/// あれば最前面にしない（演者が自分で始めたスライドショーの上にも GATE を重ねない）
+#[cfg(windows)]
+fn fullscreen_beside(gate: isize) -> bool {
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    if gate == 0 {
+        return false;
+    }
+    struct Ctx {
+        gate: isize,
+        mon: RECT,
+        found: bool,
+    }
+    unsafe extern "system" fn cb(h: HWND, l: LPARAM) -> BOOL {
+        let c = &mut *(l as *mut Ctx);
+        if h as isize == c.gate || IsWindowVisible(h) == 0 || IsIconic(h) != 0 {
+            return 1;
+        }
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE) as u32;
+        if ex & (WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT) != 0 {
+            return 1; // 重ね表示の道具（録画・オーバーレイなど）は数えない
+        }
+        let mut cloaked: u32 = 0;
+        if DwmGetWindowAttribute(h, DWMWA_CLOAKED as u32, &mut cloaked as *mut u32 as *mut _, 4) == 0 && cloaked != 0 {
+            return 1; // 見えていない（別の仮想デスクトップなど）
+        }
+        let mut cls = [0u16; 64];
+        let n = GetClassNameW(h, cls.as_mut_ptr(), 64);
+        let name = String::from_utf16_lossy(&cls[..n.max(0) as usize]);
+        if matches!(name.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
+            return 1; // デスクトップ・タスクバー
+        }
+        let mut r: RECT = std::mem::zeroed();
+        if GetWindowRect(h, &mut r) == 0 {
+            return 1;
+        }
+        let m = &c.mon;
+        if r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom {
+            c.found = true;
+            return 0;
+        }
+        1
+    }
+    unsafe {
+        let mon = MonitorFromWindow(gate as HWND, MONITOR_DEFAULTTONEAREST);
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(mon, &mut mi) == 0 {
+            return false;
+        }
+        let mut c = Ctx { gate, mon: mi.rcMonitor, found: false };
+        EnumWindows(Some(cb), &mut c as *mut Ctx as LPARAM);
+        c.found
+    }
+}
+
+#[cfg(not(windows))]
+fn fullscreen_beside(_gate: isize) -> bool {
+    false
+}
+
+/// 最前面の状態を 1 秒ごとに見直す（全画面の窓が出た・消えた）
+fn top_loop(app: AppHandle, st: Arc<Shared>) {
+    loop {
+        thread::sleep(Duration::from_secs(1));
+        if let Some(w) = main_window(&app) {
+            let ww = w.as_ref().window();
+            let on = want_top(&st, hwnd_of(&ww));
+            if st.applied.load(Ordering::SeqCst) != on {
+                st.applied.store(on, Ordering::SeqCst);
+                let _ = w.set_always_on_top(on);
+            }
+        }
+    }
 }
 
 /// 開く前：常に最前面を外し、エンジン（別のプロセス）が開いた窓を前に出せるようにする
@@ -205,6 +334,7 @@ fn drop_for_open(st: &Shared, w: &WebviewWindow) {
     if st.pinned.load(Ordering::SeqCst) {
         st.dropped.store(true, Ordering::SeqCst);
         st.blurred.store(false, Ordering::SeqCst);
+        st.applied.store(false, Ordering::SeqCst);
         let _ = w.set_always_on_top(false);
     }
     #[cfg(windows)]
@@ -217,7 +347,7 @@ fn drop_for_open(st: &Shared, w: &WebviewWindow) {
 fn restore_pin(st: &Shared, w: &WebviewWindow) {
     st.dropped.store(false, Ordering::SeqCst);
     st.blurred.store(false, Ordering::SeqCst);
-    let _ = w.set_always_on_top(st.pinned.load(Ordering::SeqCst));
+    refresh_top(st, &w.as_ref().window());
 }
 
 #[tauri::command]
@@ -252,7 +382,7 @@ fn set_pinned(on: bool, app: AppHandle, st: State<'_, Arc<Shared>>) -> bool {
     st.dropped.store(false, Ordering::SeqCst);
     st.save_settings();
     if let Some(w) = main_window(&app) {
-        let _ = w.set_always_on_top(on);
+        refresh_top(&st, &w.as_ref().window());
     }
     if let Some(item) = app.try_state::<PinItem>() {
         let _ = item.0.set_checked(on);
@@ -328,47 +458,61 @@ fn fail(app: &AppHandle, msg: String) {
 }
 
 fn start_and_watch(app: AppHandle, st: Arc<Shared>) {
-    // 1. エンジンを起動して、応えるまで待つ
+    // 1. エンジンを起動して、応えるまで待つ（同じ版がもう動いていれば、それにつなぐ）
     let mut logp = st.runtime().join("last_run.log");
     let mut spawned = false;
-    if !ping(st.port) {
-        match spawn_engine(&st, false) {
+    match ping_version(st.port) {
+        Some(v) if v == VERSION => st.note("エンジンはもう動いています（つなぎます）"),
+        _ => match spawn_engine(&st, false) {
+            // 版の違うエンジンが動いていれば、新しいエンジンが入れ替える
             Ok((c, lp)) => {
                 logp = lp;
                 *st.child.lock().unwrap() = Some(c);
                 spawned = true;
             }
             Err(e) => return fail(&app, e),
-        }
-    } else {
-        st.note("エンジンはもう動いています（つなぎます）");
+        },
     }
     let t0 = Instant::now();
     loop {
-        if ping(st.port) {
+        if ping_version(st.port).map(|v| v == VERSION || !spawned).unwrap_or(false) {
             break;
         }
-        let exited = st.child.lock().unwrap().as_mut().and_then(|c| c.try_wait().ok().flatten());
+        let exited = {
+            let mut g = st.child.lock().unwrap();
+            let e = g.as_mut().and_then(|c| c.try_wait().ok().flatten());
+            if e.is_some() {
+                *g = None; // 終わったものは持ち続けない
+            }
+            e
+        };
         if let Some(code) = exited {
             if !code.success() {
                 thread::sleep(Duration::from_millis(300));
                 return fail(&app, format!("（終了コード {:?}）\n\n{}\n\n記録: {}", code.code(), log_tail(&logp), logp.display()));
             }
-            // 0 で終わった：同じ版がすでに動いている（ポートが空くのを待つ・応えるのを待つ）
+            spawned = false; // 0 で終わった：同じ版がもう動いている（それにつなぐ）
         }
-        if t0.elapsed() > Duration::from_secs(90) {
+        if t0.elapsed() > Duration::from_secs(120) {
             return fail(&app, format!("エンジンが応えません（ポート {}）。\n\n{}\n\n記録: {}", st.port, log_tail(&logp), logp.display()));
         }
         thread::sleep(Duration::from_millis(250));
     }
     st.note(if spawned { "エンジンが起動しました" } else { "エンジンにつながりました" });
     navigate(&app, &st);
-    // 2. 見守る：止まったら（画面の［終了］・新しい版への入れ替え）この窓も閉じる。異常終了なら起動し直す
-    let mut misses = 0;
+
+    // 2. 見守る
+    //   止まったとき：きちんと終わった（鍵のファイルが消えている：画面の［終了］・新しい版への入れ替え）ならこの窓も閉じる。
+    //   鍵が残ったまま止まった（異常終了）なら起動し直す。応えないがポートは使っている（重い処理の最中）なら待つ
+    let mut misses = 0u32;
+    let mut up_since = Instant::now();
     loop {
         thread::sleep(Duration::from_secs(2));
         if ping(st.port) {
             misses = 0;
+            if up_since.elapsed() > Duration::from_secs(600) {
+                st.restarts.store(0, Ordering::SeqCst); // 10 分動き続けたら数え直す
+            }
             continue;
         }
         misses += 1;
@@ -379,27 +523,31 @@ fn start_and_watch(app: AppHandle, st: Arc<Shared>) {
             app.exit(0);
             return;
         }
-        let code = st.child.lock().unwrap().as_mut().and_then(|c| c.try_wait().ok().flatten());
-        match code {
-            Some(c) if c.success() => {
-                st.note("エンジンが終了しました（画面の［終了］など）");
-                app.exit(0);
-                return;
-            }
-            None if st.child.lock().unwrap().is_some() => {
-                // 動いているのに応えない（重い処理中など）：もう少し待つ
-                if misses < 15 {
-                    continue;
+        let gone = {
+            let mut g = st.child.lock().unwrap();
+            match g.as_mut().map(|c| c.try_wait()) {
+                Some(Ok(None)) => false, // 自分が起動したエンジンがまだ動いている（応えないだけ）
+                Some(_) => {
+                    *g = None;
+                    true
                 }
-                st.note("エンジンが 30 秒応えません");
-                misses = 0;
-                continue;
+                None => !port_busy(st.port), // 外で動いていたエンジン：ポートが空いたら止まった
             }
-            _ => {}
+        };
+        if !gone {
+            if misses % 15 == 0 {
+                st.note("エンジンが応えません（動いてはいます。待ちます）");
+            }
+            continue;
         }
-        // 異常終了（または外で動いていたエンジンが消えた）：起動し直す（10 回まで）
+        if !st.key_file().exists() {
+            st.note("エンジンが終了しました（画面の［終了］など）");
+            app.exit(0);
+            return;
+        }
+        // 異常終了：起動し直す（続けて 10 回まで）
         let n = st.restarts.fetch_add(1, Ordering::SeqCst) + 1;
-        st.note(&format!("エンジンが止まったため起動し直します（{} 回目）: {:?}", n, code.map(|c| c.code())));
+        st.note(&format!("エンジンが止まったため起動し直します（{} 回目）", n));
         if n > 10 {
             return fail(&app, format!("エンジンが何度も止まりました。\n\n{}\n\n記録: {}", log_tail(&logp), logp.display()));
         }
@@ -415,6 +563,7 @@ fn start_and_watch(app: AppHandle, st: Arc<Shared>) {
             thread::sleep(Duration::from_millis(300));
         }
         misses = 0;
+        up_since = Instant::now();
         navigate(&app, &st);
     }
 }
@@ -502,6 +651,7 @@ fn main() {
         pinned: AtomicBool::new(pinned),
         dropped: AtomicBool::new(false),
         blurred: AtomicBool::new(false),
+        applied: AtomicBool::new(pinned),
         quitting: AtomicBool::new(false),
         restarts: AtomicU32::new(0),
         child: Mutex::new(None),
@@ -515,8 +665,41 @@ fn main() {
         // これまでの形で動かす（エンジンが Chrome / Edge の窓とタスクバーのアイコンを出す）
         st.note("WebView2 が無いため、これまでの形（Chrome / Edge の窓）で起動します");
         // すでに動いていれば、エンジンが自分で画面を開いて終わる
-        let _ = spawn_engine(&st, true);
+        if let Err(e) = spawn_engine(&st, true) {
+            plain_message(APP, &e);
+        }
         return;
+    }
+
+    // 別の版（前の版など）が動いていたら、先に終わってもらう（前の版の窓もいっしょに閉じる）
+    if let Some(v) = ping_version(port) {
+        if v != VERSION {
+            st.note(&format!("別の版（v{}）が動いているため入れ替えます", v));
+            match http(port, "POST", "/api/handover", &[("X-SW-Handover", VERSION)], Duration::from_secs(5)) {
+                Some((200, _)) => {
+                    let t0 = Instant::now();
+                    while ping(port) && t0.elapsed() < Duration::from_secs(20) {
+                        thread::sleep(Duration::from_millis(300));
+                    }
+                    thread::sleep(Duration::from_secs(8)); // 前の版の窓が閉じるのを待つ
+                }
+                Some((409, body)) => {
+                    let msg = serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|j| j.get("error").and_then(|e| e.as_str()).map(String::from))
+                        .unwrap_or(body);
+                    plain_message(APP, &format!("前の版（v{}）が動いているため、入れ替えられませんでした。\n{}", v, msg));
+                    return;
+                }
+                _ => {
+                    plain_message(
+                        APP,
+                        &format!("PADDOCK GATE の前の版（v{}）が裏で動いています。\n前の版の画面の［終了］（電源のボタン）で終了してから、もう一度起動してください。", v),
+                    );
+                    return;
+                }
+            }
+        }
     }
 
     let st_setup = Arc::clone(&st);
@@ -533,6 +716,7 @@ fn main() {
                 .min_inner_size(960.0, 600.0)
                 .always_on_top(st.pinned.load(Ordering::SeqCst))
                 .build()?;
+            st.applied.store(st.pinned.load(Ordering::SeqCst), Ordering::SeqCst);
             let _ = w.set_focus();
 
             // タスクバー右下のアイコン
@@ -573,6 +757,9 @@ fn main() {
             let handle = app.handle().clone();
             let st2 = Arc::clone(&st);
             thread::spawn(move || start_and_watch(handle, st2));
+            let handle = app.handle().clone();
+            let st3 = Arc::clone(&st);
+            thread::spawn(move || top_loop(handle, st3));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -595,7 +782,7 @@ fn main() {
                     if st.dropped.load(Ordering::SeqCst) && st.blurred.load(Ordering::SeqCst) {
                         st.dropped.store(false, Ordering::SeqCst);
                         st.blurred.store(false, Ordering::SeqCst);
-                        apply_pin(&st, window);
+                        refresh_top(&st, window);
                     }
                 }
                 _ => {}

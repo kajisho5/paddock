@@ -19,9 +19,20 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type @"
 using System; using System.Runtime.InteropServices; using System.Text;
 public static class W {
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string t);
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtr(IntPtr h, int i);
+  public static IntPtr Find(uint want) {
+    IntPtr found = IntPtr.Zero;
+    EnumWindows((h, l) => { uint pid; GetWindowThreadProcessId(h, out pid); var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+      if (pid == want && sb.ToString().Contains("PADDOCK GATE")) { found = h; return false; } return true; }, IntPtr.Zero);
+    return found;
+  }
+  public static bool Top(IntPtr h) { return ((long)GetWindowLongPtr(h, -20) & 0x8) != 0; }
 }
 "@
 function Shot($name) {
@@ -61,8 +72,20 @@ Start-Sleep 6
 if ((Count "PADDOCK_GATE") -eq 1) { Ok "2回目の起動で増えない" } else { Bad "2回目の起動で窓が増えた（$(Count 'PADDOCK_GATE')）" }
 if ((Count "PADDOCK_GATE_core") -eq 1) { Ok "エンジンは1つ" } else { Bad "エンジンが $(Count 'PADDOCK_GATE_core') 個" }
 
+# 同じ画面に全画面の窓（スライドショーなど）が出たら、最前面をやめる。消えたら戻す
+$gp = (Get-Process -Name PADDOCK_GATE | Select-Object -First 1).Id
+$h = [W]::Find([uint32]$gp)
+if ($h -ne [IntPtr]::Zero) {
+  $fs = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; `$f = New-Object System.Windows.Forms.Form; `$f.Text='架空の全画面'; `$f.FormBorderStyle='None'; `$f.WindowState='Maximized'; `$f.Show(); `$t=[DateTime]::Now; while(([DateTime]::Now-`$t).TotalSeconds -lt 8){ [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }"
+  Start-Sleep 5
+  Shot "3-fullscreen"
+  if (-not [W]::Top($h)) { Ok "全画面の窓があると最前面をやめる" } else { Bad "全画面の窓があっても最前面のまま" }
+  $fs | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
+  Start-Sleep 3
+  if ([W]::Top($h)) { Ok "全画面の窓が消えると最前面に戻る" } else { Bad "全画面の窓が消えても最前面に戻らない" }
+}
+
 # 窓を閉じても動いている（タスクバーのアイコンから開ける）
-$h = [W]::FindWindow($null, "PADDOCK GATE")
 if ($h -ne [IntPtr]::Zero) {
   [W]::PostMessage($h, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null   # WM_CLOSE
   Start-Sleep 3

@@ -9,7 +9,8 @@ export const IN_SHELL = () => !!inv();
 /* 開く前に：常に最前面を外し、開いたスライド・ファイルの窓が前に出られるようにする（GATE に戻ると最前面に戻る） */
 export async function shellBeforeOpen() {
   const f = inv(); if (!f) return;
-  try { await f("slide_opening"); } catch (e) { console.warn("slide_opening", e); }
+  // 窓が応えなくても、開くのは止めない（待つのは 300ms まで）
+  try { await Promise.race([f("slide_opening"), new Promise((r) => setTimeout(r, 300))]); } catch (e) { console.warn("slide_opening", e); }
 }
 /* 開けなかったとき：すぐ最前面に戻す */
 export async function shellOpenFailed() {
@@ -24,3 +25,6 @@ export async function shellSetPinned(on: boolean): Promise<boolean | null> {
   const f = inv(); if (!f) return null;
   try { return !!(await f("set_pinned", { on })); } catch { return null; }
 }
+
+/* 窓とつながったことを知らせる（設定前の画面でも） */
+setTimeout(() => { const f = inv(); if (f) f("get_pinned").catch(() => {}); }, 0);

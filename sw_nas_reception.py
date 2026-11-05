@@ -1422,6 +1422,7 @@ def main():
         mgr.stop()
         srv.server_close()
         srv.closed = True
+        W.remove_shell_key()
 
 
 # ---------------------------------------------------------------- UI（PADDOCK SCOUT の画面に足す部分）

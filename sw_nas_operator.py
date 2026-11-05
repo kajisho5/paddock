@@ -1971,15 +1971,21 @@ class Opener:
             raise ValueError("演者フォルダの指定が正しくありません")
         sub = W.op_sub(op, group)
         base = os.path.join(d["path"], *sub.split("/"))
-        fp = self.mgr.folder_payload(root, group)
-        files = [it for it in fp["items"] if not it.get("d") and not it.get("mk")]
         msg = ""
         target = None
-        if rel:
-            target = next((it for it in files if it["p"] == rel), None)
-            if not target:
+        if rel:   # 決まったファイル：そのファイルだけを確かめる（セッションのフォルダ直下のファイルでも、件数の多いフォルダでも見つかるように）
+            full = group + "/" + rel
+            w = self.mgr.watchers.get(root)
+            sig = None
+            if w:
+                with w.lock:
+                    sig = (w.current or {}).get(full)
+            if sig is None or sig == W.DIR or self.mgr.marker_of(full, sig):
                 raise ValueError("ファイルが見つかりません（NAS側で名前が変わった・消えた可能性）")
+            target = {"p": rel, "cp": self.mgr.copier.file_states([full]).get(full) or {}}
         elif how != "folder":
+            fp = self.mgr.folder_payload(root, group)
+            files = [it for it in fp["items"] if not it.get("d") and not it.get("mk")]
             top = pres_candidates(files)
             if len(top) == 1:
                 target = top[0]
@@ -2027,7 +2033,7 @@ class OpHandler(W.Handler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-                         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+                         "img-src 'self' data:; connect-src 'self' http://ipc.localhost ipc:; frame-ancestors 'none'; base-uri 'none'")   # ipc：Tauri 版の窓とのやりとり
         self.end_headers()
         self.wfile.write(body)
 
@@ -2247,6 +2253,7 @@ def main():
         mgr.stop()
         srv.server_close()
         srv.closed = True
+        W.remove_shell_key()
 
 
 # ---------------------------------------------------------------- 共有のワンボタン設定（管理者として実行する PowerShell）
