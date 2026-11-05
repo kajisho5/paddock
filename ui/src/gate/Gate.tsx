@@ -46,10 +46,10 @@ const stageOf = (root: string, g: string, gr?: Group): Stage | "" => STG.st[root
 const SYN = new Map<string, Group & { syn?: boolean }>();
 const gfind = (r: Root | null | undefined, key: string): (Group & { syn?: boolean }) | undefined =>
   r ? (r.groups || []).find((x) => x.key === key) || SYN.get(r.id + "|" + key) : undefined;
-const PRES_RE = /\.(pptx?|pptm|ppsx?|ppsm|potx?|potm|key|pdf)$/i;
+const PRES_RE = /\.(pptx|ppsx|pptm|ppsm|ppt|pps|key|pdf)$/i;   // サーバーの「開く」と同じ発表ファイル
 
 /* ---------------------------------------------------------------- データの組み立て */
-interface Ses { key: string; name: string; day: string; t: STime | null; list: Group[]; custom?: boolean; loose?: [string, number, number, Record<string, CpState>?][]; flat?: boolean }
+interface Ses { key: string; name: string; day: string; t: STime | null; list: Group[]; custom?: boolean; loose?: [string, number, number, Record<string, CpState>?][]; flat?: boolean; pend?: Set<string>; aux?: boolean }
 /* 当日の発表順の変更（このPCに保存。NAS のフォルダ名は変えない） */
 let ORDER: Record<string, string[]> = {};
 try { ORDER = JSON.parse(localStorage.getItem("gate.order") || "{}") || {}; } catch { ORDER = {}; }
@@ -60,11 +60,13 @@ function saveOrder(rootId: string, ses: Ses, keys: string[] | null) {
 }
 function moveRow(rootId: string, ses: Ses, key: string, to: number) {
   const keys = ses.list.map((g) => g.key); const from = keys.indexOf(key); if (from < 0) return;
+  if (Math.max(0, Math.min(keys.length - 1, to)) === from) return;   // 動いていない（同じ場所に落とした）
   keys.splice(from, 1); keys.splice(Math.max(0, Math.min(keys.length, to)), 0, key); saveOrder(rootId, ses, keys);
 }
 interface Model { r: Root; days: string[]; day: string; dayMode: "op" | "path" | ""; sessions: Ses[]; tl: Map<string, SStat> }
 function build(): Model | null {
   const S = store.S; if (!S) return null; const o = S.op; const r = rootById(o.root || ""); if (!r) return null;
+  SYN.clear();   // 演者フォルダの無いセッションの演者は、毎回作り直す（消えたファイルを残さない）
   let dayMode: Model["dayMode"] = ""; let days: string[] = []; let day = "";
   if ((o.days || []).length) { dayMode = "op"; days = o.days!.slice(); day = o.day || days[0]; }
   else {
@@ -85,7 +87,7 @@ function build(): Model | null {
     const p = parts(r, probe); const k = p.sesKey;
     if (k !== sd.key) continue;
     if (!m.has(k)) { if (!p.ses) continue; m.set(k, { key: k, name: p.ses, day: p.day, t: sesTime(p.ses), list: [] }); }
-    if (sd.loose.length) m.get(k)!.loose = sd.loose;
+    if (sd.loose.length) { m.get(k)!.loose = sd.loose; if (sd.pend?.length) m.get(k)!.pend = new Set(sd.pend); }
   }
   // 演者フォルダが1つも無く、発表ファイルが直接置かれているセッション：ファイル1つ＝演者1人として並べる（名前順）
   for (const x of m.values()) {
@@ -96,26 +98,40 @@ function build(): Model | null {
       const key = x.key + "/" + name; const sk = r.id + "|" + key;
       const ext = (name.match(/\.([^.]+)$/) || ["", ""])[1].toLowerCase();
       const cat = ext === "key" ? "KEY" : ext === "pdf" ? "PDF" : "PPT";
-      const g: Group & { syn?: boolean } = { key, files: 1, size, mtime: mt, unread: 0, cats: { [cat]: 1 }, cp: cp || undefined, cpp: cp || undefined, syn: true } as Group & { syn?: boolean };
+      const g: Group & { syn?: boolean } = { key, files: 1, size, mtime: mt, unread: 0, cats: { [cat]: 1 }, cp: cp || undefined, cpp: cp || undefined, syn: true,
+        pending: x.pend?.has(name) ? 1 : 0, pbytes: x.pend?.has(name) ? size : undefined } as Group & { syn?: boolean };
       SYN.set(sk, g); return g;
     });
     x.loose = x.loose.filter((f) => !PRES_RE.test(f[0]));   // 残り（動画・資料など）は、これまでどおり上の枠に
     x.flat = true;
   }
-  // 並び：全部に時刻があれば時刻順、時刻のないセッションが混じるときは名前順（S01・S02… の番号順）
-  const all = [...m.values()]; const timed = all.filter((x) => !sesEmpty(x)).every((x) => x.t);   // 時刻の無い空のフォルダ（「資料」など）は並びの決め方に入れない
-  const sessions = all.sort((a, b) => cmpDay(a.day, b.day) || (timed ? (a.t ? 0 : 1) - (b.t ? 0 : 1) || (a.t && b.t ? a.t.s - b.t.s : 0) : 0) || cmpPath(a.name, b.name));
+  // 並び：全部に時刻があれば時刻順、時刻のないセッションが混じるときは名前順（S01・S02… の番号順）。
+  // 時刻の無い「資料」「共通」「休憩」などのフォルダは、並びの決め方に入れず最後に置く（自動では選ばない）
+  const all = [...m.values()]; for (const x of all) x.aux = !x.t && AUX_RE.test(nfc(x.name.split("/").pop()));
+  const timed = all.filter((x) => !sesEmpty(x) && !x.aux).every((x) => x.t);
+  const sessions = all.sort((a, b) => cmpDay(a.day, b.day) || (a.aux ? 1 : 0) - (b.aux ? 1 : 0) || (timed ? (a.t ? 0 : 1) - (b.t ? 0 : 1) || (a.t && b.t ? a.t.s - b.t.s : 0) : 0) || cmpPath(a.name, b.name));
   sessions.forEach((x) => {
     x.list.sort((a, b) => cmpPath(a.key, b.key));
     const o = ORDER[r.id + "|" + x.key];   // 当日の順番変更（このPCだけ）
-    if (o && o.length) { const pos = new Map(o.map((k, i) => [k, i])); const base = new Map(x.list.map((g, i) => [g.key, i]));
-      x.list.sort((a, b) => (pos.has(a.key) && pos.has(b.key) ? pos.get(a.key)! - pos.get(b.key)! : base.get(a.key)! - base.get(b.key)!)); x.custom = true; }
+    if (o && o.length) x.list = mergeOrder(o, x.list), x.custom = true;
   });
   // 進行中・次：選んでいる日が「今日」のときだけ（日付の名前でなければ、選んでいる日を今日とみなす）
   const today = dayMode === "op" ? (days.find(isTodayLabel) || day) : todayDay(days, day);
   const tl = !days.length || day === today ? sesStatus(sessions.filter((x) => x.t).map((x) => ({ key: x.key, t: x.t! })).sort((a, b) => a.t.s - b.t.s)) : new Map<string, SStat>();
   return { r, days, day, dayMode, sessions, tl };
 }
+/* 手で並べ替えた順に、あとから増えた演者を入れる：名前順でひとつ前の人のすぐ後ろへ（並べ替えた順は崩さない） */
+function mergeOrder(o: string[], list: Group[]): Group[] {
+  const by = new Map(list.map((g) => [g.key, g])); const out = o.filter((k) => by.has(k)).map((k) => by.get(k)!);
+  const inO = new Set(out.map((g) => g.key)); let prev: string | null = null;
+  for (const g of list) {   // list は名前順
+    if (!inO.has(g.key)) { const at = prev == null ? 0 : out.findIndex((x) => x.key === prev) + 1; out.splice(at, 0, g); inO.add(g.key); }
+    prev = g.key;
+  }
+  return out;
+}
+/* 時刻の無い、発表のセッションではないフォルダ（資料・共通・休憩・事務局・座長 など） */
+const AUX_RE = /^(?:[\d_\-.\s]*)(?:資料|共通|休憩|事務局|座長|予備|その他|控室|受付|運営|案内|告知|common|misc|other|break|staff|office|backup)/i;
 /* セッション名から時刻（0900-1030 / 9:00〜10:30 など）を除いた表示名。時刻は別に出す */
 const T_RE = /\s*(?:\d{1,2}:?\d{2}\s*[-~〜ー−–—]+\s*\d{1,2}:?\d{2}|\d{1,2}時(?:\d{1,2}分?)?\s*[-~〜ー−–—]+\s*\d{1,2}時(?:\d{1,2}分?)?)\s*/;
 const sesLabel = (x: { name: string; t: STime | null }) => {
@@ -162,7 +178,7 @@ function RIcon({ k }: { k: RC | "done" | "live" | "progress" }) {
 const mainDest = () => OPEN.dest?.id || opDests()[0]?.id || "";
 function copyOf(g: Group): { k: "ok" | "run" | "wait" | "bad" | "none"; t: string; pct?: number; tip?: string } {
   const S = store.S!; const a = S.op.active;
-  if (a && a.rel.startsWith(g.key + "/") && (!a.dests || a.dests.includes(mainDest()))) { const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; return { k: "run", t: "コピー中 " + pct + "%", pct }; }
+  if (a && (a.rel.startsWith(g.key + "/") || a.rel === g.key) && (!a.dests || a.dests.includes(mainDest()))) { const pct = a.total ? Math.floor((a.done * 100) / a.total) : 0; return { k: "run", t: "コピー中 " + pct + "%", pct }; }
   if (g.pending) {   // NASへ書き込み中：受信済みサイズ・速度・経過時間
     const r = rootById(S.op.root || ""); const v = r ? rateOf(r.id, g) : 0;
     return { k: "run", t: (canOpen(g) ? "DL済・差し替えを受信中" : "NASに受信中") + (g.pbytes ? " " + fmtSize(g.pbytes) : ""),
@@ -233,7 +249,8 @@ try { const v = localStorage.getItem("gate.ses"); if (v) { GS.ses = v; GS.auto =
 function sesDone(M: Model, x: Ses) { const L = x.list.filter((g) => !g.mk_drop); return L.length > 0 && L.every((g) => stageOf(M.r.id, g.key, g) === "done"); }
 /* 終わったセッションの次（まだ終わっていないもの） */
 const sesEmpty = (x: Ses) => !x.list.length && !x.loose?.length;   // 演者フォルダもファイルも無い（自動で選ばない）
-function sesAfter(M: Model, x: Ses): Ses | null { const i = M.sessions.indexOf(x); return M.sessions.slice(i + 1).find((y) => !sesDone(M, y) && !sesEmpty(y)) || null; }
+const sesSkip = (x: Ses) => sesEmpty(x) || !!x.aux;   // 自動で選ばない：空のフォルダ・「資料」などのフォルダ
+function sesAfter(M: Model, x: Ses): Ses | null { const i = M.sessions.indexOf(x); return M.sessions.slice(i + 1).find((y) => !sesDone(M, y) && !sesSkip(y)) || null; }
 function liveSes(M: Model): Ses | null {
   return M.sessions.find((x) => x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now")) || M.sessions.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x)) || null;
 }
@@ -254,14 +271,14 @@ function curSes(M: Model): Ses | null {
   const hit = !GS.auto && ss.find((x) => x.key === GS.ses); if (hit) return hit;
   const now = ss.find((x) => x.list.some((g) => STG.st[M.r.id + "|" + g.key]?.st === "now"));   // 発表中の人がいるセッション（時間が延びていても）
   if (now) return now;
-  const live = ss.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x) && !sesEmpty(x)) || ss.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x));
+  const live = ss.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x) && !sesSkip(x)) || ss.find((x) => M.tl.get(x.key)?.st === "live" && !sesDone(M, x));
   if (live) return live;
   let ld = -1; ss.forEach((x, i) => { if (sesDone(M, x)) ld = i; });   // 終了にしたセッションの次（時刻より早く終わったとき・時刻がないとき）
-  const aft = ld >= 0 ? ss.slice(ld + 1).find((x) => !sesDone(M, x) && !sesEmpty(x)) : undefined;
+  const aft = ld >= 0 ? ss.slice(ld + 1).find((x) => !sesDone(M, x) && !sesSkip(x)) : undefined;
   if (aft) return aft;
   const nxt = ss.find((x) => M.tl.get(x.key)?.st === "next" && !sesDone(M, x));
   if (nxt) return nxt;
-  const real = ss.filter((x) => !sesEmpty(x)); const rs = real.length ? real : ss;   // 空のフォルダ（「資料」など）は数えない
+  const real = ss.filter((x) => !sesSkip(x)); const rs = real.length ? real : ss;   // 空のフォルダ・「資料」などのフォルダは数えない
   if (ld >= 0 && rs.every((x) => sesDone(M, x))) return rs[rs.length - 1];
   return M.tl.size && rs.every((x) => !M.tl.has(x.key) || M.tl.get(x.key)!.st === "done") && [...M.tl.values()].some((x) => x.st === "done") ? rs[rs.length - 1] : rs[0];
 }
@@ -295,7 +312,12 @@ export function GateApp() {
       try {
         const j: any = await api("/api/op/remote?since=" + Math.max(0, since));
         if (since < 0) since = j.seq;   // 開いた時より前の操作は実行しない
-        for (const c of j.cmds || []) { if (c.seq <= since) continue; since = c.seq; runRemote(c.cmd, ref.current); }
+        let moved = false;   // 1回に届いた分では、次へ・戻すは1回だけ（押しすぎ・二重送信で何人も進めない）
+        for (const c of j.cmds || []) {
+          if (c.seq <= since) continue; since = c.seq;
+          if (c.cmd === "next" || c.cmd === "prev") { if (moved || Date.now() - lastR < 700) continue; moved = true; lastR = Date.now(); }
+          runRemote(c.cmd, ref.current);
+        }
         const { M: m, live: lv, pair: pr } = ref.current;
         const st = JSON.stringify({ now: pr.cur ? nameOf(pr.cur).name : "", next: pr.nx ? nameOf(pr.nx).name : "", session: lv ? sesLabel(lv) : "", venue: m ? nfc(store.S?.op.venue || "") : "" });
         if (st !== last) { last = st; api("/api/op/remote/status", JSON.parse(st)).catch(() => { last = ""; }); }
@@ -322,6 +344,15 @@ export function GateApp() {
     };
     document.addEventListener("keydown", k, true); return () => document.removeEventListener("keydown", k, true);   // 先に受ける（Esc を二重に使わない）
   });
+  /* マウスで押したボタンには選択（フォーカス）を残さない：そのあとの Enter で「選んでいる人を発表中に」が効くように */
+  useEffect(() => {
+    const c = (e: MouseEvent) => {
+      if (e.detail === 0) return;   // キーボードで押した
+      const b = (e.target as HTMLElement).closest?.("button"); if (!b || !b.closest(".gate") || b.closest(".gmenu,[role=dialog]")) return;
+      window.setTimeout(() => { if (document.activeElement === b) b.blur(); }, 0);
+    };
+    document.addEventListener("click", c, true); return () => document.removeEventListener("click", c, true);
+  }, []);
   return <div className={cx("gate", s.logOpen && "showlog")}>
     <Side M={M} ses={ses} onMenu={(x, y, k) => setMenu({ x, y, g: "", s: k })} />
     <TopBar M={M} ses={ses} />
@@ -356,10 +387,10 @@ function runRemote(cmd: string, c: { M: Model | null; ses: Ses | null; live: Ses
     if (!p) return; const cur = i >= 0 ? L[i] : undefined;
     setStage(M.r.id, p.key, "now"); if (cur) setStage(M.r.id, cur.key, ""); selectGroup(M.r.id, p.key); return;
   }
-  const g = c.pair.cur || c.pair.nx; if (!g) { toast("開く演者がいません（発表中の人がいません）", 3000); return; }
+  const g = c.pair.cur || c.pair.nx; if (!g) { toast("開ける演者がいません（発表中・次の人がいません）", 3000); return; }
   opOpen(M.r.id, g.key, "", cmd === "file" ? "file" : cmd === "folder" ? "folder" : "show");
 }
-let lastN = 0; let warnN = 0;
+let lastN = 0; let warnN = 0; let lastR = 0;
 function pressFx(id: string) {   // キーで押したときも、ボタンが押されたように見せる
   const el = document.getElementById(id); if (!el) return;
   el.classList.remove("kpress"); void el.offsetWidth; el.classList.add("kpress");
@@ -689,7 +720,7 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
     const fin = sesDone(M, sx); const any = sx.list.some((x) => STG.st[M.r.id + "|" + x.key]);
     return <div className="gmenu" ref={ref} role="menu" style={{ left: pos.x, top: pos.y }} onKeyDown={onKey} id="gmenu">
       <div className="hd">{sesLabel(sx)}</div>
-      {!fin && it("セッションを終了にする（全員を発表済みに）", () => endSes(M, sx), { ic: <RIcon k="done" />, id: "mSesEnd" })}
+      {!fin && sx.list.some((x) => !x.mk_drop) && it("セッションを終了にする（全員を発表済みに）", () => endSes(M, sx), { ic: <RIcon k="done" />, id: "mSesEnd" })}
       {any && it(fin ? "終了を取り消す（全員を未発表に戻す）" : "全員を未発表に戻す", () => reopenSes(M, sx), { ic: <Icon n="chevL" />, id: "mSesReopen" })}
       {it("このセッションを表示", () => pickSes(sx.key), { ic: <Icon n="chev" /> })}
     </div>;
@@ -697,7 +728,7 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
   if (!g) return null;
   return <div className="gmenu" ref={ref} role="menu" style={{ left: pos.x, top: pos.y }} onKeyDown={onKey} id="gmenu">
     <div className="hd">{nameOf(g).no} {nameOf(g).name}</div>
-    {st !== "now" && it("発表中にする", () => setStage(M.r.id, g.key, "now"), { k: "Enter", ic: <RIcon k="live" />, id: "mNow" })}
+    {st !== "now" && !g.mk_drop && it("発表中にする", () => setStage(M.r.id, g.key, "now"), { k: "Enter", ic: <RIcon k="live" />, id: "mNow" })}
     {st !== "done" && it("発表済みにする", () => setStage(M.r.id, g.key, "done"), { ic: <RIcon k="done" />, id: "mDone" })}
     {STG.st[M.r.id + "|" + g.key] && it("未発表に戻す", () => setStage(M.r.id, g.key, ""), { ic: <Icon n="chevL" />, id: "mReset" })}
     {!s0.q && (() => { const ss = curSes(M); const ix = ss ? ss.list.findIndex((x) => x.key === g.key) : -1; return ss && ix >= 0 ? <>
@@ -828,7 +859,7 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
     {ws.length > 0 && <div className="gwarn" role="alert"><RIcon k="error" /><div>{ws.map((w, i) => <div key={i}><b>{w[0]}</b><span>{w[1]}</span></div>)}</div></div>}
     {memo.length > 0 && <><div className="sec">メモ</div>{memo.map((m, i) => <div key={i} className="gmemo"><small>{nfc(m.p)}</small>
       {m.pending ? <span className="dim">受信中</span> : m.error != null ? <span className="dim">読めませんでした</span> : <pre>{m.text || "（空のファイル）"}</pre>}</div>)}</>}
-    {(fl.length > 0 || g.repl || g.ana) && <><div className="sec">会場での対応</div><div className="gmarks">
+    {!!(fl.length > 0 || g.repl || g.ana) && <><div className="sec">会場での対応</div><div className="gmarks">
       {ops.length > 0 && <div className="g"><b>オペ</b>{ops.map((f) => <span key={f[0]} className="gt" data-k="op">{nfc(f[0])}</span>)}</div>}
       {(oth.length > 0 || g.repl || (g.ana && (g.ana.video || g.ana.coi || g.ana.auto))) && <div className="g"><b>ファイル</b>
         {g.repl ? <span className="gt" data-k="repl">差替 {g.repl}</span> : null}

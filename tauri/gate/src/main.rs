@@ -37,6 +37,8 @@ struct Shared {
     dropped: AtomicBool,       // 開くために一時的に最前面を外している
     blurred: AtomicBool,       // 外したあと、ほかの窓に移った
     applied: AtomicBool,       // いま実際に最前面にしているか
+    suppressed: AtomicBool,    // 同じ画面の全画面の窓（スライドショーなど）のために、最前面をやめている
+    dropped_at: Mutex<Option<Instant>>, // 最前面を外した時刻
     quitting: AtomicBool,
     restarts: AtomicU32,
     child: Mutex<Option<Child>>,
@@ -73,8 +75,17 @@ impl Shared {
     }
 }
 
+/// 開発・試験用の環境変数（配布するもの＝release ビルドでは読まない）
+fn dev_env(k: &str) -> Option<String> {
+    if cfg!(debug_assertions) {
+        std::env::var(k).ok()
+    } else {
+        None
+    }
+}
+
 fn exe_dir() -> PathBuf {
-    if let Ok(d) = std::env::var("PADDOCK_DIR") {
+    if let Some(d) = dev_env("PADDOCK_DIR") {
         return PathBuf::from(d); // 開発・試験用
     }
     std::env::current_exe()
@@ -174,11 +185,11 @@ fn port_busy(port: u16) -> bool {
 fn plain_message(title: &str, msg: &str) {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_TOPMOST};
         let w = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
         let (t, m) = (w(title), w(msg));
         unsafe {
-            MessageBoxW(std::ptr::null_mut(), m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+            MessageBoxW(std::ptr::null_mut(), m.as_ptr(), t.as_ptr(), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
         }
     }
     #[cfg(not(windows))]
@@ -195,8 +206,8 @@ fn log_tail(path: &Path) -> String {
 /// エンジンを起動する（窓が無い・黒い画面を出さない）。fallback=true は WebView2 が無いときのこれまでの形
 fn spawn_engine(st: &Shared, fallback: bool) -> Result<(Child, PathBuf), String> {
     let rt = st.runtime();
-    let (py, app): (PathBuf, PathBuf) = match (std::env::var("PADDOCK_PYTHON"), std::env::var("PADDOCK_APP")) {
-        (Ok(p), Ok(a)) => (PathBuf::from(p), PathBuf::from(a)), // 開発・試験用
+    let (py, app): (PathBuf, PathBuf) = match (dev_env("PADDOCK_PYTHON"), dev_env("PADDOCK_APP")) {
+        (Some(p), Some(a)) => (PathBuf::from(p), PathBuf::from(a)), // 開発・試験用
         _ => {
             let core = rt.join("python").join(CORE_EXE);
             let py = if core.is_file() { core } else { rt.join("python").join("python.exe") };
@@ -210,8 +221,8 @@ fn spawn_engine(st: &Shared, fallback: bool) -> Result<(Child, PathBuf), String>
         ));
     }
     let _ = fs::create_dir_all(&rt);
-    if !fallback {
-        let _ = fs::remove_file(st.key_file()); // 前に止まったときの鍵は使わない
+    if !fallback && !port_busy(st.port) {
+        let _ = fs::remove_file(st.key_file()); // 前に止まったときの鍵は使わない（動いているエンジンの鍵は消さない）
     }
     // 記録：ほかで書いている最中のもの（起動中のもう1つ）は消さない
     let mut logp = rt.join("last_run.log");
@@ -219,6 +230,8 @@ fn spawn_engine(st: &Shared, fallback: bool) -> Result<(Child, PathBuf), String>
     for k in 1..=5 {
         if k > 1 {
             logp = rt.join(format!("last_run_{}.log", k));
+        } else {
+            let _ = fs::rename(&logp, rt.join("last_run.prev.log")); // 1つ前の記録も残す（止まった原因を見られるように）
         }
         if let Ok(f) = OpenOptions::new().write(true).create(true).truncate(true).open(&logp) {
             out = Some(f);
@@ -270,8 +283,12 @@ fn show_main(app: &AppHandle) {
 }
 
 /// 最前面にしてよいか：設定がオン・開いている最中でない・同じ画面に全画面の窓（スライドショーなど）が無い
-fn want_top(st: &Shared, hwnd: isize) -> bool {
-    st.pinned.load(Ordering::SeqCst) && !st.dropped.load(Ordering::SeqCst) && !fullscreen_beside(hwnd)
+fn want_top(st: &Shared, hwnd: isize) -> (bool, isize) {
+    if !st.pinned.load(Ordering::SeqCst) || st.dropped.load(Ordering::SeqCst) {
+        return (false, 0);
+    }
+    let fs = fullscreen_beside(hwnd);
+    (fs == 0, fs)
 }
 
 fn hwnd_of(w: &tauri::Window) -> isize {
@@ -304,28 +321,50 @@ fn is_top(st: &Shared, w: &tauri::Window) -> bool {
 
 /// 最前面を、あるべき状態にそろえる（メインのスレッドで呼ぶ）
 fn refresh_top(st: &Shared, w: &tauri::Window) {
-    let on = want_top(st, hwnd_of(w));
+    let h = hwnd_of(w);
+    let (on, fs) = want_top(st, h);
     if is_top(st, w) != on {
         let _ = w.set_always_on_top(on);
+    }
+    // 全画面の窓が出たとき（1回だけ）：GATE をその窓の下へ回す（最前面をやめただけでは、スライドショーの上に残るため）
+    let sup = fs != 0;
+    if sup && !st.suppressed.swap(true, Ordering::SeqCst) {
+        st.note("全画面の窓があるため、最前面をやめて後ろへ回します");
+        place_below(h, fs);
+    } else if !sup {
+        st.suppressed.store(false, Ordering::SeqCst);
     }
     st.applied.store(on, Ordering::SeqCst);
 }
 
-/// GATE と同じ画面に、全画面の窓（PowerPoint のスライドショー・動画の全画面など）があるか。
+#[cfg(windows)]
+fn place_below(gate: isize, other: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE};
+    if gate != 0 && other != 0 {
+        unsafe {
+            SetWindowPos(gate as _, other as _, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn place_below(_gate: isize, _other: isize) {}
+
+/// GATE と同じ画面に、全画面の窓（PowerPoint のスライドショー・動画の全画面など）があるか（あればその窓、無ければ 0）。
 /// あれば最前面にしない（演者が自分で始めたスライドショーの上にも GATE を重ねない）
 #[cfg(windows)]
-fn fullscreen_beside(gate: isize) -> bool {
+fn fullscreen_beside(gate: isize) -> isize {
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
     use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
     if gate == 0 {
-        return false;
+        return 0;
     }
     struct Ctx {
         gate: isize,
         grect: RECT,
-        found: bool,
+        found: isize,
     }
     unsafe extern "system" fn cb(h: HWND, l: LPARAM) -> BOOL {
         let c = &mut *(l as *mut Ctx);
@@ -367,7 +406,7 @@ fn fullscreen_beside(gate: isize) -> bool {
         // その画面と GATE の窓が重なっているか（GATE が2つの画面にまたがっていても見つける）
         let g = &c.grect;
         if g.left < m.right && g.right > m.left && g.top < m.bottom && g.bottom > m.top {
-            c.found = true;
+            c.found = h as isize;
             return 0;
         }
         1
@@ -375,17 +414,17 @@ fn fullscreen_beside(gate: isize) -> bool {
     unsafe {
         let mut grect: RECT = std::mem::zeroed();
         if GetWindowRect(gate as HWND, &mut grect) == 0 {
-            return false;
+            return 0;
         }
-        let mut c = Ctx { gate, grect, found: false };
+        let mut c = Ctx { gate, grect, found: 0 };
         EnumWindows(Some(cb), &mut c as *mut Ctx as LPARAM);
         c.found
     }
 }
 
 #[cfg(not(windows))]
-fn fullscreen_beside(_gate: isize) -> bool {
-    false
+fn fullscreen_beside(_gate: isize) -> isize {
+    0
 }
 
 /// 最前面の状態を 1 秒ごとに見直す（全画面の窓が出た・消えた）。そろえるのはメインのスレッドで
@@ -396,17 +435,31 @@ fn top_loop(app: AppHandle, st: Arc<Shared>) {
         let (a, s2) = (app.clone(), Arc::clone(&st));
         let _ = app.run_on_main_thread(move || {
             if let Some(w) = main_window(&a) {
-                refresh_top(&s2, &w.as_ref().window());
+                // 外したまま GATE に戻らなかった（ほかの PC からの操作で開いた など）：しばらくしたら戻す
+                let late = s2.dropped_at.lock().ok().and_then(|g| g.map(|t| t.elapsed() > DROP_LIMIT)).unwrap_or(false);
+                if s2.dropped.load(Ordering::SeqCst) && late {
+                    s2.note("最前面に戻します（開いてからしばらくたったため）");
+                    restore_pin(&s2, &w);
+                } else {
+                    refresh_top(&s2, &w.as_ref().window());
+                }
             }
         });
     }
 }
 
+const DROP_LIMIT: Duration = Duration::from_secs(20); // 外したあと、この時間で最前面に戻す
+const DROP_GRACE: Duration = Duration::from_secs(8);  // 外した直後は、GATE に戻っても最前面にしない（開いた窓が出てくるまで）
+
 /// 開く前：常に最前面を外し、エンジン（別のプロセス）が開いた窓を前に出せるようにする
 fn drop_for_open(st: &Shared, w: &WebviewWindow) {
     if st.pinned.load(Ordering::SeqCst) {
         st.dropped.store(true, Ordering::SeqCst);
-        st.blurred.store(false, Ordering::SeqCst);
+        // GATE が前にいないときに開いた（ほかの PC からの操作など）：もう「ほかの窓に移った」とみなす
+        st.blurred.store(!w.is_focused().unwrap_or(true), Ordering::SeqCst);
+        if let Ok(mut g) = st.dropped_at.lock() {
+            *g = Some(Instant::now());
+        }
         let _ = w.set_always_on_top(false);
     }
     #[cfg(windows)]
@@ -418,6 +471,9 @@ fn drop_for_open(st: &Shared, w: &WebviewWindow) {
 
 fn restore_pin(st: &Shared, w: &WebviewWindow) {
     st.dropped.store(false, Ordering::SeqCst);
+    if let Ok(mut g) = st.dropped_at.lock() {
+        *g = None;
+    }
     st.blurred.store(false, Ordering::SeqCst);
     refresh_top(st, &w.as_ref().window());
 }
@@ -469,11 +525,19 @@ fn set_pinned(on: bool, app: AppHandle, st: State<'_, Arc<Shared>>) -> bool {
 struct PinItem(CheckMenuItem<tauri::Wry>);
 
 // ---------------------------------------------------------------- 終了
+/// 知らせる窓（GATE の窓の上に出す。隠れていたら先に出す）
+fn dlg(app: &AppHandle, msg: impl Into<String>) -> tauri_plugin_dialog::MessageDialogBuilder<tauri::Wry> {
+    show_main(app);
+    let b = app.dialog().message(msg);
+    match main_window(app) {
+        Some(w) => b.parent(&w),
+        None => b,
+    }
+}
+
 fn ask_quit(app: &AppHandle) {
     let app2 = app.clone();
-    show_main(app);
-    app.dialog()
-        .message("コピーも止まります（コピー中のファイルは次に起動したときにやり直します）。")
+    dlg(app,"コピーも止まります（コピー中のファイルは次に起動したときにやり直します）。")
         .title(format!("{} を終了しますか？", APP))
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom("終了".into(), "キャンセル".into()))
@@ -499,7 +563,7 @@ fn do_quit(app: AppHandle) {
                 .ok()
                 .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
                 .unwrap_or(body);
-            app.dialog().message(msg).title(APP).kind(MessageDialogKind::Info).show(|_| {});
+            dlg(&app, msg).title(APP).kind(MessageDialogKind::Info).show(|_| {});
             return;
         }
         None if !ping(st.port) => {
@@ -507,8 +571,7 @@ fn do_quit(app: AppHandle) {
         }
         other => {
             st.note(&format!("終了を頼めませんでした: {:?}", other.map(|x| x.0)));
-            app.dialog()
-                .message("終了できませんでした。画面の左下の［終了］（電源のボタン）で終了してください。")
+            dlg(&app, "終了できませんでした。画面の左下の［終了］（電源のボタン）で終了してください。")
                 .title(APP)
                 .kind(MessageDialogKind::Warning)
                 .show(|_| {});
@@ -517,8 +580,13 @@ fn do_quit(app: AppHandle) {
     }
     // エンジンが止まるのを待ってから閉じる（最大 15 秒）
     let t0 = Instant::now();
-    while t0.elapsed() < Duration::from_secs(15) && ping(st.port) {
+    while t0.elapsed() < Duration::from_secs(15) && port_busy(st.port) {
         thread::sleep(Duration::from_millis(300));
+    }
+    if port_busy(st.port) {
+        // まだ終わっていない（コピーの片付けなど）：窓は閉じずに待つ（エンジンが止まったら見守りの処理が閉じる）
+        st.note("終了：エンジンがまだ動いています。止まるまで待ちます");
+        return;
     }
     app.exit(0);
 }
@@ -526,8 +594,10 @@ fn do_quit(app: AppHandle) {
 // ---------------------------------------------------------------- エンジンを見守る
 fn fail(app: &AppHandle, msg: String) {
     let app2 = app.clone();
-    app.dialog()
-        .message(msg)
+    if let Some(st) = app.try_state::<Arc<Shared>>() {
+        st.note(&format!("止まりました: {}", msg.lines().next().unwrap_or("")));
+    }
+    dlg(app, msg)
         .title(format!("{} が止まりました", APP))
         .kind(MessageDialogKind::Error)
         .show(move |_| app2.exit(1));
@@ -537,6 +607,19 @@ fn start_and_watch(app: AppHandle, st: Arc<Shared>) {
     // 1. エンジンを起動して、応えるまで待つ（同じ版がもう動いていれば、それにつなぐ）
     let mut logp = st.runtime().join("last_run.log");
     let mut spawned = false;
+    if !ping(st.port) && port_busy(st.port) {
+        // ポートは使われているが GATE のエンジンが応えない：少し待つ（重い処理の最中のエンジンかもしれない）
+        let t0 = Instant::now();
+        while !ping(st.port) && port_busy(st.port) && t0.elapsed() < Duration::from_secs(12) {
+            thread::sleep(Duration::from_millis(500));
+        }
+        if !ping(st.port) && port_busy(st.port) {
+            return fail(&app, format!(
+                "このPCのポート {} を、ほかのアプリが使っています。\n\nほかのアプリ（または前に起動した PADDOCK GATE）を終了してから、もう一度起動してください。",
+                st.port
+            ));
+        }
+    }
     match ping_version(st.port) {
         Some(v) if v == VERSION => st.note("エンジンはもう動いています（つなぎます）"),
         _ => match spawn_engine(&st, false) {
@@ -604,15 +687,20 @@ fn start_and_watch(app: AppHandle, st: Arc<Shared>) {
             app.exit(0);
             return;
         }
-        let gone = {
+        // 止まったか・きちんと終わったか：自分が起動したエンジンは終了コードで、外で動いていたエンジンは鍵のファイルで見分ける
+        let (gone, clean) = {
             let mut g = st.child.lock().unwrap();
             match g.as_mut().map(|c| c.try_wait()) {
-                Some(Ok(None)) => false, // 自分が起動したエンジンがまだ動いている（応えないだけ）
-                Some(_) => {
+                Some(Ok(None)) => (false, false), // 自分が起動したエンジンがまだ動いている（応えないだけ）
+                Some(Ok(Some(code))) => {
                     *g = None;
-                    true
+                    (true, code.success() && !st.key_file().exists())
                 }
-                None => !port_busy(st.port), // 外で動いていたエンジン：ポートが空いたら止まった
+                Some(Err(_)) => {
+                    *g = None;
+                    (true, !st.key_file().exists())
+                }
+                None => (!port_busy(st.port), !st.key_file().exists()), // 外で動いていたエンジン：ポートが空いたら止まった
             }
         };
         if !gone {
@@ -621,7 +709,7 @@ fn start_and_watch(app: AppHandle, st: Arc<Shared>) {
             }
             continue;
         }
-        if !st.key_file().exists() {
+        if clean {
             st.note("エンジンが終了しました（画面の［終了］など）");
             app.exit(0);
             return;
@@ -708,7 +796,21 @@ fn selftest(app: AppHandle, st: Arc<Shared>) {
     st.note("試験の結果を書きました");
 }
 
-// ---------------------------------------------------------------- WebView2 が無いとき
+// ---------------------------------------------------------------- WebView2 が無いとき・窓を作れないとき
+/// これまでの形で動かし、エンジンが止まるまで待つ（エラーで止まったら知らせる）
+fn fallback_run(st: &Shared) {
+    match spawn_engine(st, true) {
+        Err(e) => plain_message(APP, &e),
+        Ok((mut c, logp)) => match c.wait() {
+            Ok(code) if !code.success() => {
+                st.note(&format!("エンジンがエラーで止まりました（{:?}）", code.code()));
+                plain_message(APP, &format!("PADDOCK GATE が止まりました（終了コード {:?}）。\n\n{}\n\n記録: {}", code.code(), log_tail(&logp), logp.display()));
+            }
+            _ => {}
+        },
+    }
+}
+
 fn webview_missing() -> bool {
     #[cfg(windows)]
     {
@@ -722,7 +824,7 @@ fn webview_missing() -> bool {
 
 fn main() {
     let dir = exe_dir();
-    let port = std::env::var("PADDOCK_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
+    let port = dev_env("PADDOCK_PORT").and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
     let _ = fs::create_dir_all(dir.join("runtime"));
     let log = OpenOptions::new().create(true).append(true).open(dir.join("runtime").join("shell.log")).ok();
     let pinned = fs::read_to_string(dir.join("runtime").join("shell.json"))
@@ -737,6 +839,8 @@ fn main() {
         dropped: AtomicBool::new(false),
         blurred: AtomicBool::new(false),
         applied: AtomicBool::new(pinned),
+        suppressed: AtomicBool::new(false),
+        dropped_at: Mutex::new(None),
         quitting: AtomicBool::new(false),
         restarts: AtomicU32::new(0),
         child: Mutex::new(None),
@@ -745,14 +849,23 @@ fn main() {
         ipc_seen: AtomicBool::new(false),
     });
     st.note(&format!("{} v{} 起動（ポート {}）", APP, VERSION, port));
+    {
+        // 思わぬ止まり方をしたときも記録に残す
+        let lp = st.runtime().join("shell.log");
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&lp) {
+                let _ = writeln!(f, "[panic] {}", info);
+            }
+            prev(info);
+        }));
+    }
 
     if webview_missing() {
         // これまでの形で動かす（エンジンが Chrome / Edge の窓とタスクバーのアイコンを出す）
         st.note("WebView2 が無いため、これまでの形（Chrome / Edge の窓）で起動します");
         // すでに動いていれば、エンジンが自分で画面を開いて終わる
-        if let Err(e) = spawn_engine(&st, true) {
-            plain_message(APP, &e);
-        }
+        fallback_run(&st);
         return;
     }
 
@@ -770,6 +883,10 @@ fn main() {
                     let t0 = Instant::now();
                     while (ping(port) || port_busy(port)) && t0.elapsed() < Duration::from_secs(40) {
                         thread::sleep(Duration::from_millis(300));
+                    }
+                    if ping(port) || port_busy(port) {
+                        plain_message(APP, &format!("前の版（v{}）が終わりません。\nタスクバー右下のアイコン（または前の版の画面の［終了］）で終了してから、もう一度起動してください。", v));
+                        return;
                     }
                     wait_exit(ppid, Duration::from_secs(30)); // 前の版の窓が閉じるのを待つ（同じ窓が2つにならないように）
                 }
@@ -793,7 +910,8 @@ fn main() {
     }
 
     let st_setup = Arc::clone(&st);
-    tauri::Builder::default()
+    let st_fb = Arc::clone(&st);
+    let r = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_main(app)))
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::clone(&st))
@@ -810,9 +928,12 @@ fn main() {
             // 画面が小さい PC（1366×768 など）では、はみ出さない大きさにして真ん中へ（隣の画面＝プロジェクターにかからないように）
             if let Ok(Some(m)) = w.current_monitor() {
                 let sf = m.scale_factor();
-                let (mw, mh) = (m.size().width as f64 / sf, m.size().height as f64 / sf);
-                if mw < 1460.0 || mh < 960.0 {
-                    let _ = w.set_size(tauri::LogicalSize::new((mw * 0.92).max(800.0), (mh * 0.88).max(560.0)));
+                let wa = m.work_area(); // タスクバーを除いた広さ
+                let (mw, mh) = (wa.size.width as f64 / sf, wa.size.height as f64 / sf);
+                if mw < 1440.0 || mh < 930.0 {
+                    let (nw, nh) = ((mw * 0.94).max(640.0).min(mw), (mh * 0.94).max(480.0).min(mh));
+                    let _ = w.set_min_size(Some(tauri::LogicalSize::new(nw.min(960.0), nh.min(600.0))));
+                    let _ = w.set_size(tauri::LogicalSize::new(nw, nh));
                     let _ = w.center();
                 }
             }
@@ -878,15 +999,27 @@ fn main() {
                 }
                 WindowEvent::Focused(true) => {
                     // 開いたスライドから GATE に戻った → 常に最前面に戻す
-                    if st.dropped.load(Ordering::SeqCst) && st.blurred.load(Ordering::SeqCst) {
+                    let early = st.dropped_at.lock().ok().and_then(|g| g.map(|t| t.elapsed() < DROP_GRACE)).unwrap_or(false);
+                    if st.dropped.load(Ordering::SeqCst) && st.blurred.load(Ordering::SeqCst) && !early {
                         st.dropped.store(false, Ordering::SeqCst);
                         st.blurred.store(false, Ordering::SeqCst);
+                        if let Ok(mut g) = st.dropped_at.lock() {
+                            *g = None;
+                        }
                         refresh_top(&st, window);
                     }
                 }
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("PADDOCK GATE を起動できませんでした");
+        .run(tauri::generate_context!());
+    if let Err(e) = r {
+        // 窓を作れなかった：これまでの形（Chrome / Edge の窓）で動かす
+        st_fb.note(&format!("窓を作れませんでした（{}）。これまでの形で起動します", e));
+        if !ping(st_fb.port) {
+            fallback_run(&st_fb);
+        } else {
+            plain_message(APP, &format!("PADDOCK GATE の窓を作れませんでした（{}）。\nもう一度起動してください。", e));
+        }
+    }
 }

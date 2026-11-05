@@ -82,6 +82,7 @@ export function allDays(): string[] {
   for (const r of store.S ? store.S.roots : []) {
     if (EV && EV.slice(0, EV.indexOf("|")) !== r.id) continue;
     for (const g of r.groups || []) if (g.key) { const d = parts(r, g.key).day; if (d) set.add(d); }
+    for (const x of r.sdirs || []) { const d = parts(r, x.key + "/_").day; if (d) set.add(d); }   // 演者フォルダがまだ無いセッションの日も
   }
   return [...set].sort(cmpDay);
 }

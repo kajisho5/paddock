@@ -13,11 +13,13 @@ export function dayInfo(name: string): DayInfo | null {
   return o;
 }
 
-export interface Lay { ref: unknown; depth: number; dl: number; vl: number; sl: number[]; sd: boolean; L: number }
+export interface Lay { ref: unknown; sref?: unknown; depth: number; dl: number; vl: number; sl: number[]; sd: boolean; L: number }
 const LAYC: Record<string, Lay> = {};
 export function lay(r: Root): Lay {
-  const c = LAYC[r.id]; if (c && c.ref === r.groups && c.depth === r.depth) return c;
-  const L = Math.max(0, (r.depth || 1) - 1); const keys = (r.groups || []).map((g) => g.key).filter(Boolean);
+  const c = LAYC[r.id]; if (c && c.ref === r.groups && c.sref === r.sdirs && c.depth === r.depth) return c;
+  const L = Math.max(0, (r.depth || 1) - 1);
+  // 演者フォルダのキーと、演者フォルダの無いセッション（の下に演者がいるつもりのキー）から、会場・日・セッションの階層を読む
+  const keys = (r.groups || []).map((g) => g.key).filter(Boolean).concat((r.sdirs || []).map((x) => x.key + "/_"));
   let dl = -1;
   for (let i = 0; i < L && dl < 0; i++) {
     const vals = new Set<string>(); for (const k of keys) { const x = k.split("/")[i]; if (x != null) vals.add(x); }
@@ -34,7 +36,7 @@ export function lay(r: Root): Lay {
     const vals = new Set(keys.map((k) => k.split("/")[sl[0]])); let hit = 0;
     vals.forEach((v) => { if (v && dayInfo(v)) hit++; }); sd = hit > 0 && hit * 2 >= vals.size;
   }
-  const o: Lay = { ref: r.groups, depth: r.depth, dl, vl, sl, sd, L }; LAYC[r.id] = o; return o;
+  const o: Lay = { ref: r.groups, sref: r.sdirs, depth: r.depth, dl, vl, sl, sd, L }; LAYC[r.id] = o; return o;
 }
 export interface Parts { venue: string; day: string; ses: string; sesKey: string; name: string }
 export function parts(r: Root, key: string): Parts {

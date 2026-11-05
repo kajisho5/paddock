@@ -8,7 +8,7 @@ function Ok($m) { Write-Host "OK $m" }
 
 New-Item -ItemType Directory -Force $Out | Out-Null
 $Out = (Resolve-Path $Out).Path
-$dst = Join-Path $env:RUNNER_TEMP "pg"
+$dst = Join-Path $env:RUNNER_TEMP "試験 用 フォルダ"   # 日本語・空白の入った場所でも動くか
 Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue
 Expand-Archive $Zip $dst
 $dir = Join-Path $dst "PADDOCK_GATE"
@@ -33,6 +33,17 @@ public static class W {
     return found;
   }
   public static bool Top(IntPtr h) { return ((long)GetWindowLongPtr(h, -20) & 0x8) != 0; }
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [StructLayout(LayoutKind.Sequential)] public struct PT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(PT p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint f);
+  // GATE の窓の真ん中に見えているのが、GATE 自身か
+  public static bool Visible(IntPtr h, uint pid) {
+    RECT r; if (!GetWindowRect(h, out r)) return false;
+    PT p; p.X = (r.L + r.R) / 2; p.Y = (r.T + r.B) / 2;
+    IntPtr w = GetAncestor(WindowFromPoint(p), 2); uint q; GetWindowThreadProcessId(w, out q); return q == pid;
+  }
 }
 "@
 function Shot($name) {
@@ -80,6 +91,7 @@ if ($h -ne [IntPtr]::Zero) {
   Start-Sleep 5
   Shot "3-fullscreen"
   if (-not [W]::Top($h)) { Ok "全画面の窓があると最前面をやめる" } else { Bad "全画面の窓があっても最前面のまま" }
+  if (-not [W]::Visible($h, [uint32]$gp)) { Ok "全画面の窓の後ろに回る" } else { Bad "全画面の窓の上に GATE が見えている" }
   $fs | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
   Start-Sleep 3
   if ([W]::Top($h)) { Ok "全画面の窓が消えると最前面に戻る" } else { Bad "全画面の窓が消えても最前面に戻らない" }

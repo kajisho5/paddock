@@ -93,6 +93,10 @@ def build(kind, emb, outdir, shell=None):
         if shell:
             if not os.path.isfile(shell):
                 raise SystemExit("Tauri 版の窓が見つかりません: %s" % shell)
+            cargo = os.path.join(HERE, "tauri", "gate", "Cargo.toml")
+            cv = re.search(r'^version = "([^"]+)"', open(cargo, encoding="utf-8").read(), re.M) if os.path.isfile(cargo) else None
+            if cv and cv.group(1) != version:
+                raise SystemExit("Tauri 版の窓の版（%s）とアプリの版（%s）がそろっていません" % (cv.group(1), version))
             exe = shell
         else:
             exe = build_launcher.build(os.path.join(work, v["exe"]), version, v)

@@ -31,7 +31,7 @@ export interface Group {
 
 export interface Root {
   id: string;
-  sdirs?: { key: string; loose: [string, number, number, Record<string, CpState>?][] }[];   // セッションのフォルダと、その直下のファイル
+  sdirs?: { key: string; loose: [string, number, number, Record<string, CpState>?][]; pend?: string[] }[];   // セッションのフォルダと、その直下のファイル
   label: string;
   path: string;
   depth: number;

@@ -37,7 +37,7 @@
 .gside{grid-row:1/-1;border-right:1px solid var(--g-border);display:flex;flex-direction:column;min-height:0;background:var(--g-bg)}
 .gws{display:flex;align-items:center;gap:8px;height:48px;padding:0 14px;border-bottom:1px solid var(--g-border);flex:none}
 .gws b{font-weight:600;white-space:nowrap;letter-spacing:-.01em}
-.gws .sub{margin-left:auto;color:var(--g-text-2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.gws .sub{margin-top:0;word-break:normal;margin-left:auto;color:var(--g-text-2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .gdays{padding:12px 12px 2px}
 .gate .gseg{display:flex;width:100%;background:var(--g-input);border:1px solid var(--g-border);border-radius:7px;padding:2px}
 .gate .gseg button{flex:1;height:28px;border:0;border-radius:5px;color:var(--g-text-2);font:500 12.5px var(--sans);justify-content:center;padding:0 6px;gap:5px;background:transparent}
@@ -196,20 +196,20 @@
 .gfiles li{display:flex;align-items:center;gap:4px}
 .gfiles .fn{flex:1;min-width:0;font:400 12px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;gap:6px;align-items:center}
 .gate .gb.sm{height:26px}.gate .gb.icon.sm{width:26px}
-.gate .gmore{display:flex;align-items:center;justify-content:space-between;width:calc(100% - 32px);margin:14px 16px 0;height:34px;padding:0 10px;border:1px solid var(--g-border);border-radius:6px;color:var(--g-text-2);background:transparent;font:inherit}
+.gate .gmore{overflow:hidden;white-space:nowrap;display:flex;align-items:center;justify-content:space-between;width:calc(100% - 32px);margin:14px 16px 0;height:34px;padding:0 10px;border:1px solid var(--g-border);border-radius:6px;color:var(--g-text-2);background:transparent;font:inherit}
 .gate .gmore:hover{background:var(--g-hover)}
 .gate .gmore svg{transition:transform var(--dur-2) var(--ease-out)}
 .gate .gmore.open svg{transform:rotate(90deg)}
 .ganalysis{padding:10px 16px 0;animation:fade-up var(--dur-2) var(--ease-out) both}
 .gate .ana{border-radius:8px}
-.ganalysis .sub{font:500 11px var(--sans);color:var(--g-text-2);padding:10px 0 6px}
+.ganalysis .sub{display:block;margin-top:0;word-break:normal;font:500 11px var(--sans);color:var(--g-text-2);padding:10px 0 6px}
 .gdl dd .cpy{margin-left:auto;opacity:.7}.gdl dd .cpy:hover{opacity:1}
 .gft{width:100%;border-collapse:collapse;font-size:12px}
 .gft td{padding:5px 4px;border-bottom:1px solid var(--g-border);vertical-align:middle}
 .gft td.fn{font-family:var(--mono);word-break:break-all}.gft td.fn .gt{margin-left:6px}
 .gft td.num,.gft td.tm{color:var(--g-text-2);white-space:nowrap;text-align:right}
 .gft td.cps{white-space:nowrap}.gft td.cps .pc{margin-right:3px}
-.gft td.op{white-space:nowrap;text-align:right}
+.gft td.op{white-space:nowrap;text-align:right;width:auto;font-weight:400}
 .gft tr.pend td{color:var(--g-progress)}
 .gev{display:flex;flex-direction:column;gap:8px}
 .gev .e{border:1px solid var(--g-border);border-radius:8px;padding:8px 10px}
