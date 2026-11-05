@@ -780,7 +780,8 @@ fn selftest(app: AppHandle, st: Arc<Shared>) {
         let n = unsafe { GetWindowTextW(fg as _, buf.as_mut_ptr(), 256) };
         lines.push(format!("FOREGROUND_IS_GATE={}", fg == hwnd));
         lines.push(format!("FOREGROUND_TITLE={}", String::from_utf16_lossy(&buf[..n.max(0) as usize])));
-        // GATE に戻る → 最前面に戻る
+        // GATE に戻る（開いた窓が出てくるまでの猶予のあと）→ 最前面に戻る
+        thread::sleep(DROP_GRACE);
         let _ = w.set_focus();
         thread::sleep(Duration::from_millis(1500));
         lines.push(format!("TOPMOST_AFTER_RETURN={}", topmost(hwnd)));
