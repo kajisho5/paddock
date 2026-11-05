@@ -46,6 +46,7 @@ const stageOf = (root: string, g: string, gr?: Group): Stage | "" => STG.st[root
 const SYN = new Map<string, Group & { syn?: boolean }>();
 const gfind = (r: Root | null | undefined, key: string): (Group & { syn?: boolean }) | undefined =>
   r ? (r.groups || []).find((x) => x.key === key) || SYN.get(r.id + "|" + key) : undefined;
+const NOTE_RE = /^\s*\d{1,3}[\s_\-.・]+.*\.txt$/i;   // 番号付きのメモ（サーバーの _NOTE_SLOT と同じ）
 const PRES_RE = /\.(pptx|ppsx|pptm|ppsm|ppt|pps|key|pdf)$/i;   // サーバーの「開く」と同じ発表ファイル
 
 /* ---------------------------------------------------------------- データの組み立て */
@@ -94,6 +95,14 @@ function build(): Model | null {
     if (x.list.length || !x.loose?.length) continue;
     const pres = x.loose.filter((f) => PRES_RE.test(f[0]));
     if (!pres.length) continue;
+    // 番号付きのメモ（03_はPC持ち込み.txt など）も、その番号の演者として並べる（発表ファイルの無い人：PC持込など）
+    const notes = x.loose.filter((f) => NOTE_RE.test(f[0]));
+    const L1 = notes.map(([name, size, mt]) => {
+      const key = x.key + "/" + name; const byo = /持ち?込/.test(nfc(name));
+      const g: Group & { syn?: boolean } = { key, files: 0, size, mtime: mt, unread: 0, cats: {}, syn: true,
+        fl: [[byo ? "PC持込" : "メモ", byo ? "op" : "info"]] } as Group & { syn?: boolean };
+      SYN.set(r.id + "|" + key, g); return g;
+    });
     x.list = pres.map(([name, size, mt, cp]) => {
       const key = x.key + "/" + name; const sk = r.id + "|" + key;
       const ext = (name.match(/\.([^.]+)$/) || ["", ""])[1].toLowerCase();
@@ -102,7 +111,8 @@ function build(): Model | null {
         pending: x.pend?.has(name) ? 1 : 0, pbytes: x.pend?.has(name) ? size : undefined } as Group & { syn?: boolean };
       SYN.set(sk, g); return g;
     });
-    x.loose = x.loose.filter((f) => !PRES_RE.test(f[0]));   // 残り（動画・資料など）は、これまでどおり上の枠に
+    x.list = x.list.concat(L1);
+    x.loose = x.loose.filter((f) => !PRES_RE.test(f[0]) && !NOTE_RE.test(f[0]));   // 残り（動画・資料など）は、これまでどおり上の枠に
     x.flat = true;
   }
   // 並び：全部に時刻があれば時刻順、時刻のないセッションが混じるときは名前順（S01・S02… の番号順）。
