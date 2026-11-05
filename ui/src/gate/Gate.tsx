@@ -203,7 +203,7 @@ const canOpen = (g: Group) => { const st = (g.cpp || g.cp)?.[mainDest()]; return
 /* 発表に使うデータがあるか（メモの .txt などだけなら「データなし」） */
 const hasData = (g: Group) => g.files > 0 && Object.keys(g.cats || {}).some((c) => c !== "他");
 /* PC持込（本人のPCで発表）：入っているデータは「バックアップ」として扱う */
-const BYO_RE = /^(?:PC|Win|Mac)?持込(?:リモプレ)?$/i;   // 既定の目印（PC持込・Mac持込・持込…）だけ。「持込不可」などは含めない
+const BYO_RE = /^(?:PC|Win|Mac)?持込(?:リモプレ|Win|Mac)?$/i;   // 既定の目印（PC持込・Mac持込・持込…）だけ。「持込不可」などは含めない
 const isBYO = (g: Group) => (g.fl || []).some((f) => BYO_RE.test(nfc(f[0]).replace(/[\s　]/g, "")));
 
 /* ほかのコピー先（バックアップPCなど）の状態：小さな点で */
