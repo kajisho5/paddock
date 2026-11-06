@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.12.7"
+VERSION = "1.12.8"
 DEFAULT_PORT = 8797
 
 
@@ -1178,7 +1178,7 @@ def valid_password(p):
 
 
 # ---------------------------------------------------------------- 演者のスライドを開く（このPCのコピーを開く。NASのファイルは開かない）
-OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest"}
+OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest", "got": False, "got_src": ""}
 PRES_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps", ".key", ".pdf")      # 発表ファイル（この順に優先）
 SHOW_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps")                      # スライドショーで開けるもの
 OPENABLE_STATES = ("ok", "edited", "old")                                                   # コピー済み（コピー先で編集されたものも含む）
@@ -1548,6 +1548,340 @@ def newest_of(base, items):
     if ts[0][0] - ts[1][0] < 2:
         return None
     return ts[0][1]
+
+
+# 会場取得の目印画像（marks/目印画像/04_会場取得.jpg を小さくしたもの）。［設定］で別の画像も選べる
+GOT_IMG_NAME = "04_会場取得.jpg"
+GOT_IMG = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0d"
+    "Hx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4e"
+    "Hh4eHh4eHh7/wAARCAEsASwDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUF"
+    "BAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVW"
+    "V1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi"
+    "4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAEC"
+    "AxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVm"
+    "Z2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq"
+    "8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD7LooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooo"
+    "oAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooozQAUU0ugOC6j8aUMCOCD"
+    "9KBXQtFFFAwooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiqGuavp2iadJqG"
+    "q3kVpbR/ekkOOfQdyfYc14R49+NOp6g0ln4XR9OtehunAM7j2HRB+Z+laU6Up7Hm5hm2GwEb1Xr0S3PavE/ivw/4bh8zWdTgtmIy"
+    "sRO6R/og5P5V5b4j+PEas0Xh/RWkx0nvX2j/AL4Xn8yK8QuZ57m4e4uZpJppDl5JGLMx9yeTUVdkMLFb6nxGM4rxdZ2orkX3v+vk"
+    "dvrHxV8c6kSDrJs0P8FpEsePx5b9a5m91zWr1i15rGo3BPXzLpz/AFrPordQitkeBVxuIrO9So382OMkhOWkcn1LGnw3V1Ccw3Vx"
+    "GR/clZf5GoqKqxzqUlqmb+m+NfF2nEfZPEepoB0Vpy6/k2RXY6F8bvFVmQupW9jqcfclPJk/NeP0ry+iolShLdHbQzTGYd/u6jXz"
+    "0+5n0z4W+MfhPVykN9JLo9w3GLnmMn2kHH54r0O3miuIUmgkSWNxlXRgwYexHWviOt/wj4y8Q+FZw+kX7pDnL20nzwv9VPT6jBrn"
+    "nhVvE+lwPF04tRxUbrut/u/4Y+wqK87+HXxU0bxOY7G8C6ZqrcCGR/3cp/2G7n/ZPP1r0SuOUXF2Z9thcXRxVNVKMroKKKKk6Aoo"
+    "ooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAK5j4geM9K8HaV9qvm825kBFvaow3yn+iju3b68VJ8QPFen+EN"
+    "Ak1K8PmSt8ltADhppMcAeg7k9hXyl4l1vUfEWsz6tqk5luJj2+6i9kUdlH+ea6KFH2ju9j5zPc8jgI+zp61H+Hm/0Rc8Z+K9Z8Wa"
+    "mb3VbjKqT5MCcRQj0UevqTyawqSlr0UklZH5pVqzrTc6ju31CiiimZhRRRQAUUUUAFFFFABRRRQADg5BxXsnwn+Lc1o8Oi+K5zLa"
+    "khIL9zlovQSHuv8AtdR3yOR43SVE6cZqzO7AZhXwNX2lJ+q6P1Pt+N0kjWSNlZGGVZTkEHoQafXzz8DviM2lXEPhrXJ86fK220nc"
+    "/wDHux6IT/cJ6eh9un0NXmVKbpuzP1PLMypZhR9pDfquzCiiisz0QooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACq+oX"
+    "dvYWU97dyrDbwIZJJG6KoGSasV4l+0p4rMcMHhKzlwZQJ73af4M/In4kbj9B61dODnJI4cyx0cDh5VpdNvN9DzD4keLbrxh4kl1G"
+    "XclrHmOzhP8Ayzjz3/2j1P5dq5mlor1YxUVZH5DXrzr1HUqO7YUUUVRiFFFFABRRRQAhIHUgfU0tfSfwN8L6D/wr6y1GTTbW5ur9"
+    "XaeSaIOThiu0ZHCgDp+NeNfGDRrHQfiBqGn6bF5NriOVIx0TeuSo9s5xWMKylNxPZxmS1MLhIYqUk1K2na6ujkaKKK2PGCiiigAo"
+    "oooAQ8jFfRfwB8cNremHw7qc27ULKPMDseZoRxz6svAPqMH1r51q94e1a80LW7TV7BttxayB154Yd1PsRkH61lVpqpGx6mUZlLL8"
+    "Qqi+F6NeX/APtOis/wAO6ra63olnq1k26C6iWROeRnqD7g5B+laFeU9D9chJTipRejCiiigoKKKKACiiigAooooAKKKKACiiigAo"
+    "oooAKKKKAK+oXcNjYz3ty2yC3jaWRvRVGT/KvjbxLq9xr2v32sXJPmXczSYz91f4V/AYH4V9E/tD6udN+HstpG22XUZlthzzs+8/"
+    "6Lj8a+Zq7sJCycj8/wCL8W5VYYdbJXfq/wDgfmFFFFdh8aFFFFABRRRQAUCigUAfVfwN/wCSV6J/1zk/9GNXif7QX/JUL7/r3g/9"
+    "Ar2z4G/8kr0T/rnJ/wCjGrxP9oL/AJKhff8AXvB/6BXDR/jSPvc7/wCRLR/7d/8ASTgKKKK7j4IKKKKACiiigAooooA91/Zj8Ql7"
+    "e/8ADM75MR+1WwJ/hJw6j6HB/wCBGvbK+Q/hfrB0Px9pF+X2xeeIZj/sSfKf5g/hX14K83Ew5Z37n6bwtjHXwXJLeDt8un+XyCii"
+    "iuc+lCiiigAooooAKKKKACiiigAooooAKKKKACiiigDwH9qK/aTXNH0sN8sNu87D3dto/RDXjlehftCzmX4nXaEkiG2gjH/fO7/2"
+    "avPa9WirU0fkeeVXUzCq/O33aBRRRWp5IUUUUAFFFdn8HPCtl4t8XGx1GR1tLeBriREba0uCAFz2GTzUykoq7N8Nh54mrGlDd6HG"
+    "UCvfPiX8HdOfSje+ELQ295AMta+YzLOv+zuJw/p2PSvBHR45GjkVkdTtZWGCCOoI7Gpp1Y1FdHVmOWV8vqKFVb7NbM+qvgb/AMkr"
+    "0T/rnJ/6MavE/wBoL/kqF9/17wf+gV7Z8Df+SV6J/wBc5P8A0Y1eJ/tBf8lQvv8Ar3g/9Arlo/xmfWZ3/wAiWj/27/6ScBRXV/DX"
+    "wTqHjPVxDEGg0+Fgbu6xwg/ur6uew7dT7+t+PfhP4UtvBl7daVbyWV5Y27TLMZmbzNgyQ4Jxzg8jGK6J1oxlys+awmSYrFUJV4K0"
+    "V36+h880UnUZpa2PHCiiigAooooATLDlThhyD6HtX2f4Wv8A+1PDWmajncbm1ilJ9yoJ/WvjEda+rfgjMZ/hdobMeUhaP/vl2X+l"
+    "ceLXupn2PB1W1epT7q/3P/gnaUUUVwn6CFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAHyr8d/+Sqax/2x/wDRSVxFeg/tCQGL"
+    "4nXbkHE1tBIP++dv/stefV61L4EfjuaxccbVT/mf5hRRRWh54UUUUAFX/D2s6joGrwarpdwYLmE/K2Mhh3Vh3B7iqFJSaT0ZcJyh"
+    "JSi7NH1p8NfHGneM9J86HbBfwgC6tSclD/eHqp7H8DzXLfGX4Yprwk1zQYlTVgMzQjhboDv7P79+h9a8E8P6xqOg6vBqml3DQXMJ"
+    "+VhyGHdWHdT3FfUXwz8daf4z0svGFt9RhA+1WpbJX/aX1Q+vboa4KlOVGXNHY+/y7MaGdUPquLXv/n5rz/rYj+CSSRfDHR4ZY3jk"
+    "jWVXRhgqRK+QR2NeeeOfBGo+M/jPfQw7oLCGG3+1XRHCDZ91fVz2Hbqff3ZVCggADnPFMdo4keVyqKBudjwBgdSaxVVxk5Lqe3Xy"
+    "qnXw1PD1HeMLfOysUNC0nS/Dmixafp8KWtnbqTyfxLMe5PUk14N8Zvia+vPLoOgzFdJU7Z514N0R2Hon/oX06nxm+Jr688ug6DMy"
+    "aSp2zzrwbojsP+mf/oX06+VV1UKH25nyee56pL6phNIrRtdfJeX5+gUUUV2HxwUUUUAFFFFABX1F+z//AMku07/rpP8A+jWr5dFf"
+    "VvwQhMHwu0RWHLxNJ/31Ix/rXLi/gR9XwhFvGSf91/mjtKKKK88/RwooooAKKKKACiiigAooooAKKKKACiiigAooooA8A/ahsGj1"
+    "7R9TC/LNbPAT7o24fo5rx2vpj9onRzqPw+kvY1zLp063GR12H5X/AEbP4V8z16WGlen6H5dxNh3Rx8pdJWf6fmgoooroPngooooA"
+    "KKKKACrug6tqGh6rBqel3LW91A2VcdCO6kdwe4qlRSavoyoTlCSlF2aPqfwF8SdA8RaItzeXtppt9EMXNvPMEwf7yljyp/Toa8s+"
+    "M3xNbX3k0HQZmTSVOJ514N0fQekf/oX0ryogHqAfrS1hDDxjLmPfxfEmKxOHVB6d2t3/AJeYUUUV0HzwUUUUAFFFFABRRRQAhyRh"
+    "Rluw96+zvClh/ZfhnTNO27TbWkURHuFAP65r5V+GOjnXPHmkaeV3RG4Es3/XNPnb+WPxr6+FcOLlsj7zg7DtRqVn1sl+b/QKKKK4"
+    "z7YKKKKACiiigAooooAKKKKACiiigAooooAKKKKAK2pWcGoafcWN0u+C4iaKRfVWGD/OvjbxFpVxoeu3ukXQPm2kzRE4+8B0b8Rg"
+    "/jX2lXiH7SvhQslv4ss4slALe92jtn5HP0J2n6iunCz5ZWfU+W4qwDxGGVaK1h+XX7t/vPDaKKK9E/NgoHWiigD3X4XfCjw5qng+"
+    "z1fWhcXVxfR+aqpMUWJSeANvU+pNdP8A8KZ8C/8APnef+Bj14r4P+Jfijwvpo02wmtprRSTHHcxF/LycnaQQQM9q2/8Ahd/jL/nj"
+    "pP8A4Dt/8XXHKnWcnZn2mEzLJYUIRqUveS191PX1PT/+FM+Bf+fO8/8AAx6P+FM+Bf8AnzvP/Ax68w/4Xf4y/wCeOk/+A7f/ABdH"
+    "/C7/ABl/zx0n/wAB2/8Ai6n2Vfv+J0f2pkP/AD6X/gKPT/8AhTPgX/nzvP8AwMej/hTPgX/nzvP/AAMevMP+F3+Mv+eOk/8AgO3/"
+    "AMXR/wALv8Zf88dJ/wDAdv8A4uj2Vfv+If2pkP8Az6X/AICj0/8A4Uz4F/587z/wMej/AIUz4F/587z/AMDHrzD/AIXf4y/546T/"
+    "AOA7f/F0f8Lv8Zf88dJ/8B2/+Lo9lX7/AIh/amQ/8+l/4Cj1AfBrwKM5sbs8Y5vH49+teEfE/wANQ+E/GFzpFtO81uESaFn++FYH"
+    "5W9xg89+K6dvjd4zKkCLSQcdfszcf+P159reqX+tapPqep3DXF3O253bj2AAHQAcAVrRhUi/eZ5Gc43LK9FRwtO0r72toU6KKK6T"
+    "5oKKKu6Dpd5res2mk2Cb7m6kEaeg9WPsBkn6Um7FQhKclGKu2ezfsx+HisWoeJp0x5n+iWxI/hBBkYfjtH4GvbqzvDekWuhaFZ6R"
+    "ZriC1iEanu2OrH3JyfxrRryak+eTZ+wZXglgsLCj1W/r1CiiioPQCiiigAooooAKKKKACiiigAooooAKKKKACiiigAqtqVlbajYT"
+    "2N5Es1tcRmOWNujKRgirNFAmlJWZ8g/EXwpd+D/Ek2mz7nt2zJaTn/lrHnj/AIEOh9/qK5yvrz4ieEbDxhoD6fdYjnQ77W4AyYXx"
+    "19wehHcfhXyn4i0bUNA1ifStUgMNzCcEfwsOzKe6nsa9OhW51Z7n5dn2TywFXngv3ctvLy/yM+ikpa3PnwooooAKKKKACiiigAoo"
+    "ooAKKKKACiiigBK+iP2f/A7aRpx8S6nDtv7yPFujDmGE859mbr7DHqa4/wCCHw5bWriLxHrcBGmRNutoXH/Hy46MR/cB/M+3X6KH"
+    "SuLE1vsI+64YyVprF1l/hX6/5ff2CiiiuI+4CiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACuV+IngnSvGWl+Rd"
+    "r5N5ED9mu0XLxH0Pqp7j+RrqqKabi7oyrUadeDp1FdM+OPGHhfWPCuqGw1e2KE5MUy8xzL6qe/06jvWLX2h4g0XTNe059O1aziu7"
+    "Z+quOQfUHqD7ivBfHvwZ1bTGkvPDbPqln1+znH2iMe3Zx9MH2Nd9LEqWktz88zXhmthm6mH96Hbqv8zyminTxSwTPBNG8UqHDo6l"
+    "WU+hB5FNrpPlmmnZhRRRTEFFFFABRRRQAUlLW54T8Ja/4puBFo2nyTRg4edvlhT6uePwGT7Um0ldmlKlOtJQpq7fYw69f+E/wln1"
+    "B4da8UwPDZcPDZMMPP6Fx/Cvt1PsOvc/Dn4T6P4aaO/1IpqmqLyruv7qE/7Cnv8A7R59MV6TXFVxN9IH3OT8L8jVbF6vpH/P/Ijh"
+    "ijhiSKJFSNFCqqjAUDoAKkoorjPtUrBRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAGB4p8H"
+    "+HPE0e3WNLhnkxhZwNkq/Rxz+HSvK/EfwHbc0nh7WxjtDep/7Ov9Vr3OitIVZw2Z5uMyjB4zWrBX77P70fJ+r/DDxxppPmaFNcoP"
+    "47R1lB/AHP6VzN5pep2bFbvTb63YdRLbuv8AMV9rUEA9a3WLl1R4Fbg6hJ/u6jXrZ/5Hw8eDg8GnRxSyECOKSQnsiFv5V9stbW7N"
+    "loImPqUBp8ccaDCIij0AAqvrfkc64M11rf8Akv8AwT4703wl4o1Ij7F4e1OYH+L7Myr+bYFdjofwU8X3xDX7Welxnr5snmP/AN8p"
+    "x+tfS1FRLFSex3UOEcJB3qScvwX9fM8y8L/BjwtpZSbUjNrE68/v/liz/uDr+JNej2tvBawJb20McEKDCRxqFVR7AcCpqK55TlLd"
+    "n0OGwWHwseWjBR/ruFFFFSdQUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUVwvxe+KXhf4Z6Gb7XLrzLyVT9j"
+    "0+Egz3Lew7Lnq54HueKAF+NvxH0r4Z+CbjXb4pNePmLT7MvhrmcjhfUKOrHsB6kV86eGv2v9afXrJPEXhfS4tJaULdy2ckpmjQ8F"
+    "1DHBx1x3AI615FrurePPj38T4kSA3V/PlLW0jJFvYwZ5JP8ACg6s55Y/gK94+In7K9lH8MNPj8Iyed4q0yNnuZHbauqFuWXnhCDw"
+    "nbHB65DA+n9I1Gx1bTLbUtNuoruzuY1lgmibckiMMhgfSrVfn/8AAX41+IPhLq0vh3XrS7utAWdlutPkG2exkz8zRhuhz96M4B6j"
+    "B5P3J4J8XeHfGehxaz4a1W31CzfgtG3zRt/ddTyjD0IBpAbleHftEfHi4+E/iXT9Hi8Mx6sLyxN0ZGvDDtw5XbjY2emc1614x8R6"
+    "T4S8NXviLXbhrfTrJA88qxs5UFgo+VQSeSOlfC37Xvj3wx8QvGmkal4VvpLy2ttMa3lZ4HiKuZWbGHAJ4PWgD7r8H6sdf8JaRrrQ"
+    "C3Oo2MN2Yg27y/MQNtzgZxnGcV4X44/ap0Hwr4w1jw5ceE9WuJNLu5LV5kuIVVyhxuAJyB9a6b4A/FrwL4g0Lw34K0rVZZtbtdGh"
+    "SWA2kqAGGJBJ85XacH35r5J+IV1f2P7T+v3ml6RFrN9D4kmeCwlgMyXL7jhCg5YH0HpQB7t/w2V4Y/6E7V//AALg/wAaUftkeGmB"
+    "K+DNZbHpdQH+tcb/AMJ78Wf+jedA/wDCTn/xryr43a14m1rVdOm8T+BbLwhNFbusMFrpj2YnUsMuVb7xB4z2pgfon4O1uLxJ4T0n"
+    "xDDBJbxalZxXaROQWQOoYAkcZGe1cA/7RHwbR2R/GsAZSVI+x3HBBwf+WddJ8Eufg54O/wCwHaf+iVr4f/aT+FVt8LNf0u0ttbuN"
+    "UGqRTXDNLAsfllXAwME5+9+lID67/wCGi/gz/wBDtb/+Adx/8bo/4aK+DX/Q7W//AIB3H/xuvC/ht+y1p3i3wDofiaXxnqFo+p2U"
+    "dy0CWKMsZYZwCWyR714n8PPBcXin4tWvgiXUZrWKe8uLb7SkQZx5QkIO0nGT5fTPemB+kvhzW9L8RaHZ63o12t1p97EJreYKVDoe"
+    "hwwBH4itHI9RX5yaN4/+N3h/SbTRtL1LxTY2FrGIbWBdNOFQdAuYiT+tWZ/i18eoIXmn8ReKIokG53k08Kqj1JMWAKLAfolSMQoy"
+    "eBXyb+xz8TPiJ4y+IF9oviLxFLqmmW+myXTLPDHvEnmIq4dVBx8zcdKzP2v/AIw+L4/EV/8ADfTbKfRLFVVbi4D5m1CNxldhX7sb"
+    "dMD5mIIOORSA7bxj+1Z4d0L4iTaJY6LNreiW2IptQtJxvabPzeUpGJEHTORk5xkYz6B8W/jRo3w40TQNV1bQ9YmXWgxigRESWHai"
+    "sRIrsMH5gMc4INeHfs7fCXQvBV/o3jH4r32n6TqN7J/xIdJv5VjKuoz5kgbjeBjan8OQT82ANT/goUyvo3gp1IZTc3ZBByCPLjoA"
+    "1v8AhsPwX/0K3iH84P8A4uj/AIbE8F/9Ct4h/OD/AOLrw/4deNdR0nwbYafb/A/QfE0cQfGp3OjSzyT5djy6oQcZ28HotaXiHx/q"
+    "t3oGo2sn7PXhzTUmtZI2vI9CmR7cFSPMVjGApXrntimB9J/Bz4/+Hvib4sk8O6XoerWU6Wj3RkujHsKqygj5WJz8wr2KvhP9g7/k"
+    "tNzzn/iST/8AoyGvuykAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQB4z+1X8QfHPw98IW+p+FNLs3tp5DDdalNmRrJj9w+VjBDcgMx"
+    "IBwCORXyJ4d8BfEf4pnVPGFyLy5tIoJbm61jUGbbJ5aFtkfdzxgKg2jPavvH40azp/h74Ya9rWq6JBrllZ23mS6fMRsuBuX5TkEd"
+    "SDyD0r57h/bEtreJYYfhu0ccYCoiaqoVQOgAEXAoA8L+G/xP8e/D/TZbTwpb2dktwQ88r6OJJpT2DOwyQOw6Cur/AOGkfjb/ANBC"
+    "3/8ABKv+Fel/8NlQ/wDRO5P/AAbD/wCNUf8ADZMX/ROpf/BsP/jVMDw2/wBS8WfGT4haNZa+llDqeoXCWY1CPSvJOG4Uy7QN4Hvy"
+    "B37Ua3oHxR+B/ilbljqGh3BbbFf2bl7a6A6Ddja4/wBhxn2r3L/hsmL/AKJ1L/4Nh/8AGqjuP2vbG/VbW7+GfnxO65SXU1dc5GDg"
+    "xY4OD+FAHsem+GvFnxG+Aj+H/iRdQ6fq2sW6md7G3CvAm5XQMrEr5mF+bGACcY4r45/aR+GFj8KvFGnaRYatd6ml5YtdNJcRohUi"
+    "Qrgbe3Ffowh3KD6jNfFH/BQT/kpHh/8A7Arf+jmoQHpH7Pnwb8O+BG8P/Em48WTCW/0lT9nuxFFEGniViA3BOO1eT+P/AIaePZ/j"
+    "HrnjLwvqnh+DzdXlvdPul162SRQT8rYJ4OOxr0LxTYeHfjP8M/A/ww8PeMNIj8Q6Zp1rf3EMkbzKipbCNkLLwHBkHy5zwa+VPFXh"
+    "2z0fxfc+HrHVdN1gQTi3+3Qp5du75AbDP/CrZBbpwT05oA94+y/tLf8ARRbL/wAKSz/wrmvGHw4+MfjC5gufE/iHQ9Wnto2jhe58"
+    "RWpKKTkgYI6kCqy/A3w7tG740/DgHuBPnB+uaX/hRvhv/otXw5/7/f8A2VAH2t8IGt7P4eeHtCa+sJ7/AE7SreC6jtrpJtjrGFPK"
+    "k8ZB5r5l/wCCg/8AyN3hL/rwuf8A0Yld1+yD8NLTwdrOvazYeNPDniW3uLeK1f8AsklvJcMX+Y5I5B6Vwv8AwUH/AORu8Jf9eFz/"
+    "AOjUpAef+E/g/wDG/W/DWnavoEN6dLu4FltCuuiIeWfu4TzBt+mBVT9mOGe3/aP8NW9zkTxX1xHLlt3zrFKG578g81peEP2lfiD4"
+    "W8L6b4c0238PtZ6dbpbwma0dnKqMDcRIMn8BWd+zHcyXv7SHhq8lCiS4vriZ9owNzRSsce2TTAvafrGreA/2qof7Z1fUbiPTPET2"
+    "7yXV1JIfs0rFM/MTx5coNfUn7YuuLovwF1qIOVm1N4tPi5673Bf/AMcV68C/bw8JtpnxGsPFUKMttrdoI5XHa4hwp/EoUP8AwE1y"
+    "nx5+LbfELwZ4I0ne3m6dYmXVSc4a7/1eeevyKX/7ae1AHqv/AAT30YlvFviJ1IBNvYxNjrjdI/8A6Ele8fFGL4d+G5ofiZ4ys7P7"
+    "ZosDQ2lzIu+QFjkJGnRpCc7eMjJ5AyaxP2TfCsnhT4IaNFcRGO81INqVwpHIMuCgP0jCCvl79pK3+JHiv4+XXg+/M2qXEcv/ABJr"
+    "O2TbCts43LIFzgHbne5PVTyAAKQGD4j1fxV+0J8ZbW2iRYZL1zb2Ns7borG2XLMT/eIALMf4jwO1e6ftNfCDXZvh/wCA/CvgDQ7v"
+    "VbfQ/PSQiRd4DInzsXYcs248foK8b/Y2GP2htDXuILwf+QGr1H4y/A/4ueJvihr2u6BqlvFpd5cLJbI2syxEKI0X7gGF5Bpgc14Q"
+    "0/8Aar8JeHbXw/4f0nUbPTbTcIIfJsn2bmLHliSfmYnr3q5qz/tc6rpV3pd/p+oTWl5A9vPH9nsV3xupVhkcjIJ6Vk/8M5fHP/oM"
+    "Wn/g/m/wrzT4naD47+HXiFNC8R63dC8e2W5H2bVJZV2MWA5yOcqeKAPdf2Qfhf4+8G/FOfVfEvhm60yxbSpoFmkkjYFy8ZC/KxPR"
+    "T+VfXdfGHwU+DfxYj8VeD/GV3q0UmifaLbUJFbWZWdoCA+ChGCcEcZr7PpAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAZ/iTRNK8R"
+    "6Hd6JrdlHe6ddp5dxBJnbIuQcHBB6gV59N8A/g1FG0sngbS0RQWZmkkAAHUn567L4japqOieAde1nSEge/sNOnuoFnUsjMiFgGAI"
+    "JHHrXw34t/ad+I3iTw9f6JcS6FZ2t/btBK9rbskoRhhgrGQ4JBIzjvQBwus2Fp4w+KtxpXgXSorSz1LU/s2k2sedqxk7UY5JOMDe"
+    "T7mvt2w/Z6+FWneHoYJfBdlq17bWoVpZZXV7qRV5YndgFiPoM18LfDzxnqvgbxGniDw8dP8A7QjiaKKS4gEwiDcEqCeGxxn0JHev"
+    "Sf8AhpL413HEGrwDP/PHR42/9lNMDOufE/hLRvijLZ+KPgzounaNaym3vNJUym7h5+/5pcbnA5wAFYHjqGr6x8LfB34E+I9Dste0"
+    "LwjpF5YXSCWCeOSUhh/31wQeCDyCCDXxZ431X4ifETVotW8QaXqGpX0cXlLNBopjZkzkBvLjG7HOM5xmu6/ZQ+Kuo+BPG0PhjUPt"
+    "M2g6vciGW3CMz2twTtEqKOeuA6gdOeq8gH178ePGOs+APhpf+KND0m21KezaPzI55GVI42YKZDt5baSOMjjPPFfCfiHWfiP8cfGk"
+    "Uj2M2tanHH5MMFjahI7eMsTgnoq5P3nb8a/RvXdK0/XdFvNH1W2W5sb2B4LiFs4dGGCMjkcdxVbwt4b0HwtpUeleHtJs9Msk6RW8"
+    "QUE+p7sfc5NID88PGHw9+JXwq1myiurW5tLnVrdra3n02QyibzV2yW4ZRneQcFRyeoyOas/EH4W2/wAPvAunXnirW3t/F2pfvLfQ"
+    "II0fyIM/fnfPy9xgDrgDOGI+2vj94j8VeFfANxrfhLw1Drd7bZd2kO77GoBzOI8Zk2gngEYGT0zXyf8ADzwDd+KWvfjH8aNQuoPC"
+    "0TC5mlug3nao2cKiKBkQ5wowACPlXAyQ7gcj/wAKwi074Ht8SPEeqzadLfXAg0PTlgUteg/8tGJOVThmyB91c/xCqMfw6lj+B8/x"
+    "MvbuSBH1VLCwtvKGLgdHkLdQAQwGOu010/jHX9e+PnxMjgsrO4sNA0u3doLaCLeNOsYxmSUqvBkIUYUdTsQcCtn9on4n+BvEPw38"
+    "L+Avh59r/srS5BLIZrZoQFSMpGPm5ZjvZifX60Aes/sIrbaV8IPEOt300VtbHVpHlmkYKqJFBHliewGTzXln7a/jHwv4v8UeHJvD"
+    "GuWWrxWlnOk72sm9UZpEIBPTkA179+yx4V8n9m2w02+jKf23Dc3EqsP4JywXP1TafxryLQv2OdcfYNb8b6fbqowRZ2TzH83ZR+lA"
+    "Gt8N/wBob4Y+FPhh4d0O+0vVL/U7HToobgQaem3zFHI3uwz9RXj/AOzZcpe/tM6BeRIUjuNSupkU9VDRzMAcexr6F0L9kTwDaANq"
+    "2t6/qbgjKiWO3Q/gq5/WvmX4TX1x4X+OVtfaPo1zrEumXl6bewhkAkmEccwCgnuFGe5ODgE0AfXH7aUXhqb4JXg126S3vI545NJw"
+    "MvJdDogHoULhj2HPYV8R/Du20C78eaHbeKbz7Jocl9GL6bGQsWeQfRTwCewJPaun13WfiD8eviLBGsLX99LlbSzgytvZQk8nn7qD"
+    "jc7cn34FejfGT9mTVPCfgix13wzcz63cWdv/AMTqBU+Yt1M0K9Sg6FOTgBueRQB9s23leQnkbPK2jZsxt244xjtiqV3pmni9uNXF"
+    "lb/2i9obZrryx5piBLBN3Xbkk49a+RP2Oviv42fXbL4etp03iDSCuY5fMxJpsI6sXPDRDgBTyCQF9K+xrz/j0l/65t/KkB+f37HH"
+    "/JxOh/8AXG8/9EvS/F/4Q+MfBZ1DX/EXiLRLO2ubqeS1h/tWQzz5csFjjC5Y4Iz2Hcij9jb/AJOJ0P8A643n/ol6+0vjF8OtD+Jf"
+    "hCbQ9XjEc4BeyvFUGS1lxw6+o7MvQjj0IYHxd4K+AvxD8ZeHLXxB4d1zQ7ywuR8rjVpQyMPvI67MqwPBBrhvir4H8Q/D3xImh+J5"
+    "baW9e1W5BguGmXy2LAfMQDnKnivevg3o3jr4ARa14v8AGsV1D4VW4+xXNhZqs8lzJuKR3KgsojQHA3E7mDAFccjyf9pv4g6L8Sfi"
+    "AniHQre+gs49NjtiLyNUfcrSMThWIx8w7+tAHUeE/wBnL4p6npuka5Z3mlCyuooLuINqcisI2CuAV24Bwelfelc18KopIPhh4Vgm"
+    "QpJHo1mrqRgqRCmQa6WkAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAy4hiuIJIJ40likUo6OoZWUjBBB6gjtWJb+C/B9vj7P4U0KH"
+    "HTy9OhXH5LW9RQBQg0bSIP8AUaXYxf7lug/kKuxxpGMIiqPQDFOooATH1/OuZ0H4f+D9D8U6n4o0vQbSDWdTlMtzd7cyEkANtJ+4"
+    "D1IXGSSTmunooAKKKKAAgEYPIqGe1t57V7WeGKW3kQxvE6BkZSMFSDwRjtU1FAHKeAvh54P8DWt/beGNFgsY9QmaW5xli+c4XJyQ"
+    "igkKvQdq4vTf2bPg/ZXq3X/CMPclW3CO5vZpI8+6FsEex4r1+igBkMUcMSQwoscaKFRFGAoHAAHYU+iigAry7wx8Bvh34c8aQeLt"
+    "Lsb9NVguJLhHe+kdA7hgx2k4/jPFeo0UAYfhfwj4a8MSX0nh/RLLTX1C4a5u2gjCtLIxyST1xknA6DPAFblFFAGH4f8ACPhrw/qm"
+    "p6pomi2en3mqyLJfSwR7TMyg4JA4HUnjGSSTya2pEEiMjdGBBp1FAHmHgP4EfDzwT4pt/EugWF9DqNusixvLfSSKA6lW+Vjg8E16"
+    "fRRQBk+MfDuleLPDN/4c1uBp9Pv4vKnRXKEjIPBHIIIByK898O/s7fCTRL+K+h8LLdzxOHjN9cyXCgg5B2M20/iDXrFFAAAAMDgU"
+    "UVT1jUIdNsmuZQW7Ko6sfSgC5RXGWut+IL26SS2tw0JcAqsWVx6Fq1I7vXTrF3F9lBtlRzFlcKSB8vzd8mq5RXN+iuKj8Q61ZTr/"
+    "AGjblkb+F4th/A12FpcRXVtHcQtujkXcppNWBO5LRRRSGFFFFAGB4h8U2GjXSWskN1dz7fNmjtYvMa3hHWVwOij8zzgHBqfUvEWl"
+    "WGmW2pSXcUlrdSxRwyJIu197BQwJOCBnJ9ADXl2vQ6dB4tvrS2m0xRiWWaY2d3vMu/5YmdZfnbk5Y8KMYGDitHS9JbVvBFv/AGHo"
+    "+mTzy38c8qSwG2jtWiKlkeN2c7m27SVxu3ZPcnb2cbI8RY+vKc4pLS9uu35nWJ470ltWXT1t7zc179iEuE2mTdtz97O3I64qzf8A"
+    "jfwpYSyx3Wu2avCxSVQxYowOMHAODnjHrXk+nrqq65byTtCZpL6ORBgI+XlUDaDGNzcuQcAlULYAIz6f44ElrfaJqT2c91pdndPL"
+    "eR28RkZSUIjlKDlgrEk4yRkHHFEoRTSDD46vUpyn2a3XR+j6bstXXi/SYtOtr+JL+5hurj7PF5NnIWMnptIB57Hoag07x74ZvDGn"
+    "257eWSQRrFcQvGxYttA6Y5PArC8XWEV54Y0yPRLTUdUhu9Qju2Z4jP8AIAclllK4GMDBxnHrXJ+FJUhn0SNjPFpiyRf2swtz5cE8"
+    "U0pt0JGQNxZc4yF2pk8ihQi1cK2Pr06qjpZpfp5+d32XoekX3jnSbYsUgu7iMXX2SOWMIEkkCszbSzDKrsILdMjAzg1qeGNdtdfs"
+    "5rm0imiEE7QOsoXO5QCcFSQRyO9eaavo+oPqGriSdr8x6vGJ7uTahiDW6FCcRvtjTew4xjcSc5JHVfBqC6Twkbi4MDJc3EksbREE"
+    "MNxXccKvXaOec9c9qUoRUbovDYuvUxHJNaa9Ox29FFFZHsBRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABXL/EF"
+    "JDaWsgzsWQhvqRx/WuoqG7tobq2e3uEDxuMEGmnZiZneHr+wOj26pPFHsQKyMwBDd/1q/wDbbP8A5+4P+/g/xrnJvBsZlJivmVOw"
+    "aMEj8c03/hDF/wCf8f8Afn/69O0e4tSx41vbJ9KECyxyzM6lArAkY6n+lXPBiSJoEPmZ+ZmZc+hPFULLwhbxzB7m5aZAfuKm3P1O"
+    "a6dFVFCKAFAwAB0FDatZDXcWiiipGFFFFABRRRQAhVSQSBkdDiloooAKRVCjAAA9AKWigBpjT5vlX5vvcdfrSqAqhVAAHQAdKWig"
+    "LBRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAf//Z")
+
+
+class GotMarks:
+    """演者の横のチェック＝NAS の演者フォルダに「会場取得」の目印画像があるか（［設定］でオンにしたときだけ）。
+    チェックを入れると目印画像を1枚だけ置き（同じ名前があれば書かない）、外すと GATE が置いたものだけを消す。NAS のほかのファイルには触れない。
+    チェックのあとで演者のデータが変わったら（差し替え）、GATE が置いた目印を消して「更新あり」にする（もう一度チェックで付け直す）。
+    PC受付などが目印を消したときは、NAS に無いのでそのままチェックが外れる。"""
+    NAME = "got_marks.json"
+
+    def __init__(self, mgr, opener):
+        self.mgr = mgr
+        self.opener = opener
+        self.lock = threading.Lock()
+        d = mgr.store.read_json(self.NAME, None)
+        d = d if isinstance(d, dict) else {}
+        self.mine = {k: v for k, v in (d.get("mine") or {}).items() if isinstance(k, str) and isinstance(v, dict) and v.get("rel")}
+        self.upd = {k: float(v) for k, v in (d.get("upd") or {}).items() if isinstance(k, str) and isinstance(v, (int, float))}
+        threading.Thread(target=self._loop, daemon=True, name="got").start()
+
+    def _save(self):
+        self.mgr.store.write_json(self.NAME, {"mine": self.mine, "upd": self.upd})
+
+    def get(self):
+        with self.lock:
+            return {"enabled": bool(self.opener.settings.get("got")), "mine": sorted(self.mine), "upd": dict(self.upd)}
+
+    def _src(self):
+        p = str(self.opener.settings.get("got_src") or "").strip()
+        if not p:
+            return GOT_IMG_NAME, GOT_IMG
+        name = os.path.basename(p)
+        m = self.mgr.marker_of(name, (1, 0))
+        if not m or m[0] != "got":
+            raise ValueError("目印画像の名前が「会場取得」の目印として読めません（例：04_会場取得.jpg）: " + name)
+        try:
+            with open(W.long_path(p), "rb") as f:
+                b = f.read(W.MARK_MAX + 1)
+        except OSError as e:
+            raise ValueError("目印画像を読めません: " + W._err(e))
+        if len(b) > W.MARK_MAX:
+            raise ValueError("目印画像が大きすぎます")
+        return name, b
+
+    def _watcher(self, root, group):
+        op = self.mgr.cfg["op"]
+        if not op["enabled"] or op["root"] != root:
+            raise ValueError("このPCの会場とコピー先が設定されていません")
+        prefix = (op["venue"] + "/") if op["venue"] else ""
+        if not group or (prefix and not group.startswith(prefix)) or \
+                any(x in ("", ".", "..") or any(c in x for c in '\\:*?"<>|') for x in group.split("/")):
+            raise ValueError("この会場の演者フォルダではありません")
+        w = self.mgr.watchers.get(root)
+        if not w or not w.online:
+            raise ValueError("NAS に接続できていません")
+        with w.lock:
+            sig = (w.current or {}).get(group)
+        if sig != W.DIR or group.count("/") + 1 != w.depth:
+            raise ValueError("演者フォルダが見つかりません（演者フォルダの無いセッションでは使えません）")
+        return w
+
+    def _scan(self, w, group):
+        """演者フォルダの中の、会場取得の目印（rel, sig）と、データ（目印以外）の中身の印。受信中か"""
+        pre = group + "/"
+        got, data = [], []
+        with w.lock:
+            cur = dict(w.current or {})
+            busy = any(k.startswith(pre) for k in w.pending)
+        for k, s in cur.items():
+            if not k.startswith(pre) or s == W.DIR:
+                continue
+            m = self.mgr.marker_of(k, s)
+            if m:
+                if m[0] == "got":
+                    got.append((k, s))
+                continue
+            data.append((k[len(pre):], s[0], s[1]))
+        h = hashlib.sha1(json.dumps(sorted(data), ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+        return got, h, busy
+
+    def set(self, root, group, on):
+        if not self.opener.settings.get("got"):
+            raise ValueError("［設定］→「演者のスライドを開く」で、チェックで目印を置く設定をオンにしてください")
+        w = self._watcher(root, group)
+        key = root + "|" + group
+        got, h, busy = self._scan(w, group)
+        with self.lock:
+            if on:
+                if got:
+                    self.upd.pop(key, None)
+                    self._save()
+                    return {"ok": True, "already": True}
+                if busy:
+                    raise ValueError("この演者のデータを NAS に受信中です。受信が終わってからチェックしてください")
+                name, b = self._src()
+                rel = group + "/" + name
+                path = os.path.join(w.path, *rel.split("/"))
+                try:
+                    with open(W.long_path(path), "xb") as f:   # 同じ名前のファイルがあれば書かない（上書きしない）
+                        f.write(b)
+                        f.flush()
+                        os.fsync(f.fileno())
+                except FileExistsError:
+                    raise ValueError("同じ名前のファイルが演者フォルダにあります: " + name)
+                except OSError as e:
+                    raise ValueError("NAS に目印を置けませんでした: " + W._err(e))
+                st = os.stat(W.long_path(path))
+                self.mine[key] = {"rel": rel, "sig": [st.st_size, st.st_mtime_ns], "data": h, "t": time.time()}
+                self.upd.pop(key, None)
+                self._save()
+                self.mgr.log("got mark placed: " + rel)
+                return {"ok": True}
+            r = self.mine.get(key)
+            if not r:
+                if got:
+                    raise ValueError("この目印は GATE が置いたものではないため、外せません（NAS 上で消してください）")
+                self.upd.pop(key, None)
+                self._save()
+                return {"ok": True}
+            self._remove(w, key, r)
+            self.upd.pop(key, None)
+            self._save()
+            return {"ok": True}
+
+    def _remove(self, w, key, r):
+        """GATE が置いた目印だけを消す（大きさ・更新日時が置いたときのままのとき）"""
+        path = os.path.join(w.path, *r["rel"].split("/"))
+        try:
+            st = os.stat(W.long_path(path))
+            if [st.st_size, st.st_mtime_ns] == list(r["sig"]):
+                os.remove(W.long_path(path))
+                self.mgr.log("got mark removed: " + r["rel"])
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            raise ValueError("NAS の目印を消せませんでした: " + W._err(e))
+        self.mine.pop(key, None)
+
+    def _loop(self):
+        while True:
+            time.sleep(3)
+            try:
+                self._tick()
+            except Exception as e:
+                self.mgr.log("got marks: %r" % (e,))
+
+    def _tick(self):
+        with self.lock:
+            items = list(self.mine.items())
+        ch = False
+        for key, r in items:
+            root, group = key.split("|", 1)
+            w = self.mgr.watchers.get(root)
+            if not w or not w.online or w.committed is None:
+                continue
+            got, h, busy = self._scan(w, group)
+            with self.lock:
+                if key not in self.mine:
+                    continue
+                if not os.path.exists(W.long_path(os.path.join(w.path, *r["rel"].split("/")))):
+                    self.mine.pop(key, None)     # PC受付などが消した：チェックが外れる（NAS を直接確かめる）
+                    ch = True
+                    continue
+                if time.time() - float(r.get("t") or 0) < 15:
+                    continue                     # 置いた直後（NAS の一覧がまだ追いついていない）
+                if busy or h == r["data"]:
+                    continue
+                try:   # チェックのあとでデータが変わった（差し替え）：置いた目印を消して「更新あり」に
+                    self._remove(w, key, r)
+                    self.upd[key] = time.time()
+                    ch = True
+                except ValueError as e:
+                    self.mgr.log("got mark: %s" % e)
+        if ch:
+            with self.lock:
+                self._save()
 
 
 class Stage:
@@ -1926,6 +2260,8 @@ class Opener:
         out["dest"] = dest if re.fullmatch(r"d[0-9a-f]{8}", dest) else ""
         out["dbl"] = d.get("dbl") if d.get("dbl") in ("file", "show", "folder") else OPEN_DEFAULTS["dbl"]
         out["multi"] = d.get("multi") if d.get("multi") in ("newest", "folder") else OPEN_DEFAULTS["multi"]
+        out["got"] = bool(d.get("got", False))   # 演者の横のチェックで NAS に「会場取得」の目印を置く（既定はオフ）
+        out["got_src"] = str(d.get("got_src") or "").strip()[:1000]
         return out
 
     def dest(self):
@@ -2059,6 +2395,10 @@ class OpHandler(W.Handler):
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
             return self.send_json(self.server.opener.get())
+        if u.path == "/api/op/got":
+            if not self.is_local():
+                return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
+            return self.send_json(self.server.got.get())
         if u.path == "/api/op/stage":
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
@@ -2137,6 +2477,8 @@ class OpHandler(W.Handler):
                 st = {k: str(body.get(k) or "")[:200] for k in ("now", "next", "session", "venue")}
                 self.server.remote.status = st
                 return self.send_json({"ok": True})
+            if u.path == "/api/op/got":
+                return self.send_json(self.server.got.set(str(body.get("root") or ""), str(body.get("group") or ""), bool(body.get("on"))))
             if u.path == "/api/op/stage":
                 return self.send_json(self.server.stage.set(str(body.get("root") or ""), str(body.get("group") or ""),
                                                             str(body.get("st") or "")))
@@ -2213,6 +2555,7 @@ def main():
     srv.net = NetTools(mgr, data_dir)
     srv.opener = Opener(mgr, data_dir)
     srv.stage = Stage(mgr)
+    srv.got = GotMarks(mgr, srv.opener)
     srv.remote = Remote(mgr)
     srv.pair = Pair(mgr, srv.stage, data_dir)
     mgr.start()

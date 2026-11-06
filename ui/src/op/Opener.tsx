@@ -9,7 +9,7 @@ import { CPL } from "../components/Bits";
 import { Icon } from "../components/Icons";
 import { cx } from "../lib/util";
 
-export interface OpenCfg { enabled: boolean; dest: string; dbl: "file" | "show" | "folder"; multi: "newest" | "folder" }
+export interface OpenCfg { enabled: boolean; dest: string; dbl: "file" | "show" | "folder"; multi: "newest" | "folder"; got?: boolean; got_src?: string }
 export const OPEN: { settings: OpenCfg; dest: { id: string; label: string } | null } = { settings: { enabled: true, dest: "", dbl: "file", multi: "newest" }, dest: null };
 export function openLoad() { return api<any>("/api/op/open/settings").then((j) => { OPEN.settings = j.settings; OPEN.dest = j.dest; store.emit(); }).catch(() => {}); }
 
@@ -80,6 +80,14 @@ export function OpenSettings({ c }: { c: Config }) {
         <label><input type="radio" name="ooMulti" value="newest" checked={st.multi !== "folder"} onChange={() => set({ multi: "newest" })} />後から入ったほうを開く（差し替え版が後から届いたとき用。どちらか決められないときはフォルダ）</label>
         <label><input type="radio" name="ooMulti" value="folder" checked={st.multi === "folder"} onChange={() => set({ multi: "folder" })} />フォルダを開く（どれを使うか目で選ぶ）</label></span>
     </div>
+    <h3 style={{ marginTop: 18 }}>会場取得のチェック</h3>
+    <p style={{ margin: 0 }}><label className="lbl"><input type="checkbox" id="ooGot" checked={!!st.got} onChange={(e) => set({ got: e.target.checked })} />演者の横にチェックを出し、チェックを入れたら NAS の演者フォルダに「会場取得」の目印画像を置く</label></p>
+    <div className="grid2" style={{ marginTop: 10 }}>
+      <span>置く目印画像</span><span><input type="text" id="ooGotSrc" placeholder="空のとき：04_会場取得.jpg（同梱）" value={st.got_src || ""} onChange={(e) => set({ got_src: e.target.value })} style={{ width: "100%" }} />
+        <small className="hint">現場の画像を使うときは、そのファイルの場所（例：D:\目印\17_会場取得.jpg）。名前が「会場取得」「取得済」「会場確認済」などの目印として読めるもの</small></span>
+    </div>
+    <p className="hint"><b>この設定をオンにしたときだけ、GATE は NAS に書き込みます</b>（目印画像を1枚置く・自分で置いたものを消す、だけ。ほかのファイルには触れません。同じ名前のファイルがあれば置きません）。<br />
+      チェックは「NAS の演者フォルダに会場取得の目印があるか」で決まります。PC受付などが目印を消せばチェックは外れます。チェックのあとで演者のデータが差し替わったら、GATE が置いた目印を消して「更新あり」にします（確かめてもう一度チェック）。</p>
     <p className="hint">開くのは、<b>このPCのコピー先にコピーが終わったファイル</b>です。NAS上のファイルは開きません（会場側の作業や、受付での差し替えに影響を出さないため）。コピー中・コピー待ちのときは開かずに知らせます。<br />コピー先を追加・変更したときは、［保存］してからもう一度開くと「開くコピー」に出ます。</p>
   </div>;
 }

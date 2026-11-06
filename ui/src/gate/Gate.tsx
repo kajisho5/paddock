@@ -25,6 +25,23 @@ type Stage = "now" | "done";
 const STG: { st: Record<string, { st: Stage; ts: number }>; loaded: boolean } = { st: {}, loaded: false };
 /* 保存は1つずつ順番に送る（速く続けて押しても、サーバーで順番が入れ替わらない）。送っている間は読み直しの結果で上書きしない */
 let stQ: Promise<void> = Promise.resolve(); let stPending = 0; let stWrites = 0;
+/* 会場取得のチェック（NAS の演者フォルダに会場取得の目印があるか）。［設定］でオンのときだけ */
+const GOT: { enabled: boolean; mine: Set<string>; upd: Record<string, number>; busy: Record<string, number> } = { enabled: false, mine: new Set(), upd: {}, busy: {} };
+async function gotLoad() {
+  try { const j: any = await api("/api/op/got"); GOT.enabled = !!j.enabled; GOT.mine = new Set(j.mine || []); GOT.upd = j.upd || {}; store.emit(); } catch { /* 古いサーバー */ }
+}
+async function gotSet(root: string, g: Group, on: boolean) {
+  const k = root + "|" + g.key; GOT.busy[k] = Date.now(); store.emit();
+  try { await api("/api/op/got", { root, group: g.key, on }); await gotLoad(); toast(on ? "「" + nameOf(g).name + "」に会場取得の目印を置きました" : "会場取得の目印を外しました", 3000); }
+  catch (e: any) { delete GOT.busy[k]; toast(e.message, 7000); store.emit(); }
+}
+/* チェックの状態：NAS に目印があるか（置いた直後は、NAS の確認が追いつくまで少し待つ） */
+function gotOf(root: string, g: Group): { on: boolean; wait: boolean; upd: boolean } {
+  const k = root + "|" + g.key; const b = GOT.busy[k]; const nas = !!g.mk_got;
+  const wait = !!b && Date.now() - b < 12000 && nas !== GOT.mine.has(k);
+  if (b && !wait) delete GOT.busy[k];
+  return { on: wait ? GOT.mine.has(k) : nas, wait, upd: !nas && !!GOT.upd[k] };
+}
 async function stageLoad() {
   if (stPending) return; const w0 = stWrites;
   try { const j: any = await api("/api/op/stage"); if (stPending || stWrites !== w0) return; STG.st = j.st || {}; STG.loaded = true; store.emit(); } catch { /* 古いサーバー */ }
@@ -296,7 +313,7 @@ function curSes(M: Model): Ses | null {
 /* ---------------------------------------------------------------- 画面 */
 export function GateApp() {
   const s = useApp(); const M = build();
-  useEffect(() => { stageLoad(); const t = window.setInterval(stageLoad, 3000); return () => clearInterval(t); }, []);   // バックアップPCとそろえているときも数秒で反映
+  useEffect(() => { const f = () => { stageLoad(); gotLoad(); }; f(); const t = window.setInterval(f, 3000); return () => clearInterval(t); }, []);   // バックアップPCとそろえているときも数秒で反映
   const ses = M ? curSes(M) : null;
   const [menu, setMenu] = useState<{ x: number; y: number; g: string; s?: string } | null>(null);
   useEffect(() => { setMenu(null); }, [ses?.key, M?.day, s.q]);
@@ -669,6 +686,11 @@ function Row({ r, g, ord, i, sel, onMenu, drag }: { r: Root; g: Group; ord: numb
     onDragLeave={() => setDz("")} onDrop={(e) => { e.preventDefault(); setDz(""); drag?.drop(); }} onDragEnd={() => setDz("")}
     data-dz={dz || undefined}>
     {drag && <span className="grip" aria-hidden="true"><Icon n="grip" /></span>}<span className="ord">{ord || ""}</span><RIcon k={rc} /><span className={"rcv " + rc} title={RCT[rc]}>{RCL[rc]}</span>
+    {GOT.enabled && !(g as { syn?: boolean }).syn && (() => { const gt = gotOf(r.id, g); return <button className={cx("gotc", gt.on && "on", gt.wait && "wait", gt.upd && "upd")} role="checkbox" aria-checked={gt.on}
+      title={gt.upd ? "チェックのあとでデータが差し替わりました。確かめて、もう一度チェック" : gt.on ? "会場取得済み（NAS に目印あり）。押すと外す" : "会場取得のチェック（NAS に目印を置く）"}
+      onClick={(e) => { e.stopPropagation(); if (!gt.wait) gotSet(r.id, g, !gt.on); }} onDoubleClick={(e) => e.stopPropagation()}>
+      {gt.on ? <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3.2 7.2 5.8 9.8 10.8 4.4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> : null}</button>; })()}
+    {GOT.enabled && gotOf(r.id, g).upd && <span className="gt gotu" data-k="warn">更新あり</span>}
     {nm.no && <span className="no">{nm.no}</span>}<span className="nm">{nm.name}</span>
     <span className="tags"><Tags g={g} fresh={fresh} /></span><span className="gap" />
     <span className="state">{st === "now" ? <span className="pill now">発表中</span>

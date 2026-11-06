@@ -305,3 +305,12 @@
 #sesEmpty{padding:28px 12px}
 
 .gchip.btn.on{border-color:var(--g-accent);color:var(--g-text)}
+
+/* 会場取得のチェック（演者の横） */
+.gate .gotc{flex:none;width:20px;height:20px;margin:0 2px 0 4px;padding:0;border-radius:5px;border:1.5px solid var(--g-text-3);background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background var(--dur-1,120ms),border-color var(--dur-1,120ms)}
+.gate .gotc:hover{border-color:var(--g-received)}
+.gate .gotc.on{background:var(--g-received);border-color:var(--g-received)}
+.gate .gotc.wait{opacity:.55;cursor:progress}
+.gate .gotc.upd{border-color:var(--g-progress);box-shadow:0 0 0 2px color-mix(in srgb,var(--g-progress) 30%,transparent)}
+.gate .gotc svg{width:14px;height:14px}
+.gate .gotu{flex:none;margin-right:4px}
