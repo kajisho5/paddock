@@ -316,9 +316,9 @@
 .gate .gotu{flex:none;margin-right:4px}
 
 /* 持込のバッジ（演者の行・発表中・次） */
-.gate .gbyo{align-self:center;position:relative;top:0;transform:none;flex:none !important;flex-direction:row !important;width:auto !important;display:inline-flex !important;align-items:center;gap:4px;height:22px;padding:0 8px 0 6px;margin:0 0 0 8px !important;border-radius:6px;background:#7A4CD6;color:#fff;font:600 12px/1 var(--sans);letter-spacing:.02em;white-space:nowrap;vertical-align:middle}
-.gate .gbyo svg{display:block !important;flex:none;width:14px;height:14px;color:#fff;fill:none}
-.gate .gbyo .t,.gate .gbyo .k{display:inline !important;margin:0;padding:0;color:#fff;font:inherit;white-space:nowrap}
-.gate .gbyo .k{font-weight:700;margin-left:1px}
-.gate .who .gbyo{height:26px;font-size:14px;padding:0 10px 0 8px;margin:0 0 0 12px !important}
+.gate .gbadge-byo{align-self:center;flex:none;display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px 0 6px;margin:0 0 0 8px;border-radius:6px;background:rgba(247,248,248,.08);border:1.5px solid var(--g-text);color:var(--g-text);box-sizing:border-box;font:600 12px/1 var(--sans);letter-spacing:.02em;white-space:nowrap;vertical-align:middle}
+.gate .gbadge-byo svg{display:block;flex:none;width:14px;height:14px;color:var(--g-text);fill:none}
+.gate .gbadge-byo .t,.gate .gbadge-byo .k{display:inline;margin:0;padding:0;color:var(--g-text);font:inherit;white-space:nowrap}
+.gate .gbadge-byo .k{font-weight:700;margin-left:1px}
+.gate .who .gbyo{height:26px;font-size:14px;padding:0 10px 0 8px;margin:0 0 0 12px}
 .gate .who .gbyo svg{width:16px;height:16px}

@@ -237,7 +237,7 @@ function ByoBadge({ g }: { g: Group }) {
   const ls = (g.fl || []).map((f) => nfc(f[0]).replace(/[\s　]/g, "")).filter((l) => BYO_RE.test(l));
   if (!ls.length) return null;
   const k = ls.some((l) => /win/i.test(l)) ? "Win" : ls.some((l) => /mac/i.test(l)) ? "Mac" : "";
-  return <span className="gbyo" title={"PC持込（本人のPCで発表" + (k ? "・" + k : "") + "）。入っているデータはバックアップ"}>
+  return <span className="gbadge-byo" title={"PC持込（本人のPCで発表" + (k ? "・" + k : "") + "）。入っているデータはバックアップ"}>
     <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3.2" width="10" height="7" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.6" /><path d="M1.5 12.6h13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
     <span className="t">持込</span>{k && <span className="k">{k}</span>}</span>;
 }
@@ -902,7 +902,7 @@ function DetailBody({ F, r, g }: { F: Folder; r: Root; g: Group }) {
       {m.pending ? <span className="dim">受信中</span> : m.error != null ? <span className="dim">読めませんでした</span> : <pre>{m.text || "（空のファイル）"}</pre>}</div>)}</>}
     {!!(fl.length > 0 || g.repl || g.ana) && <><div className="sec">会場での対応</div><div className="gmarks">
       {ops.length > 0 && <div className="g"><b>オペ</b>{ops.map((f) => <span key={f[0]} className="gt" data-k="op">{nfc(f[0])}</span>)}</div>}
-      {(oth.length > 0 || g.repl || (g.ana && (g.ana.video || g.ana.coi || g.ana.auto))) && <div className="g"><b>ファイル</b>
+      {!!(oth.length > 0 || g.repl || (g.ana && (g.ana.video || g.ana.coi || g.ana.auto))) && <div className="g"><b>ファイル</b>
         {g.repl ? <span className="gt" data-k="repl">差替 {g.repl}</span> : null}
         {oth.map((f) => <span key={f[0]} className="gt" data-k={f[1] === "warn" ? "bad" : "info"}>{nfc(f[0])}</span>)}
         {g.ana?.video ? <span className="gt">動画 {g.ana.video}</span> : null}{g.ana?.coi ? <span className="gt">COI</span> : null}{g.ana?.auto ? <span className="gt">自動送り</span> : null}</div>}
