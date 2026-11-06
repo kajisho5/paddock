@@ -232,6 +232,15 @@ const hasData = (g: Group) => g.files > 0 && Object.keys(g.cats || {}).some((c) 
 /* PC持込（本人のPCで発表）：入っているデータは「バックアップ」として扱う */
 const BYO_RE = /^(?:PC|Win|Mac)?持込(?:リモプレ|Win|Mac)?$/i;   // 既定の目印（PC持込・Mac持込・持込…）だけ。「持込不可」などは含めない
 const isBYO = (g: Group) => (g.fl || []).some((f) => BYO_RE.test(nfc(f[0]).replace(/[\s　]/g, "")));
+/* 持込のバッジ（Win・Mac が分かれば添える）。演者の行・発表中・次に出す */
+function ByoBadge({ g }: { g: Group }) {
+  const ls = (g.fl || []).map((f) => nfc(f[0]).replace(/[\s　]/g, "")).filter((l) => BYO_RE.test(l));
+  if (!ls.length) return null;
+  const k = ls.some((l) => /win/i.test(l)) ? "Win" : ls.some((l) => /mac/i.test(l)) ? "Mac" : "";
+  return <span className="gbyo" title={"PC持込（本人のPCで発表" + (k ? "・" + k : "") + "）。入っているデータはバックアップ"}>
+    <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3.2" width="10" height="7" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.6" /><path d="M1.5 12.6h13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+    <span className="t">持込</span>{k && <span className="k">{k}</span>}</span>;
+}
 
 /* ほかのコピー先（バックアップPCなど）の状態：小さな点で */
 function OtherDests({ g }: { g: Group }) {
@@ -247,7 +256,7 @@ function OtherDests({ g }: { g: Group }) {
 interface TagX { t: string; k: "bad" | "warn" | "op" | "repl" | "info"; p: number }
 function tagsOf(g: Group): TagX[] {
   const out: TagX[] = []; const a = g.ana;
-  for (const [l, role] of g.fl || []) out.push(role === "warn" ? { t: nfc(l), k: "bad", p: 0 } : role === "op" ? { t: nfc(l), k: "op", p: 1 } : { t: nfc(l), k: "info", p: 3 });
+  for (const [l, role] of g.fl || []) if (!BYO_RE.test(nfc(l).replace(/[\s　]/g, ""))) out.push(role === "warn" ? { t: nfc(l), k: "bad", p: 0 } : role === "op" ? { t: nfc(l), k: "op", p: 1 } : { t: nfc(l), k: "info", p: 3 });
   if (a) {
     if (a.vfbad) out.push({ t: "動画の形式", k: "bad", p: 0 });
     else if (a.vfwarn || a.vwarn) out.push({ t: "動画 要試写", k: "warn", p: 1.5 });
@@ -589,14 +598,14 @@ function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
   return <div className={cx("gnow", fin && "fin")}>
     <div className="cur">
       <div className="lb">発表中</div>
-      <Swap k={cur ? cur.key : "-"}>{cur ? <div className="who"><span className="o">{ci + 1}</span>{nameOf(cur).name}<span className="no">{nameOf(cur).no}</span></div>
+      <Swap k={cur ? cur.key : "-"}>{cur ? <div className="who"><span className="o">{ci + 1}</span>{nameOf(cur).name}<span className="no">{nameOf(cur).no}</span><ByoBadge g={cur} /></div>
         : fin ? <div className="tt fin"><RIcon k="done" />このセッションは終了しました</div>
         : !L.length ? <div className="tt">このセッションには演者フォルダがありません</div>
         : <div className="tt">まだいません（右クリック「発表中にする」か ［次の人へ］）</div>}</Swap>
     </div>
     <div className="cur nxb">
       <div className="lb">次</div>
-      <Swap k={nx ? nx.key : ns ? "s:" + ns.key : "-"}>{nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span></div> : ns ? <div className="tt">次のセッション：{sesLabel(ns)}</div> : <div className="tt">—</div>}</Swap>
+      <Swap k={nx ? nx.key : ns ? "s:" + ns.key : "-"}>{nx ? <div className="who dim2"><span className="o">{L.indexOf(nx) + 1}</span>{nameOf(nx).name}<span className="no">{nameOf(nx).no}</span><ByoBadge g={nx} /></div> : ns ? <div className="tt">次のセッション：{sesLabel(ns)}</div> : <div className="tt">—</div>}</Swap>
     </div>
     <button className="gb big" id="bNext" disabled={!L.length && !sesAfter(M, ses)} onMouseUp={(e) => e.currentTarget.blur()} onClick={() => nextUpGuard(M, ses)} title={fin ? "次のセッションを表示します（キー N）" : "いまの人を発表済みにして、次の人を発表中にします（キー N）"}>
       {fin || !L.length ? (sesAfter(M, ses) ? "次のセッションへ" : fin ? "終了" : "次のセッションはありません") : cur ? (nx ? "次の人へ" : "終えてセッション終了") : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
@@ -691,7 +700,7 @@ function Row({ r, g, ord, i, sel, onMenu, drag }: { r: Root; g: Group; ord: numb
       onClick={(e) => { e.stopPropagation(); if (!gt.wait) gotSet(r.id, g, !gt.on); }} onDoubleClick={(e) => e.stopPropagation()}>
       {gt.on ? <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3.2 7.2 5.8 9.8 10.8 4.4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> : null}</button>; })()}
     {GOT.enabled && gotOf(r.id, g).upd && <span className="gt gotu" data-k="warn">更新あり</span>}
-    {nm.no && <span className="no">{nm.no}</span>}<span className="nm">{nm.name}</span>
+    {nm.no && <span className="no">{nm.no}</span>}<span className="nm">{nm.name}</span><ByoBadge g={g} />
     <span className="tags"><Tags g={g} fresh={fresh} /></span><span className="gap" />
     <span className="state">{st === "now" ? <span className="pill now">発表中</span>
       : st === "done" ? <><RIcon k="done" />発表済み</>
