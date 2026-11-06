@@ -8,17 +8,17 @@
   --g-bg:#08090A;--g-panel:#0F1011;--g-raise:#16171A;--g-hover:rgba(255,255,255,.04);--g-active:rgba(255,255,255,.08);--g-input:rgba(255,255,255,.02);
   --g-border:rgba(255,255,255,.08);--g-border-strong:rgba(255,255,255,.12);
   --g-text:#F7F8F8;--g-text-2:#8A8F98;--g-text-3:#62666D;
-  --g-accent:#5E6AD2;--g-accent-dim:rgba(94,106,210,.16);--g-accent-line:rgba(94,106,210,.55);
-  --g-pending:#8A8F98;--g-received:#4EA7FC;--g-progress:#F2C94C;--g-done:#5E6AD2;--g-error:#EB5757;--g-error-line:rgba(235,87,87,.45);
+  --g-accent:#3FCF8E;--g-accent-dim:rgba(63,207,142,.14);--g-accent-line:rgba(63,207,142,.5);
+  --g-pending:#8A8F98;--g-received:#4EA7FC;--g-progress:#F2C94C;--g-done:#4CC38A;--g-error:#EB5757;--g-error-line:rgba(235,87,87,.45);
   --g-pop:0 8px 24px rgba(0,0,0,.48);
   /* 共通部品（設定・ログ・解析カード）も同じ色で */
   --bg:var(--g-bg);--bg2:var(--g-panel);--card:var(--g-panel);--card2:#131416;--hover:var(--g-hover);--sel:var(--g-accent-dim);
   --border:var(--g-border);--border2:var(--g-border-strong);--fg:var(--g-text);--fg2:#C9CCD1;--muted:var(--g-text-2);--dim:var(--g-text-2);
-  --accent:var(--g-accent);--accent-fg:#fff;--ring:var(--g-accent);--hdr:var(--g-panel);
+  --accent:var(--g-accent);--accent-fg:#06140D;--ring:var(--g-accent);--hdr:var(--g-panel);
 }
 .gate{display:grid;grid-template-columns:264px minmax(0,1fr) clamp(340px,26vw,460px);grid-template-rows:48px minmax(0,1fr);height:100vh;
   background:var(--g-bg);color:var(--g-text);font:400 13px/1.45 var(--sans);font-variant-numeric:tabular-nums;position:relative;overflow:hidden}
-.gate ::selection{background:rgba(94,106,210,.45);color:#fff}
+.gate ::selection{background:rgba(63,207,142,.35);color:#fff}
 .gate button{font-family:inherit}
 .gate .ri{width:14px;height:14px;flex:none}
 .gate kbd{font:400 11px var(--mono);color:var(--g-text-2);margin-left:2px}
@@ -26,8 +26,8 @@
 /* ボタン */
 .gate .gb{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 10px;border-radius:6px;font:500 13px var(--sans);color:var(--g-text);border:1px solid var(--g-border);background:transparent;white-space:nowrap}
 .gate .gb:hover:not(:disabled){background:var(--g-hover);border-color:var(--g-border-strong)}
-.gate .gb.pri{background:var(--g-accent);border-color:var(--g-accent);color:#fff}
-.gate .gb.pri:hover:not(:disabled){background:#6B77DD;border-color:#6B77DD}
+.gate .gb.pri{background:var(--g-accent);border-color:var(--g-accent);color:#06140D}
+.gate .gb.pri:hover:not(:disabled){background:#52D99B;border-color:#52D99B}
 .gate .gb.icon{width:30px;padding:0}
 .gate .gb.big{height:40px;padding:0 14px;font-size:14px}
 .gate .gb.has{border-color:var(--g-error-line)}
@@ -36,7 +36,7 @@
 /* ---- 左：セッション ---- */
 .gside{grid-row:1/-1;border-right:1px solid var(--g-border);display:flex;flex-direction:column;min-height:0;background:var(--g-bg)}
 .gws{display:flex;align-items:center;gap:8px;height:48px;padding:0 14px;border-bottom:1px solid var(--g-border);flex:none}
-.gws b{font-weight:600;white-space:nowrap;letter-spacing:-.01em}
+.gws b{font-weight:600;white-space:nowrap}
 .gws .sub{margin-top:0;word-break:normal;margin-left:auto;color:var(--g-text-2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .gdays{padding:12px 12px 2px}
 .gate .gseg{display:flex;width:100%;background:var(--g-input);border:1px solid var(--g-border);border-radius:7px;padding:2px}
@@ -68,7 +68,7 @@
 
 /* ---- 上の帯 ---- */
 .gbar{grid-column:2/4;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid var(--g-border);min-width:0}
-.gbar .st-t{font:600 15px var(--sans);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.gbar .st-t{font:600 15px var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .gbar .st-tm{color:var(--g-text-2);font:400 12px var(--mono);white-space:nowrap}
 .gbar .sp{flex:1}
 .gchip{display:flex;align-items:center;gap:7px;height:28px;padding:0 10px;border-radius:6px;border:1px solid var(--g-border);font-size:12.5px;color:var(--g-text-2);white-space:nowrap;flex:none}
@@ -102,7 +102,7 @@
 @keyframes sw-in{from{opacity:0;transform:translateY(60%)}}
 @keyframes sw-out{to{opacity:0;transform:translateY(-60%)}}
 .gnow .who .o{font:500 13px var(--mono);color:var(--g-text-2);margin-right:8px}.gnow .who .no{font:400 12px var(--mono);color:var(--g-text-2);margin-left:10px}.gnow .who.dim2{color:var(--g-text-2)}
-.gnow .who{font:500 18px var(--sans);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gnow .who{font:500 18px var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gnow .tt{color:var(--g-text-2);overflow-wrap:anywhere}
 .gnow .nx{color:var(--g-text-2);font-size:12px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .glist{flex:1;min-height:0;overflow:auto}
@@ -117,13 +117,13 @@
 @keyframes row-in{from{opacity:0;transform:translateY(-8px)}}
 .gate .grow.rflash::before{content:"";position:absolute;inset:0;background:rgba(242,201,76,.16);pointer-events:none;animation:flash-o 1600ms var(--ease-out) both;z-index:-1}
 .roll{display:inline-block;animation:sw-in var(--dur-3) var(--ease-out) both}
-.gt.a-new{animation:tag-in 220ms var(--ease-spring) both}
+.gt.a-new{animation:tag-in 220ms var(--ease-out) both}
 .gt.a-new::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:0 0 0 1px var(--g-error);animation:ring 900ms var(--ease-out) 120ms both;pointer-events:none}
 .gt{position:relative}
-@keyframes tag-in{from{opacity:0;transform:scale(.85)}}
+@keyframes tag-in{from{opacity:0;transform:scale(.96)}}
 @keyframes ring{0%{opacity:.7;transform:scale(1)}100%{opacity:0;transform:scale(1.7)}}
-.gchip.pop{animation:tag-in 220ms var(--ease-spring) both}
-.gate #bLog .badge{animation:tag-in 260ms var(--ease-spring) both}
+.gchip.pop{animation:tag-in 220ms var(--ease-out) both}
+.gate #bLog .badge{animation:tag-in 260ms var(--ease-out) both}
 .nowind{position:absolute;left:0;right:0;top:0;background:var(--g-accent-dim);pointer-events:none;z-index:0;transition:transform var(--dur-3) var(--ease-inout),height var(--dur-3) var(--ease-inout)}
 .gate .grow.grp{display:flex;align-items:center;gap:10px;height:42px;padding:0 16px;border-bottom:1px solid var(--g-border);cursor:default;position:relative;z-index:1;background:transparent;user-select:none}
 .gate .grow.grp:hover{background:var(--g-hover)}
@@ -140,20 +140,20 @@
 .gate .grow.past .nm,.gate .grow.past .no{color:var(--g-text-2)}
 .gate .grow.drop .nm{text-decoration:line-through;color:var(--g-text-3)}
 .gate .grow.flash::after{background:rgba(242,201,76,.10)}
-.pc.pop{animation:pc-pop 700ms var(--ease-spring) both}
-@keyframes pc-pop{0%{transform:scale(1)}35%{transform:scale(2.2)}100%{transform:scale(1)}}
+.pc.pop{animation:pc-pop 700ms var(--ease-out) both}
+@keyframes pc-pop{0%{transform:scale(1)}35%{transform:scale(1.5)}100%{transform:scale(1)}}
 
 .odots{display:inline-flex;gap:3px;margin-left:4px}
 .grow .rcv.got,.grow .rcv.direct,.grow .rcv.byo{color:var(--g-received)}
 .gt[data-k=warn]{color:var(--g-progress)}
 /* ラベル */
-.gt{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;background:var(--g-active);color:var(--g-text-2);font:500 11px var(--sans);white-space:nowrap}
+.gt{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:6px;background:var(--g-active);color:var(--g-text-2);font:500 11px var(--sans);white-space:nowrap}
 .gt[data-k=bad]{color:var(--g-error)}
 .gt[data-k=op]{color:var(--g-text);background:transparent;box-shadow:inset 0 0 0 1px var(--g-border-strong)}
 .gt[data-k=repl]{color:var(--g-progress)}
 .gt[data-k=more]{color:var(--g-text-2);background:transparent}
-.pill{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;background:var(--g-active);color:var(--g-text-2);font:500 11px var(--sans)}
-.pill.now{background:var(--g-accent);color:#fff}
+.pill{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:6px;background:var(--g-active);color:var(--g-text-2);font:500 11px var(--sans)}
+.pill.now{background:var(--g-accent);color:#06140D}
 
 /* 空のとき */
 .gempty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;flex:1;padding:40px;color:var(--g-text-2);text-align:center}
@@ -165,7 +165,7 @@
 .gdet{border-left:1px solid var(--g-border);overflow:auto;min-height:0;animation:fade-in var(--dur-2) var(--ease-out) both}
 .dhd{padding:16px;border-bottom:1px solid var(--g-border)}
 .dhd .no{font:400 12px var(--mono);color:var(--g-text-2);display:flex;align-items:center;gap:8px;min-height:20px}
-.dhd h2{font:600 16px/1.35 var(--sans);letter-spacing:-.01em;margin:4px 0 2px;word-break:break-word}
+.dhd h2{font:600 16px/1.35 var(--sans);margin:4px 0 2px;word-break:break-word}
 .dhd .by{color:var(--g-text-2)}
 .dhd .go{display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-top:14px}
 .dhd .go .gb{height:40px;font-size:14px}.dhd .go .gb:not(.pri){width:40px;padding:0}
@@ -253,9 +253,9 @@
 @keyframes fadeout-q{to{opacity:0}}
 
 /* ---- 押した手ごたえ（押すと少し沈んで、離すとふわっと戻る。キーで押したときも同じ） ---- */
-.gate .gb,.gate .gs,.gate .gchip.btn{transition:transform 200ms var(--ease-spring),background-color 120ms var(--ease-out),border-color 120ms var(--ease-out)}
+.gate .gb,.gate .gs,.gate .gchip.btn{transition:transform 200ms var(--ease-out),background-color 120ms var(--ease-out),border-color 120ms var(--ease-out)}
 .gate .gb:active:not(:disabled),.gate .gchip.btn:active{transform:scale(.95);transition-duration:60ms;background:var(--g-active)}
-.gate .gb.pri:active:not(:disabled){background:#4F5AC0}
+.gate .gb.pri:active:not(:disabled){background:#33B87B}
 .gate .gs:active{transform:scale(.985);transition-duration:60ms}
 .gate .grow.grp:active{background:var(--g-active);transition:background-color 60ms}
 @keyframes kpress{0%{transform:scale(1)}30%{transform:scale(.95)}100%{transform:scale(1)}}
@@ -266,7 +266,7 @@
 /* 開くボタン：開いています… → ✓ 開きました（一瞬） → 元に。だめなら軽く横に揺れる */
 .ob .ob-in{display:inline-flex;align-items:center;justify-content:center;gap:6px}
 .ob.is-run{cursor:progress}
-.ob.is-ok .ob-in svg{animation:okpop 360ms var(--ease-spring) both}
+.ob.is-ok .ob-in svg{animation:okpop 360ms var(--ease-out) both}
 .ob.is-ok:not(.pri){color:var(--g-received);border-color:rgba(78,167,252,.45)}
 @keyframes okpop{0%{transform:scale(.4);opacity:0}100%{transform:scale(1);opacity:1}}
 .ob.is-ng{animation:ng 360ms var(--ease-out)}
@@ -287,7 +287,7 @@
 .gate .grow.grp:hover .grip{opacity:1}
 .gate .grow[data-dz=top]{box-shadow:inset 0 2px 0 var(--g-accent)}
 .gate .grow[data-dz=bot]{box-shadow:inset 0 -2px 0 var(--g-accent)}
-.ghd .reorder{height:20px;padding:0 8px;border-radius:999px;border:1px solid rgba(94,106,210,.5);background:transparent;color:var(--g-text);font:500 11px var(--sans);cursor:pointer}
+.ghd .reorder{height:20px;padding:0 8px;border-radius:6px;border:1px solid var(--g-accent-line);background:transparent;color:var(--g-text);font:500 11px var(--sans);cursor:pointer}
 .ghd .reorder:hover{background:var(--g-hover)}
 
 /* セッションの終了 */
@@ -311,7 +311,7 @@
 .gate .gotc:hover{border-color:var(--g-received)}
 .gate .gotc.on{background:var(--g-received);border-color:var(--g-received)}
 .gate .gotc.wait{opacity:.55;cursor:progress}
-.gate .gotc.upd{border-color:var(--g-progress);box-shadow:0 0 0 2px color-mix(in srgb,var(--g-progress) 30%,transparent)}
+.gate .gotc.upd{border-color:var(--g-progress);border-width:2px}
 .gate .gotc svg{width:14px;height:14px}
 .gate .gotu{flex:none;margin-right:4px}
 
@@ -319,6 +319,6 @@
 .gate .gbadge-byo{align-self:center;flex:none;display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px 0 6px;margin:0 0 0 8px;border-radius:6px;background:rgba(247,248,248,.08);border:1.5px solid var(--g-text);color:var(--g-text);box-sizing:border-box;font:600 12px/1 var(--sans);letter-spacing:.02em;white-space:nowrap;vertical-align:middle}
 .gate .gbadge-byo svg{display:block;flex:none;width:14px;height:14px;color:var(--g-text);fill:none}
 .gate .gbadge-byo .t,.gate .gbadge-byo .k{display:inline;margin:0;padding:0;color:var(--g-text);font:inherit;white-space:nowrap}
-.gate .gbadge-byo .k{font-weight:700;margin-left:1px}
+.gate .gbadge-byo .k{font-weight:600;margin-left:1px}
 .gate .who .gbyo{height:26px;font-size:14px;padding:0 10px 0 8px;margin:0 0 0 12px}
 .gate .who .gbyo svg{width:16px;height:16px}
