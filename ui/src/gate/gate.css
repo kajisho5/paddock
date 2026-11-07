@@ -51,7 +51,8 @@
 .gate .gs.on{background:var(--g-active);color:var(--g-text)}
 .gs .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
 .gs .c{font-size:12px;color:var(--g-text-2)}
-.gs .tm{grid-column:2/4;font:400 12px var(--mono);color:var(--g-text-2);display:flex;gap:8px;min-height:0}
+.gs .tm{grid-column:2/4;font:400 12px/16px var(--mono);height:16px;color:var(--g-text-2);display:flex;align-items:center;gap:8px;min-height:0;overflow:hidden}
+.gs .tm>span{line-height:16px}
 .gs .tm .live{color:var(--g-error);font-family:var(--sans)}.gs .tm .nxt{color:var(--g-progress);font-family:var(--sans)}
 .gfoot{margin-top:auto;border-top:1px solid var(--g-border);padding:10px 12px;display:flex;gap:6px;flex:none}
 .gfoot .gb:first-child{flex:1}
@@ -135,6 +136,7 @@
 .grow .no{font:400 12px var(--mono);color:var(--g-text-2);flex:none;min-width:34px}
 .gate .grow .nm{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:0}
 .gate .grows .grow .nm{width:var(--nmw,auto);flex:0 0 auto;max-width:36%}
+.gate .grows .grow .no{width:var(--now,auto);min-width:34px;flex:0 0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .grow .tags{display:flex;gap:6px;flex:0 1 auto;min-width:0;overflow:hidden;max-width:42%}
 .grow .gap{flex:1}
 .grow .state{font-size:12px;color:var(--g-text-2);min-width:120px;display:flex;align-items:center;justify-content:flex-end;gap:6px;flex:none;white-space:nowrap}

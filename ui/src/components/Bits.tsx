@@ -71,7 +71,7 @@ export function ReplTag({ g }: { g?: Group }) {
 export function Prog({ list, suffix }: { list: Group[]; suffix?: string }) {
   const l = actv(list); const t = l.length, n = l.filter(isRecv).length; const pct = t ? Math.round((n * 100) / t) : 0;
   return <span className={cx("prog", t && n === t ? "done" : n ? "" : "zero")} title={`受付 ${n}/${t}`}>
-    <Bar pct={pct} />{n}/{t}{suffix || ""}</span>;
+    <Bar pct={pct} /><span className="pn">{n}/{t}{suffix || ""}</span></span>;
 }
 export function GotProg({ list }: { list: Group[] }) {
   const anyGot = !!store.S?.roots.some((r) => (r.groups || []).some((g) => g.mk_got || g.mk_done));

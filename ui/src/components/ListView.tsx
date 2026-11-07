@@ -101,7 +101,7 @@ function Groups() {
         const vflash = vfold && vfull.some((g) => s.flashKeys.has(r.id + "|" + g.key));
         out.push(<div key={"v" + vk} className={cx("vhead", vfold && "fold", vflash && "flashh")} data-fold={vk} tabIndex={0} role="button" aria-expanded={!vfold}
           style={{ ["--vc" as any]: vColor(r.id, v) }} onClick={() => setFold(vk, !isFold(vk))} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setFold(vk, !isFold(vk)); } }}>
-          <span className="vic"><Icon n="building" /></span><span className="vn">{nfc(v)}</span>{vpend && <span className="pdot" title="コピー中" />}<Prog list={vfull} />{vun > 0 && <span className="badge">{vun}</span>}<span className="chev"><Icon n="down" /></span></div>);
+          <span className="vic"><Icon n="building" /></span><span className="vn">{nfc(v)}</span><span className={cx("pdot", !vpend && "ghost")} title={vpend ? "コピー中" : undefined} /><Prog list={vfull} /><span className={cx("badge", !vun && "ghost")}>{vun || ""}</span><span className="chev"><Icon n="down" /></span></div>);
         if (vfold) continue;
       }
       const TL = listTimeline(FV.get(v) || sessions, SI);
@@ -116,7 +116,7 @@ function Groups() {
             onClick={() => setFold(sk, !isFold(sk))} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setFold(sk, !isFold(sk)); } }}>
             <span className="chev"><Icon n="down" /></span>
             <span className="sn">{info.day && lay(r).dl >= 0 && <span className="dchip">{nfc(info.day)}</span>}{(ses || "").split("/").map((x, i) => <Fragment key={i}>{i > 0 && <span className="sep"> › </span>}{nfc(x)}</Fragment>)}</span>
-            {spend && <span className="pdot" title="コピー中" />}<Prog list={sall} />{sun > 0 && <span className="badge">{sun}</span>}
+            <span className={cx("pdot", !spend && "ghost")} title={spend ? "コピー中" : undefined} /><Prog list={sall} /><span className={cx("badge", !sun && "ghost")}>{sun || ""}</span>
             {tt && <span className="tl"><TimeChip t={tt} /><SesStatus st={st} list={sall} /></span>}</div>);
           if (sfold) continue;
         }

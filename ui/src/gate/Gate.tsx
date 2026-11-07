@@ -641,13 +641,16 @@ function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: n
   // 演者名の幅をそろえる：いちばん長い名前に合わせ、ラベル（COI・持込など）が縦にそろうように（長すぎる名前は … で切る）
   useLayoutEffect(() => {
     const el = box.current?.querySelector<HTMLElement>(".grows"); if (!el) return;
-    const nms = [...el.querySelectorAll<HTMLElement>(".grow .nm")];
-    for (const n of nms) n.style.width = "auto";
-    const w = nms.reduce((m, n) => Math.max(m, Math.ceil(n.getBoundingClientRect().width)), 0);
-    for (const n of nms) n.style.width = "";
-    const cap = Math.max(120, Math.floor(el.clientWidth * 0.36));
-    const v = Math.min(w, cap) + "px";
-    if (el.style.getPropertyValue("--nmw") !== v) el.style.setProperty("--nmw", v);
+    const fit = (sel: string, prop: string, cap: number) => {   // 番号（01・S1-01 など）と名前、それぞれいちばん長いものに合わせる
+      const es = [...el.querySelectorAll<HTMLElement>(sel)];
+      for (const n of es) n.style.width = "auto";
+      const w = es.reduce((m, n) => Math.max(m, Math.ceil(n.getBoundingClientRect().width)), 0);
+      for (const n of es) n.style.width = "";
+      const v = Math.min(w, cap) + "px";
+      if (el.style.getPropertyValue(prop) !== v) el.style.setProperty(prop, v);
+    };
+    fit(".grow .no", "--now", 120);
+    fit(".grow .nm", "--nmw", Math.max(120, Math.floor(el.clientWidth * 0.36)));
   });
   const [ind, setInd] = useState<{ y: number; h: number } | null>(null);
   const curKey = ses.list.find((g) => stageOf(M.r.id, g.key, g) === "now")?.key || "";
@@ -714,9 +717,8 @@ function Row({ r, g, ord, i, sel, onMenu, drag }: { r: Root; g: Group; ord: numb
       title={gt.upd ? "チェックのあとでデータが差し替わりました。確かめて、もう一度チェック" : gt.on ? "会場取得済み（NAS に目印あり）。押すと外す" : "会場取得のチェック（NAS に目印を置く）"}
       onClick={(e) => { e.stopPropagation(); if (!gt.wait) gotSet(r.id, g, !gt.on); }} onDoubleClick={(e) => e.stopPropagation()}>
       {gt.on ? <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3.2 7.2 5.8 9.8 10.8 4.4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> : null}</button>; })()}
-    {GOT.enabled && gotOf(r.id, g).upd && <span className="gt gotu" data-k="warn">更新あり</span>}
     {nm.no && <span className="no">{nm.no}</span>}<span className="nm">{nm.name}</span><ByoBadge g={g} />
-    <span className="tags"><Tags g={g} fresh={fresh} /></span><span className="gap" />
+    <span className="tags">{GOT.enabled && gotOf(r.id, g).upd && <span className="gt gotu" data-k="warn" title="会場取得のチェックのあとで、データが差し替わりました">更新あり</span>}<Tags g={g} fresh={fresh} /></span><span className="gap" />
     <span className="state">{st === "now" ? <span className="pill now">発表中</span>
       : st === "done" ? <><RIcon k="done" />発表済み</>
         : <><i className={cx("pc", cp.k, pop && "pop")} /><span title={cp.tip}>{cp.t}</span>{cp.pct != null && <Bar pct={cp.pct} className="gtrack sm" />}<OtherDests g={g} /></>}</span>

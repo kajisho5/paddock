@@ -500,3 +500,7 @@ input,textarea{caret-color:var(--accent)}
 .hsel select{max-width:170px}
 .hdr.compact .hbtns .bt{display:none}.hdr.compact .hbtns button{padding:0 9px}
 @media (max-width:1240px){.hdr .seg .lb{display:none}.hsel select{max-width:130px}}
+
+/* 見出しの右側（コピー中の点・受付の進み・未確認の数）は、無いときも場所をとっておく（行ごとに位置がずれないように） */
+.vhead .ghost,.shead .ghost{visibility:hidden;animation:none}
+.prog .pn{display:inline-block;min-width:5ch;text-align:right}
