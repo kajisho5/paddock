@@ -331,8 +331,9 @@ table.files button.oo.show{border-color:var(--ok);color:var(--ok-fg)}
 .ev{padding:11px 14px;border-bottom:1px solid var(--border);cursor:pointer}
 .ev:hover{background:var(--hover)}
 .ev.u{background:var(--got-bg)}
-.ev .top{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
-.ev .t{font:11.5px var(--mono);color:var(--muted)}
+.ev .top{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px}
+.ev .t{font:11.5px var(--mono);color:var(--muted);min-width:11ch;flex:0 0 auto}
+.ev .top>.kw{width:92px;flex:0 0 auto;display:flex}
 .ev .ti{font-weight:700;flex:1;min-width:0;word-break:break-all}
 .ev .wh{font-size:11.5px;color:var(--muted);margin-top:3px}
 .ev .sm{font-size:12.5px;margin-top:3px}
