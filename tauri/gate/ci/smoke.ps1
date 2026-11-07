@@ -87,8 +87,10 @@ if ((Count "PADDOCK_GATE_core") -eq 1) { Ok "エンジンは1つ" } else { Bad "
 $gp = (Get-Process -Name PADDOCK_GATE | Select-Object -First 1).Id
 $h = [W]::Find([uint32]$gp)
 if ($h -ne [IntPtr]::Zero) {
-  $fs = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; `$f = New-Object System.Windows.Forms.Form; `$f.Text='架空の全画面'; `$f.FormBorderStyle='None'; `$f.WindowState='Maximized'; `$f.Show(); `$t=[DateTime]::Now; while(([DateTime]::Now-`$t).TotalSeconds -lt 8){ [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }"
-  Start-Sleep 5
+  $fs = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; `$f = New-Object System.Windows.Forms.Form; `$f.Text='架空の全画面'; `$f.FormBorderStyle='None'; `$f.WindowState='Maximized'; `$f.Show(); `$t=[DateTime]::Now; while(([DateTime]::Now-`$t).TotalSeconds -lt 18){ [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }"
+  # 全画面の窓が出るまで待つ（CI の PC が遅いときもあるので、最大 15 秒）
+  for ($i = 0; $i -lt 30 -and [W]::Top($h); $i++) { Start-Sleep -Milliseconds 500 }
+  Start-Sleep 1
   Shot "3-fullscreen"
   if (-not [W]::Top($h)) { Ok "全画面の窓があると最前面をやめる" } else { Bad "全画面の窓があっても最前面のまま" }
   if (-not [W]::Visible($h, [uint32]$gp)) { Ok "全画面の窓の後ろに回る" } else { Bad "全画面の窓の上に GATE が見えている" }
