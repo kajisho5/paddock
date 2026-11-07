@@ -638,6 +638,17 @@ function List({ M, ses, onMenu }: { M: Model; ses: Ses; onMenu: (x: number, y: n
     }
     pos.current = { key: ses.key, m };
   });
+  // 演者名の幅をそろえる：いちばん長い名前に合わせ、ラベル（COI・持込など）が縦にそろうように（長すぎる名前は … で切る）
+  useLayoutEffect(() => {
+    const el = box.current?.querySelector<HTMLElement>(".grows"); if (!el) return;
+    const nms = [...el.querySelectorAll<HTMLElement>(".grow .nm")];
+    for (const n of nms) n.style.width = "auto";
+    const w = nms.reduce((m, n) => Math.max(m, Math.ceil(n.getBoundingClientRect().width)), 0);
+    for (const n of nms) n.style.width = "";
+    const cap = Math.max(120, Math.floor(el.clientWidth * 0.36));
+    const v = Math.min(w, cap) + "px";
+    if (el.style.getPropertyValue("--nmw") !== v) el.style.setProperty("--nmw", v);
+  });
   const [ind, setInd] = useState<{ y: number; h: number } | null>(null);
   const curKey = ses.list.find((g) => stageOf(M.r.id, g.key, g) === "now")?.key || "";
   useLayoutEffect(() => {   // 発表中の帯：行から行へすべって移動する
