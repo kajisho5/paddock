@@ -371,7 +371,11 @@ export function GateApp() {
       if (!M || !ses || e.ctrlKey || e.metaKey || e.altKey || menu) return;   // メニューを開いている間は、後ろの一覧を動かさない
       const sel = store.SEL && store.SEL.root === M.r.id ? ses.list.findIndex((g) => g.key === store.SEL!.group) : -1;
       if (e.key === "n" || e.key === "N") { e.preventDefault(); nextUpGuard(M, ses); }
-      else if (e.key === "Enter" && sel >= 0 && !ses.list[sel].mk_drop && !menu && !store.q && !(e.target as HTMLElement).closest("button,a,[role=menu],[role=tab]")) { e.preventDefault(); rowFx(ses.list[sel].key); setStage(M.r.id, ses.list[sel].key, "now"); }
+      else if (e.key === "Enter" && sel >= 0 && !menu && !store.q && !(e.target as HTMLElement).closest("button,a,[role=menu],[role=tab]")) {
+        e.preventDefault(); const g = ses.list[sel]; const how = enterHow();
+        if (e.shiftKey || how === "now") { if (!g.mk_drop) { rowFx(g.key); setStage(M.r.id, g.key, "now"); } }   // 発表中にする
+        else { rowFx(g.key); opOpen(M.r.id, g.key, "", how); }   // 選んでいる演者の発表ファイルを開く（↓ で次の人を選んで Enter）
+      }
       else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !store.q && !menu) {
         e.preventDefault(); const d = e.key === "ArrowDown" ? 1 : -1; let n = sel + d;
         while (ses.list[n] && ses.list[n].mk_drop) n += d;   // 取り下げは飛ばす
@@ -609,7 +613,7 @@ function NowBlock({ M, ses }: { M: Model; ses: Ses }) {
     </div>
     <button className="gb big" id="bNext" disabled={!L.length && !sesAfter(M, ses)} onMouseUp={(e) => e.currentTarget.blur()} onClick={() => nextUpGuard(M, ses)} title={fin ? "次のセッションを表示します（キー N）" : "いまの人を発表済みにして、次の人を発表中にします（キー N）"}>
       {fin || !L.length ? (sesAfter(M, ses) ? "次のセッションへ" : fin ? "終了" : "次のセッションはありません") : cur ? (nx ? "次の人へ" : "終えてセッション終了") : "最初の人を発表中に"}<Icon n="chev" /><kbd>N</kbd></button>
-    <div className="keys">↑↓ 選ぶ・Enter 発表中にする・右クリック メニュー</div>
+    <div className="keys">↑↓ 選ぶ・{enterHow() === "now" ? "Enter 発表中にする" : "Enter " + (enterHow() === "show" ? "スライドショーで開く" : "開く（編集）") + "・Shift＋Enter 発表中にする"}・右クリック メニュー</div>
   </div>;
 }
 
@@ -708,6 +712,8 @@ function Row({ r, g, ord, i, sel, onMenu, drag }: { r: Root; g: Group; ord: numb
   </div>;
 }
 
+/* Enter を押したとき（［設定］→ 演者のスライドを開く）。開く設定がオフなら発表中にする */
+function enterHow(): "file" | "show" | "now" { return OPEN.settings.enabled ? (OPEN.settings.enter || "file") : "now"; }
 /* 同じ行を 0.45 秒以内に2回クリック＝ダブルクリック（1回目で画面が描き直されても確実に判定する） */
 let LAST: { g: string; t: number; x: number; y: number } | null = null;
 function rowClick(e: React.MouseEvent, root: string, group: string) {
@@ -769,15 +775,15 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
   if (!g) return null;
   return <div className="gmenu" ref={ref} role="menu" style={{ left: pos.x, top: pos.y }} onKeyDown={onKey} id="gmenu">
     <div className="hd">{nameOf(g).no} {nameOf(g).name}</div>
-    {st !== "now" && !g.mk_drop && it("発表中にする", () => setStage(M.r.id, g.key, "now"), { k: "Enter", ic: <RIcon k="live" />, id: "mNow" })}
+    {st !== "now" && !g.mk_drop && it("発表中にする", () => setStage(M.r.id, g.key, "now"), { k: enterHow() === "now" ? "Enter" : "⇧Enter", ic: <RIcon k="live" />, id: "mNow" })}
     {st !== "done" && it("発表済みにする", () => setStage(M.r.id, g.key, "done"), { ic: <RIcon k="done" />, id: "mDone" })}
     {STG.st[M.r.id + "|" + g.key] && it("未発表に戻す", () => setStage(M.r.id, g.key, ""), { ic: <Icon n="chevL" />, id: "mReset" })}
     {!s0.q && (() => { const ss = curSes(M); const ix = ss ? ss.list.findIndex((x) => x.key === g.key) : -1; return ss && ix >= 0 ? <>
       {ix > 0 && it("1つ上へ（発表順）", () => moveRow(M.r.id, ss, g.key, ix - 1), { ic: <Icon n="up" /> })}
       {ix < ss.list.length - 1 && it("1つ下へ（発表順）", () => moveRow(M.r.id, ss, g.key, ix + 1), { ic: <Icon n="down" /> })}</> : null; })()}
     <div className="sep" />
-    {it(isBYO(g) ? "バックアップを開く（スライドショー）" : "スライドショーで開く", () => opOpen(M.r.id, g.key, "", "show"), { dis: !has || !ok, ic: <Icon n="play" />, id: "mShow" })}
-    {it("発表ファイルを開く", () => opOpen(M.r.id, g.key, "", "file"), { dis: !has || !ok, ic: <Icon n="file" /> })}
+    {it(isBYO(g) ? "バックアップを開く（スライドショー）" : "スライドショーで開く", () => opOpen(M.r.id, g.key, "", "show"), { dis: !has || !ok, ic: <Icon n="play" />, id: "mShow", k: enterHow() === "show" ? "Enter" : undefined })}
+    {it("発表ファイルを開く", () => opOpen(M.r.id, g.key, "", "file"), { dis: !has || !ok, ic: <Icon n="file" />, k: enterHow() === "file" ? "Enter" : undefined })}
     {it("フォルダを開く", () => opOpen(M.r.id, g.key, "", "folder"), { dis: !has, ic: <Icon n="folder" /> })}
     <div className="sep" />
     {it("NASのパスをコピー", () => copyText(nfc(M.r.path.replace(/[\\/]+$/, "") + (M.r.path.includes("\\") ? "\\" + g.key.split("/").join("\\") : "/" + g.key))).then(() => toast("パスをコピーしました"), () => toast("コピーできませんでした")), { ic: <Icon n="copy" /> })}

@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.12.11"
+VERSION = "1.12.12"
 DEFAULT_PORT = 8797
 
 
@@ -1178,7 +1178,7 @@ def valid_password(p):
 
 
 # ---------------------------------------------------------------- 演者のスライドを開く（このPCのコピーを開く。NASのファイルは開かない）
-OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest", "got": False, "got_src": ""}
+OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest", "got": False, "got_src": "", "enter": "file"}
 PRES_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps", ".key", ".pdf")      # 発表ファイル（この順に優先）
 SHOW_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps")                      # スライドショーで開けるもの
 OPENABLE_STATES = ("ok", "edited", "old")                                                   # コピー済み（コピー先で編集されたものも含む）
@@ -2262,6 +2262,7 @@ class Opener:
         out["multi"] = d.get("multi") if d.get("multi") in ("newest", "folder") else OPEN_DEFAULTS["multi"]
         out["got"] = bool(d.get("got", False))   # 演者の横のチェックで NAS に「会場取得」の目印を置く（既定はオフ）
         out["got_src"] = str(d.get("got_src") or "").strip()[:1000]
+        out["enter"] = d.get("enter") if d.get("enter") in ("file", "show", "now") else OPEN_DEFAULTS["enter"]   # GATE で Enter を押したとき
         return out
 
     def dest(self):

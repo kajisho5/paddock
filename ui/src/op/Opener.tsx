@@ -9,7 +9,7 @@ import { CPL } from "../components/Bits";
 import { Icon } from "../components/Icons";
 import { cx } from "../lib/util";
 
-export interface OpenCfg { enabled: boolean; dest: string; dbl: "file" | "show" | "folder"; multi: "newest" | "folder"; got?: boolean; got_src?: string }
+export interface OpenCfg { enabled: boolean; dest: string; dbl: "file" | "show" | "folder"; multi: "newest" | "folder"; got?: boolean; got_src?: string; enter?: "file" | "show" | "now" }
 export const OPEN: { settings: OpenCfg; dest: { id: string; label: string } | null } = { settings: { enabled: true, dest: "", dbl: "file", multi: "newest" }, dest: null };
 export function openLoad() { return api<any>("/api/op/open/settings").then((j) => { OPEN.settings = j.settings; OPEN.dest = j.dest; store.emit(); }).catch(() => {}); }
 
@@ -76,6 +76,10 @@ export function OpenSettings({ c }: { c: Config }) {
         <label><input type="radio" name="ooDbl" value="file" checked={st.dbl === "file"} onChange={() => set({ dbl: "file" })} />発表ファイルを開く（PowerPoint など）</label>
         <label><input type="radio" name="ooDbl" value="show" checked={st.dbl === "show"} onChange={() => set({ dbl: "show" })} />発表ファイルをスライドショーで開く（PowerPoint のとき）</label>
         <label><input type="radio" name="ooDbl" value="folder" checked={st.dbl === "folder"} onChange={() => set({ dbl: "folder" })} />演者フォルダを開く（Explorer）</label></span>
+      <span>GATE で Enter を押したとき</span><span className="checks col">
+        <label><input type="radio" name="ooEnter" value="file" checked={(st.enter || "file") === "file"} onChange={() => set({ enter: "file" })} />選んでいる演者の発表ファイルを開く（編集画面）</label>
+        <label><input type="radio" name="ooEnter" value="show" checked={st.enter === "show"} onChange={() => set({ enter: "show" })} />選んでいる演者の発表ファイルをスライドショーで開く</label>
+        <label><input type="radio" name="ooEnter" value="now" checked={st.enter === "now"} onChange={() => set({ enter: "now" })} />選んでいる演者を発表中にする（Shift＋Enter はいつでも発表中にする）</label></span>
       <span>発表ファイルが2つ以上あるとき</span><span className="checks col">
         <label><input type="radio" name="ooMulti" value="newest" checked={st.multi !== "folder"} onChange={() => set({ multi: "newest" })} />後から入ったほうを開く（差し替え版が後から届いたとき用。どちらか決められないときはフォルダ）</label>
         <label><input type="radio" name="ooMulti" value="folder" checked={st.multi === "folder"} onChange={() => set({ multi: "folder" })} />フォルダを開く（どれを使うか目で選ぶ）</label></span>
