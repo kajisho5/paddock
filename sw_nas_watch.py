@@ -52,7 +52,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 APP_NAME = "PADDOCK SCOUT"
-VERSION = "1.17.11"
+VERSION = "1.17.12"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"

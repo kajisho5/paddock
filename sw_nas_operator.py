@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.12.12"
+VERSION = "1.12.13"
 DEFAULT_PORT = 8797
 
 
@@ -1341,6 +1341,12 @@ try {
   $name = [IO.Path]::GetFileName($path)
   try { $pp = [Runtime.InteropServices.Marshal]::GetActiveObject('PowerPoint.Application') } catch { $pp = New-Object -ComObject PowerPoint.Application }
   try { $pp.Visible = -1 } catch {}
+  # スライドショーのために窓なしで開いたもの（スライドショーが終わって見えなくなったもの）は閉じておく
+  $inShow = @{}
+  foreach ($sw in @($pp.SlideShowWindows)) { try { $inShow[$sw.Presentation.FullName] = 1 } catch {} }
+  foreach ($p in @($pp.Presentations)) {
+    try { if ($p.Windows.Count -eq 0 -and -not $inShow.ContainsKey($p.FullName) -and $p.FullName -ine $path) { $p.Close() } } catch {}
+  }
   $pres = $null
   foreach ($p in @($pp.Presentations)) {
     $full = ''
@@ -1348,13 +1354,17 @@ try {
     if ($full -ieq $path) { $pres = $p; break }
     if ($p.Name -ieq $name) { Out @{ err = 'samename'; other = $p.FullName }; exit 0 }
   }
-  if ($pres -eq $null) { $ro = 0; if ($req.ro) { $ro = -1 }; $pres = $pp.Presentations.Open($path, $ro, 0, -1) }
+  $ro = 0; if ($req.ro) { $ro = -1 }
   if ($req.show) {
+    # スライドショー：編集画面を作らずに開く（編集画面が一瞬前に出てちらつかないように）
+    if ($pres -eq $null) { $pres = $pp.Presentations.Open($path, $ro, 0, 0) }
     $w = $null
     foreach ($sw in @($pp.SlideShowWindows)) { if ($sw.Presentation.FullName -ieq $pres.FullName) { $w = $sw } }
     if ($w -eq $null) { $w = $pres.SlideShowSettings.Run() }
     Out @{ ok = 1; hwnd = [int64]$w.HWND }
   } else {
+    if ($pres -eq $null) { $pres = $pp.Presentations.Open($path, $ro, 0, -1) }
+    elseif ($pres.Windows.Count -eq 0) { try { [void]$pres.NewWindow() } catch {} }   # スライドショー用に窓なしで開いていたもの
     try { $pres.Windows.Item(1).Activate() } catch {}
     Out @{ ok = 1; hwnd = [int64]$pp.HWND }
   }

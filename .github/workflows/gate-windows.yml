@@ -70,6 +70,17 @@ jobs:
           PADDOCK_SHELL="tauri/gate/target/release/PADDOCK_GATE.exe" python build_operator.py embed.zip dist
           ls -la dist
 
+      - name: PowerPoint を開く命令（PowerShell）の文法チェック
+        shell: pwsh
+        run: |
+          python dev/extract_ppt_ps.py ppt.ps1
+          $err = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ppt.ps1), [ref]$null, [ref]$err)
+          if ($err.Count) { $err | ForEach-Object { Write-Host "::error::$_" }; exit 1 } else { Write-Host "OK 文法" }
+          $env:SWNAS_PPTREQ = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"path":"C:\\nope\\x.pptx","show":true,"ro":false}'))
+          $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ppt.ps1
+          Write-Host "PowerPoint の無い PC での結果: $out"
+          if ($out -notmatch '"err"') { Write-Host "::error::PowerPoint の無い PC でエラーを返さない"; exit 1 }
+
       - name: 起動の確認
         shell: pwsh
         run: ./tauri/gate/ci/smoke.ps1 -Zip "dist/PADDOCK_GATE_v${env:GATE_VERSION}_Windows.zip" -Out smoke
