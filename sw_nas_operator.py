@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.12.16"
+VERSION = "1.12.17"
 DEFAULT_PORT = 8797
 
 
@@ -1743,22 +1743,39 @@ class GotMarks:
         with self.lock:
             return {"enabled": bool(self.opener.settings.get("got")), "mine": sorted(self.mine), "upd": dict(self.upd)}
 
-    def _src(self):
-        p = str(self.opener.settings.get("got_src") or "").strip()
+    def _src(self, p=None):
+        p = str(self.opener.settings.get("got_src") or "").strip() if p is None else str(p).strip().strip('"')
         if not p:
             return GOT_IMG_NAME, GOT_IMG
         name = os.path.basename(p)
         m = self.mgr.marker_of(name, (1, 0))
         if not m or m[0] != "got":
-            raise ValueError("目印画像の名前が「会場取得」の目印として読めません（例：04_会場取得.jpg）: " + name)
+            raise ValueError("「%s」は名前が「会場取得」の目印として読めません。ファイル名を「17_会場取得.jpg」のように、番号＋「会場取得」「取得済」などにしてください" % name)
         try:
             with open(W.long_path(p), "rb") as f:
                 b = f.read(W.MARK_MAX + 1)
+        except FileNotFoundError:
+            raise ValueError("目印画像が見つかりません（場所を確かめてください）: " + p)
         except OSError as e:
             raise ValueError("目印画像を読めません: " + W._err(e))
         if len(b) > W.MARK_MAX:
             raise ValueError("目印画像が大きすぎます")
         return name, b
+
+    def check(self, p):
+        """設定画面で選んだ目印画像が使えるかを確かめる（読むだけ）。"""
+        name, b = self._src(p)
+        return {"ok": True, "name": name, "size": len(b), "img": W.ext_of(name) in W.CATS[5][1]}
+
+    def preview(self, p):
+        """設定画面の見本表示用。目印として読める名前の画像だけを返す（ほかのファイルは返さない）。"""
+        name, b = self._src(p)
+        ext = W.ext_of(name)
+        ct = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif",
+              "bmp": "image/bmp", "webp": "image/webp"}.get(ext)
+        if not ct:
+            raise ValueError("この形式は見本を表示できません（置くことはできます）")
+        return ct, b
 
     def _watcher(self, root, group):
         op = self.mgr.cfg["op"]
@@ -2410,6 +2427,22 @@ class OpHandler(W.Handler):
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
             return self.send_json(self.server.got.get())
+        if u.path == "/api/op/got/img":
+            if not self.is_local() or (self.headers.get("Host") or "").lower() not in self.server.allowed_hosts:
+                return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
+            try:
+                q = parse_qs(u.query, keep_blank_values=True).get("p", [None])[0]
+                ct, b = self.server.got.preview(q)
+            except ValueError as e:
+                return self.deny(400, str(e))
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(b)
+            return
         if u.path == "/api/op/stage":
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
@@ -2488,6 +2521,8 @@ class OpHandler(W.Handler):
                 st = {k: str(body.get(k) or "")[:200] for k in ("now", "next", "session", "venue")}
                 self.server.remote.status = st
                 return self.send_json({"ok": True})
+            if u.path == "/api/op/got/check":
+                return self.send_json(self.server.got.check(body.get("path")))
             if u.path == "/api/op/got":
                 return self.send_json(self.server.got.set(str(body.get("root") or ""), str(body.get("group") or ""), bool(body.get("on"))))
             if u.path == "/api/op/stage":

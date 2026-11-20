@@ -505,3 +505,11 @@ input,textarea{caret-color:var(--accent)}
 /* 見出しの右側（コピー中の点・受付の進み・未確認の数）は、無いときも場所をとっておく（行ごとに位置がずれないように） */
 .vhead .ghost,.shead .ghost{visibility:hidden;animation:none}
 .prog .pn{display:inline-block;min-width:5ch;text-align:right}
+.gotsrc{display:flex;flex-direction:column;gap:6px;min-width:0}
+.gotsrc .row{display:flex;gap:6px;align-items:center;min-width:0}
+.gotsrc .row input{flex:1;min-width:0}
+.gotsrc .row button{flex:none}
+.gotchk{display:flex;align-items:center;gap:10px;font-size:12.5px;padding:6px 8px;border-radius:6px}
+.gotchk.ok{background:var(--ok-bg);color:var(--ok-fg)}
+.gotchk.ng{background:var(--bad-bg);color:var(--bad-fg)}
+.gotchk img{width:72px;height:72px;object-fit:contain;background:#fff;border-radius:4px;flex:none}

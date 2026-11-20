@@ -64,6 +64,27 @@ export const OpFileButtons = {
 
 /* 設定画面：「演者のスライドを開く」 */
 let draft: OpenCfg | null = null;
+/* 会場取得の目印画像：自分の画像を選ぶ・見本を見る（読むだけ。選んだ画像を NAS に置くのはチェックを入れたときだけ） */
+function GotSrc({ v, set }: { v: string; set: (v: string) => void }) {
+  const [chk, setChk] = useState<{ ok: boolean; msg: string; img: boolean; n: number } | null>(null);
+  const check = async (p: string) => {
+    try { const j: any = await api("/api/op/got/check", { path: p }); setChk({ ok: true, msg: p.trim() ? "使えます：" + j.name : "同梱の画像を置きます：" + j.name, img: !!j.img, n: Date.now() }); }
+    catch (e: any) { setChk({ ok: false, msg: e.message, img: false, n: Date.now() }); }
+  };
+  const pick = async () => {
+    try { const j: any = await api("/api/pick", { file: "image" }); if (j.path) { set(j.path); check(j.path); } }
+    catch (e: any) { toast(e.message, 5000); }
+  };
+  return <span className="gotsrc">
+    <span className="row"><input type="text" id="ooGotSrc" placeholder="空のとき：04_会場取得.jpg（同梱）" value={v} onChange={(e) => { set(e.target.value); setChk(null); }} onBlur={() => check(v)} />
+      <button className="ghost" id="ooGotPick" onClick={pick}>画像を選ぶ…</button>
+      {v && <button className="ghost" id="ooGotReset" onClick={() => { set(""); check(""); }}>同梱に戻す</button>}
+      {!chk && <button className="ghost" id="ooGotTry" onClick={() => check(v)}>見本を見る</button>}</span>
+    {chk && <span className={cx("gotchk", chk.ok ? "ok" : "ng")} id="ooGotChk">
+      {chk.ok && chk.img && <img src={"/api/op/got/img?p=" + encodeURIComponent(v) + "&t=" + chk.n} alt="置く目印画像の見本" />}
+      <span>{chk.msg}</span></span>}
+    <small className="hint">自分の画像を使うときは［画像を選ぶ…］。名前が「会場取得」「取得済」「会場確認済」などの目印として読めるもの（例：17_会場取得.jpg）。読めない名前のときは使えません（受付から目印として見えないため）。選んだ画像はコピーせず、その場所から読みます</small></span>;
+}
 export function OpenSettings({ c }: { c: Config }) {
   const [st, setSt] = useState<OpenCfg>(() => (draft = { ...OPEN.settings }));
   const set = (p: Partial<OpenCfg>) => { const n: OpenCfg = { ...st, ...p }; draft = n; setSt(n); };
@@ -87,8 +108,7 @@ export function OpenSettings({ c }: { c: Config }) {
     <h3 style={{ marginTop: 18 }}>会場取得のチェック</h3>
     <p style={{ margin: 0 }}><label className="lbl"><input type="checkbox" id="ooGot" checked={!!st.got} onChange={(e) => set({ got: e.target.checked })} />演者の横にチェックを出し、チェックを入れたら NAS の演者フォルダに「会場取得」の目印画像を置く</label></p>
     <div className="grid2" style={{ marginTop: 10 }}>
-      <span>置く目印画像</span><span><input type="text" id="ooGotSrc" placeholder="空のとき：04_会場取得.jpg（同梱）" value={st.got_src || ""} onChange={(e) => set({ got_src: e.target.value })} style={{ width: "100%" }} />
-        <small className="hint">現場の画像を使うときは、そのファイルの場所（例：D:\目印\17_会場取得.jpg）。名前が「会場取得」「取得済」「会場確認済」などの目印として読めるもの</small></span>
+      <span>置く目印画像</span><GotSrc v={st.got_src || ""} set={(v) => set({ got_src: v })} />
     </div>
     <p className="hint"><b>この設定をオンにしたときだけ、GATE は NAS に書き込みます</b>（目印画像を1枚置く・自分で置いたものを消す、だけ。ほかのファイルには触れません。同じ名前のファイルがあれば置きません）。<br />
       チェックは「NAS の演者フォルダに会場取得の目印があるか」で決まります。PC受付などが目印を消せばチェックは外れます。チェックのあとで演者のデータが差し替わったら、GATE が置いた目印を消して「更新あり」にします（確かめてもう一度チェック）。</p>
