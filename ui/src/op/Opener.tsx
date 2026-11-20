@@ -9,7 +9,7 @@ import { CPL } from "../components/Bits";
 import { Icon } from "../components/Icons";
 import { cx } from "../lib/util";
 
-export interface OpenCfg { enabled: boolean; dest: string; dbl: "file" | "show" | "folder"; multi: "newest" | "folder"; got?: boolean; got_src?: string; enter?: "file" | "show" | "now" }
+export interface OpenCfg { enabled: boolean; dest: string; dbl: "file" | "show" | "folder"; multi: "newest" | "folder"; got?: boolean; got_src?: string; got_auto?: boolean; enter?: "file" | "show" | "now" }
 export const OPEN: { settings: OpenCfg; dest: { id: string; label: string } | null } = { settings: { enabled: true, dest: "", dbl: "file", multi: "newest" }, dest: null };
 export function openLoad() { return api<any>("/api/op/open/settings").then((j) => { OPEN.settings = j.settings; OPEN.dest = j.dest; store.emit(); }).catch(() => {}); }
 
@@ -107,6 +107,8 @@ export function OpenSettings({ c }: { c: Config }) {
     </div>
     <h3 style={{ marginTop: 18 }}>会場取得のチェック</h3>
     <p style={{ margin: 0 }}><label className="lbl"><input type="checkbox" id="ooGot" checked={!!st.got} onChange={(e) => set({ got: e.target.checked })} />演者の横にチェックを出し、チェックを入れたら NAS の演者フォルダに「会場取得」の目印画像を置く</label></p>
+    <p style={{ margin: "6px 0 0 24px" }}><label className="lbl"><input type="checkbox" id="ooGotAuto" checked={!!st.got_auto} disabled={!st.got} onChange={(e) => set({ got_auto: e.target.checked })} />自動で置く：演者のデータがこのPCのコピー先すべてにコピーし終わったら、チェックを自動で入れる</label></p>
+    <p className="hint" style={{ margin: "2px 0 0 24px" }}>NAS への受信が終わり、このPCに届いたことを確かめてから置きます（NAS に届いただけでは置きません）。差し替えがあったときも、新しいデータのコピーが終わったら置き直します。手でチェックを外したときや、PC受付などが目印を消したときは、そのデータのあいだは付け直しません。</p>
     <div className="grid2" style={{ marginTop: 10 }}>
       <span>置く目印画像</span><GotSrc v={st.got_src || ""} set={(v) => set({ got_src: v })} />
     </div>

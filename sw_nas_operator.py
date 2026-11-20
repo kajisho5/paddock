@@ -1178,7 +1178,7 @@ def valid_password(p):
 
 
 # ---------------------------------------------------------------- 演者のスライドを開く（このPCのコピーを開く。NASのファイルは開かない）
-OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest", "got": False, "got_src": "", "enter": "file"}
+OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest", "got": False, "got_src": "", "got_auto": False, "enter": "file"}
 PRES_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps", ".key", ".pdf")      # 発表ファイル（この順に優先）
 SHOW_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps")                      # スライドショーで開けるもの
 OPENABLE_STATES = ("ok", "edited", "old")                                                   # コピー済み（コピー先で編集されたものも含む）
@@ -1734,14 +1734,20 @@ class GotMarks:
         d = d if isinstance(d, dict) else {}
         self.mine = {k: v for k, v in (d.get("mine") or {}).items() if isinstance(k, str) and isinstance(v, dict) and v.get("rel")}
         self.upd = {k: float(v) for k, v in (d.get("upd") or {}).items() if isinstance(k, str) and isinstance(v, (int, float))}
+        # 自動で置いた（または置こうとした）ときのデータの印。同じデータのあいだは置き直さない
+        # （PC受付などが目印を消した・手でチェックを外したときに、勝手に付け直さないため）
+        self.auto = {k: v for k, v in (d.get("auto") or {}).items() if isinstance(k, str) and isinstance(v, str)}
+        self.auto_fail = {}
         threading.Thread(target=self._loop, daemon=True, name="got").start()
 
     def _save(self):
-        self.mgr.store.write_json(self.NAME, {"mine": self.mine, "upd": self.upd})
+        self.mgr.store.write_json(self.NAME, {"mine": self.mine, "upd": self.upd, "auto": self.auto})
 
     def get(self):
         with self.lock:
-            return {"enabled": bool(self.opener.settings.get("got")), "mine": sorted(self.mine), "upd": dict(self.upd)}
+            s = self.opener.settings
+            return {"enabled": bool(s.get("got")), "auto": bool(s.get("got") and s.get("got_auto")),
+                    "mine": sorted(self.mine), "upd": dict(self.upd)}
 
     def _src(self, p=None):
         p = str(self.opener.settings.get("got_src") or "") if p is None else str(p)
@@ -1817,14 +1823,14 @@ class GotMarks:
                 continue
             data.append((k[len(pre):], s[0], s[1]))
         h = hashlib.sha1(json.dumps(sorted(data), ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
-        return got, h, busy
+        return got, h, busy, len(data)
 
     def set(self, root, group, on):
         if not self.opener.settings.get("got"):
             raise ValueError("［設定］→「演者のスライドを開く」で、チェックで目印を置く設定をオンにしてください")
         w = self._watcher(root, group)
         key = root + "|" + group
-        got, h, busy = self._scan(w, group)
+        got, h, busy, _n = self._scan(w, group)
         with self.lock:
             if on:
                 if got:
@@ -1833,35 +1839,86 @@ class GotMarks:
                     return {"ok": True, "already": True}
                 if busy:
                     raise ValueError("この演者のデータを NAS に受信中です。受信が終わってからチェックしてください")
-                name, b = self._src()
-                rel = group + "/" + name
-                path = os.path.join(w.path, *rel.split("/"))
-                try:
-                    with open(W.long_path(path), "xb") as f:   # 同じ名前のファイルがあれば書かない（上書きしない）
-                        f.write(b)
-                        f.flush()
-                        os.fsync(f.fileno())
-                except FileExistsError:
-                    raise ValueError("同じ名前のファイルが演者フォルダにあります: " + name)
-                except OSError as e:
-                    raise ValueError("NAS に目印を置けませんでした: " + W._err(e))
-                st = os.stat(W.long_path(path))
-                self.mine[key] = {"rel": rel, "sig": [st.st_size, st.st_mtime_ns], "data": h, "t": time.time()}
-                self.upd.pop(key, None)
+                self._place(w, key, group, h)
+                self.auto[key] = h
                 self._save()
-                self.mgr.log("got mark placed: " + rel)
                 return {"ok": True}
             r = self.mine.get(key)
             if not r:
                 if got:
                     raise ValueError("この目印は GATE が置いたものではないため、外せません（NAS 上で消してください）")
                 self.upd.pop(key, None)
+                self.auto[key] = h
                 self._save()
                 return {"ok": True}
             self._remove(w, key, r)
             self.upd.pop(key, None)
+            self.auto[key] = h        # 手で外した：このデータのあいだは自動で付け直さない
             self._save()
             return {"ok": True}
+
+    def _place(self, w, key, group, h):
+        """目印画像を1枚置く（self.lock を持って呼ぶ）。同じ名前のファイルがあれば書かない"""
+        name, b = self._src()
+        rel = group + "/" + name
+        path = os.path.join(w.path, *rel.split("/"))
+        try:
+            with open(W.long_path(path), "xb") as f:   # 同じ名前のファイルがあれば書かない（上書きしない）
+                f.write(b)
+                f.flush()
+                os.fsync(f.fileno())
+        except FileExistsError:
+            raise ValueError("同じ名前のファイルが演者フォルダにあります: " + name)
+        except OSError as e:
+            raise ValueError("NAS に目印を置けませんでした: " + W._err(e))
+        st = os.stat(W.long_path(path))
+        self.mine[key] = {"rel": rel, "sig": [st.st_size, st.st_mtime_ns], "data": h, "t": time.time()}
+        self.upd.pop(key, None)
+        self.mgr.log("got mark placed: " + rel)
+
+    def _auto(self):
+        """自動：このPCのコピー先すべてへのコピーが終わった演者に、目印を置く（データ1つの版につき1回だけ）"""
+        op = self.mgr.cfg["op"]
+        if not op["enabled"]:
+            return False
+        root = op["root"]
+        w = self.mgr.watchers.get(root)
+        if not w or not w.online or w.committed is None:
+            return False
+        prefix = (op["venue"] + "/") if op["venue"] else ""
+        with w.lock:
+            groups = [k for k, s in (w.current or {}).items()
+                      if s == W.DIR and k.count("/") + 1 == w.depth and k.startswith(prefix)]
+        ch = False
+        now = time.time()
+        for g in groups:
+            key = root + "|" + g
+            sts = self.mgr.copier.group_states(g)
+            if not sts or any(v != "ok" for v in sts.values()):
+                continue                         # このPCへのコピーがまだ（または問題あり）
+            if now - self.auto_fail.get(key, 0) < 60:
+                continue
+            got, h, busy, n = self._scan(w, g)
+            if busy or not n or self.auto.get(key) == h:
+                continue
+            with self.lock:
+                if got:       # もう目印がある：GATE が置いたものなら、新しいデータの分として持ち直す
+                    r = self.mine.get(key)
+                    if r:
+                        r["data"] = h
+                    self.upd.pop(key, None)
+                    self.auto[key] = h
+                    ch = True
+                    continue
+                try:
+                    self._place(w, key, g, h)
+                    self.auto[key] = h
+                    self.auto_fail.pop(key, None)
+                    ch = True
+                except ValueError as e:
+                    self.auto_fail[key] = now
+                    self.mgr.log("got mark (auto): %s" % e)
+        return ch
 
     def _remove(self, w, key, r):
         """GATE が置いた目印だけを消す（大きさ・更新日時が置いたときのままのとき）"""
@@ -1894,7 +1951,7 @@ class GotMarks:
             w = self.mgr.watchers.get(root)
             if not w or not w.online or w.committed is None:
                 continue
-            got, h, busy = self._scan(w, group)
+            got, h, busy, _n = self._scan(w, group)
             with self.lock:
                 if key not in self.mine:
                     continue
@@ -1912,6 +1969,9 @@ class GotMarks:
                     ch = True
                 except ValueError as e:
                     self.mgr.log("got mark: %s" % e)
+        st = self.opener.settings
+        if st.get("got") and st.get("got_auto"):
+            ch = self._auto() or ch
         if ch:
             with self.lock:
                 self._save()
@@ -2294,6 +2354,7 @@ class Opener:
         out["dbl"] = d.get("dbl") if d.get("dbl") in ("file", "show", "folder") else OPEN_DEFAULTS["dbl"]
         out["multi"] = d.get("multi") if d.get("multi") in ("newest", "folder") else OPEN_DEFAULTS["multi"]
         out["got"] = bool(d.get("got", False))   # 演者の横のチェックで NAS に「会場取得」の目印を置く（既定はオフ）
+        out["got_auto"] = bool(d.get("got_auto", False))   # このPCへのコピーが終わったら自動で目印を置く（既定はオフ）
         out["got_src"] = str(d.get("got_src") or "").strip().strip('"\'“”').strip()[:1000]
         out["enter"] = d.get("enter") if d.get("enter") in ("file", "show", "now") else OPEN_DEFAULTS["enter"]   # GATE で Enter を押したとき
         return out
