@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.12.17"
+VERSION = "1.12.18"
 DEFAULT_PORT = 8797
 
 
@@ -1738,6 +1738,7 @@ class GotMarks:
         # （PC受付などが目印を消した・手でチェックを外したときに、勝手に付け直さないため）
         self.auto = {k: v for k, v in (d.get("auto") or {}).items() if isinstance(k, str) and isinstance(v, str)}
         self.auto_fail = {}
+        self.auto_err = None      # 自動で置けなかったとき（画面に出す）
         threading.Thread(target=self._loop, daemon=True, name="got").start()
 
     def _save(self):
@@ -1746,8 +1747,10 @@ class GotMarks:
     def get(self):
         with self.lock:
             s = self.opener.settings
+            e = self.auto_err
             return {"enabled": bool(s.get("got")), "auto": bool(s.get("got") and s.get("got_auto")),
-                    "mine": sorted(self.mine), "upd": dict(self.upd)}
+                    "mine": sorted(self.mine), "upd": dict(self.upd),
+                    "auto_err": e[1] if e and s.get("got_auto") and time.time() - e[0] < 300 else ""}
 
     def _src(self, p=None):
         p = str(self.opener.settings.get("got_src") or "") if p is None else str(p)
@@ -1806,24 +1809,45 @@ class GotMarks:
             raise ValueError("演者フォルダが見つかりません（演者フォルダの無いセッションでは使えません）")
         return w
 
-    def _scan(self, w, group):
-        """演者フォルダの中の、会場取得の目印（rel, sig）と、データ（目印以外）の中身の印。受信中か"""
-        pre = group + "/"
-        got, data = [], []
+    def _scan_many(self, w, groups):
+        """演者フォルダごとの、会場取得の目印（rel, sig）・データ（目印以外）の中身の印・受信中か・データの数・データの一覧。
+        NAS の一覧を1回だけたどる（演者が多くても重くならないように）"""
+        want = set(groups)
         with w.lock:
             cur = dict(w.current or {})
-            busy = any(k.startswith(pre) for k in w.pending)
+            pend = list(w.pending)
+        out = {g: ([], [], False) for g in want}       # got, data, busy
+        for k in pend:
+            g = k.rsplit("/", 1)[0] if "/" in k else ""
+            while g and g not in want and "/" in g:
+                g = g.rsplit("/", 1)[0]
+            if g in want:
+                out[g] = (out[g][0], out[g][1], True)
         for k, s in cur.items():
-            if not k.startswith(pre) or s == W.DIR:
+            if s == W.DIR or "/" not in k:
+                continue
+            g = k.rsplit("/", 1)[0]
+            while g not in want and "/" in g:
+                g = g.rsplit("/", 1)[0]
+            if g not in want:
                 continue
             m = self.mgr.marker_of(k, s)
             if m:
                 if m[0] == "got":
-                    got.append((k, s))
+                    out[g][0].append((k, s))
                 continue
-            data.append((k[len(pre):], s[0], s[1]))
-        h = hashlib.sha1(json.dumps(sorted(data), ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
-        return got, h, busy, len(data)
+            out[g][1].append((k, s))
+        res = {}
+        for g, (got, data, busy) in out.items():
+            pre = len(g) + 1
+            h = hashlib.sha1(json.dumps(sorted((k[pre:], s[0], s[1]) for k, s in data), ensure_ascii=False)
+                             .encode("utf-8")).hexdigest()[:16]
+            res[g] = (got, h, busy, len(data), data)
+        return res
+
+    def _scan(self, w, group):
+        got, h, busy, n, _d = self._scan_many(w, [group])[group]
+        return got, h, busy, n
 
     def set(self, root, group, on):
         if not self.opener.settings.get("got"):
@@ -1877,7 +1901,8 @@ class GotMarks:
         self.mgr.log("got mark placed: " + rel)
 
     def _auto(self):
-        """自動：このPCのコピー先すべてへのコピーが終わった演者に、目印を置く（データ1つの版につき1回だけ）"""
+        """自動：演者のデータが、使っているコピー先すべてに「いまの NAS の版のまま」コピーし終わったら目印を置く
+        （データ1つの版につき1回だけ。手で外した・PC受付などが消したときは、同じデータのあいだは付け直さない）"""
         op = self.mgr.cfg["op"]
         if not op["enabled"]:
             return False
@@ -1891,18 +1916,16 @@ class GotMarks:
                       if s == W.DIR and k.count("/") + 1 == w.depth and k.startswith(prefix)]
         ch = False
         now = time.time()
-        for g in groups:
+        for g, (got, h, busy, n, data) in self._scan_many(w, groups).items():
             key = root + "|" + g
-            sts = self.mgr.copier.group_states(g)
-            if not sts or any(v != "ok" for v in sts.values()):
+            if busy or not n or self.auto.get(key) == h or now - self.auto_fail.get(key, 0) < 60:
+                continue
+            if not self.mgr.copier.copied_now(data):
                 continue                         # このPCへのコピーがまだ（または問題あり）
-            if now - self.auto_fail.get(key, 0) < 60:
-                continue
-            got, h, busy, n = self._scan(w, g)
-            if busy or not n or self.auto.get(key) == h:
-                continue
             with self.lock:
                 if got:       # もう目印がある：GATE が置いたものなら、新しいデータの分として持ち直す
+                    if not any(os.path.exists(W.long_path(os.path.join(w.path, *k.split("/")))) for k, _s in got):
+                        continue  # 一覧が古い（いま消したばかりなど）：次の周回で確かめ直す
                     r = self.mine.get(key)
                     if r:
                         r["data"] = h
@@ -1914,9 +1937,11 @@ class GotMarks:
                     self._place(w, key, g, h)
                     self.auto[key] = h
                     self.auto_fail.pop(key, None)
+                    self.auto_err = None
                     ch = True
                 except ValueError as e:
                     self.auto_fail[key] = now
+                    self.auto_err = (now, "%s: %s" % (g.rsplit("/", 1)[-1], e))
                     self.mgr.log("got mark (auto): %s" % e)
         return ch
 
@@ -1946,29 +1971,37 @@ class GotMarks:
         with self.lock:
             items = list(self.mine.items())
         ch = False
+        by_root = {}
         for key, r in items:
             root, group = key.split("|", 1)
+            by_root.setdefault(root, []).append((key, group, r))
+        for root, lst in by_root.items():
             w = self.mgr.watchers.get(root)
             if not w or not w.online or w.committed is None:
                 continue
-            got, h, busy, _n = self._scan(w, group)
-            with self.lock:
-                if key not in self.mine:
-                    continue
-                if not os.path.exists(W.long_path(os.path.join(w.path, *r["rel"].split("/")))):
-                    self.mine.pop(key, None)     # PC受付などが消した：チェックが外れる（NAS を直接確かめる）
-                    ch = True
-                    continue
+            scans = self._scan_many(w, [g for _k, g, _r in lst])
+            for key, group, r in lst:
+                got, h, busy, _n, _d = scans[group]
                 if time.time() - float(r.get("t") or 0) < 15:
                     continue                     # 置いた直後（NAS の一覧がまだ追いついていない）
+                if r["rel"] not in {k for k, _s in got} and \
+                        not os.path.exists(W.long_path(os.path.join(w.path, *r["rel"].split("/")))):
+                    with self.lock:              # PC受付などが消した：チェックが外れる（一覧に無いときだけ NAS を直接確かめる）
+                        if self.mine.get(key) is r:
+                            self.mine.pop(key, None)
+                            ch = True
+                    continue
                 if busy or h == r["data"]:
                     continue
-                try:   # チェックのあとでデータが変わった（差し替え）：置いた目印を消して「更新あり」に
-                    self._remove(w, key, r)
-                    self.upd[key] = time.time()
-                    ch = True
-                except ValueError as e:
-                    self.mgr.log("got mark: %s" % e)
+                with self.lock:
+                    if self.mine.get(key) is not r:
+                        continue
+                    try:   # チェックのあとでデータが変わった（差し替え）：置いた目印を消して「更新あり」に
+                        self._remove(w, key, r)
+                        self.upd[key] = time.time()
+                        ch = True
+                    except ValueError as e:
+                        self.mgr.log("got mark: %s" % e)
         st = self.opener.settings
         if st.get("got") and st.get("got_auto"):
             ch = self._auto() or ch

@@ -7,3 +7,4 @@ build/
 dist/
 tauri/gate/target/
 tauri/gate/gen/
+ppt.ps1

@@ -27,8 +27,15 @@ const STG: { st: Record<string, { st: Stage; ts: number }>; loaded: boolean } = 
 let stQ: Promise<void> = Promise.resolve(); let stPending = 0; let stWrites = 0;
 /* 会場取得のチェック（NAS の演者フォルダに会場取得の目印があるか）。［設定］でオンのときだけ */
 const GOT: { enabled: boolean; mine: Set<string>; upd: Record<string, number>; busy: Record<string, number> } = { enabled: false, mine: new Set(), upd: {}, busy: {} };
+let gotErrShown = "";
 async function gotLoad() {
-  try { const j: any = await api("/api/op/got"); GOT.enabled = !!j.enabled; GOT.mine = new Set(j.mine || []); GOT.upd = j.upd || {}; store.emit(); } catch { /* 古いサーバー */ }
+  try {
+    const j: any = await api("/api/op/got"); GOT.enabled = !!j.enabled; GOT.mine = new Set(j.mine || []); GOT.upd = j.upd || {};
+    const e = String(j.auto_err || "");
+    if (e && e !== gotErrShown) toast("会場取得の目印を自動で置けませんでした：" + e, 9000);   // 自動で置けないときは知らせる（同じ内容は1回だけ）
+    gotErrShown = e;
+    store.emit();
+  } catch { /* 古いサーバー */ }
 }
 async function gotSet(root: string, g: Group, on: boolean) {
   const k = root + "|" + g.key; GOT.busy[k] = Date.now(); store.emit();
