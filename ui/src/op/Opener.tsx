@@ -76,7 +76,7 @@ function GotSrc({ v, set }: { v: string; set: (v: string) => void }) {
     catch (e: any) { toast(e.message, 5000); }
   };
   return <span className="gotsrc">
-    <span className="row"><input type="text" id="ooGotSrc" placeholder="空のとき：04_会場取得.jpg（同梱）" value={v} onChange={(e) => { set(e.target.value); setChk(null); }} onBlur={() => check(v)} />
+    <span className="row"><input type="text" id="ooGotSrc" placeholder="空のとき：04_会場取得.jpg（同梱）" value={v} onChange={(e) => { set(e.target.value); setChk(null); }} onBlur={() => { const t = v.trim().replace(/^["'“”]+|["'“”]+$/g, "").trim(); if (t !== v) set(t); check(t); }} />
       <button className="ghost" id="ooGotPick" onClick={pick}>画像を選ぶ…</button>
       {v && <button className="ghost" id="ooGotReset" onClick={() => { set(""); check(""); }}>同梱に戻す</button>}
       {!chk && <button className="ghost" id="ooGotTry" onClick={() => check(v)}>見本を見る</button>}</span>

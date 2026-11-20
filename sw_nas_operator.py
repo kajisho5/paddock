@@ -1744,7 +1744,8 @@ class GotMarks:
             return {"enabled": bool(self.opener.settings.get("got")), "mine": sorted(self.mine), "upd": dict(self.upd)}
 
     def _src(self, p=None):
-        p = str(self.opener.settings.get("got_src") or "").strip() if p is None else str(p).strip().strip('"')
+        p = str(self.opener.settings.get("got_src") or "") if p is None else str(p)
+        p = p.strip().strip('"\'“”').strip()      # エクスプローラーの「パスのコピー」は前後に " が付く
         if not p:
             return GOT_IMG_NAME, GOT_IMG
         name = os.path.basename(p)
@@ -2293,7 +2294,7 @@ class Opener:
         out["dbl"] = d.get("dbl") if d.get("dbl") in ("file", "show", "folder") else OPEN_DEFAULTS["dbl"]
         out["multi"] = d.get("multi") if d.get("multi") in ("newest", "folder") else OPEN_DEFAULTS["multi"]
         out["got"] = bool(d.get("got", False))   # 演者の横のチェックで NAS に「会場取得」の目印を置く（既定はオフ）
-        out["got_src"] = str(d.get("got_src") or "").strip()[:1000]
+        out["got_src"] = str(d.get("got_src") or "").strip().strip('"\'“”').strip()[:1000]
         out["enter"] = d.get("enter") if d.get("enter") in ("file", "show", "now") else OPEN_DEFAULTS["enter"]   # GATE で Enter を押したとき
         return out
 
