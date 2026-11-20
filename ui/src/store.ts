@@ -8,7 +8,7 @@ import { cmpDay, dayInfo, fuOf, lay, parts, ymd } from "./lib/layout";
 import { cmpName, ls, nfc, whereText } from "./lib/util";
 
 export type View = "list" | "board";
-export type Modal = null | "cfg" | "net" | "usb" | "addp";
+export type Modal = null | "cfg" | "net" | "usb" | "addp" | "nasopen";
 export interface Sel { root: string; group: string }
 
 const VPAL = ["#38bdf8", "#a78bfa", "#34d399", "#fbbf24", "#f472b6", "#fb923c", "#2dd4bf", "#818cf8", "#f87171", "#a3e635"];

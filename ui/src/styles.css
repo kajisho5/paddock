@@ -513,3 +513,6 @@ input,textarea{caret-color:var(--accent)}
 .gotchk.ok{background:var(--ok-bg);color:var(--ok-fg)}
 .gotchk.ng{background:var(--bad-bg);color:var(--bad-fg)}
 .gotchk img{width:72px;height:72px;object-fit:contain;background:#fff;border-radius:4px;flex:none}
+.nasdlg{width:min(560px,100%)}
+.nasnote{margin:12px 0 16px;padding-left:20px;font-size:13px;line-height:1.7}
+.nasnote li{margin:4px 0}

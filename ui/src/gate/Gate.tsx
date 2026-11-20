@@ -14,7 +14,7 @@ import { AnaCard } from "../components/Folder";
 import { shellPinned, shellSetPinned } from "../lib/shell";
 import { openCfg } from "../components/Settings";
 import { netBadge, netOpen } from "../op/Net";
-import { OPEN, opOpen } from "../op/Opener";
+import { OPEN, nasOpenAsk, opOpen } from "../op/Opener";
 import { CPL, KindPill, OPS } from "../components/Bits";
 import { Bar, Segmented } from "../design/ui";
 import { APP_ICON } from "../lib/appIcon";
@@ -806,6 +806,7 @@ function RowMenu({ M, at, close }: { M: Model; at: { x: number; y: number; g: st
     {it("発表ファイルを開く", () => opOpen(M.r.id, g.key, "", "file"), { dis: !has || !ok, ic: <Icon n="file" />, k: enterHow() === "file" ? "Enter" : undefined })}
     {it("フォルダを開く", () => opOpen(M.r.id, g.key, "", "folder"), { dis: !has, ic: <Icon n="folder" /> })}
     <div className="sep" />
+    {it("NASのフォルダを開く…", () => nasOpenAsk(M.r.id, g.key, nameOf(g).name), { ic: <Icon n="ext" />, id: "mNasOpen" })}
     {it("NASのパスをコピー", () => copyText(nfc(M.r.path.replace(/[\\/]+$/, "") + (M.r.path.includes("\\") ? "\\" + g.key.split("/").join("\\") : "/" + g.key))).then(() => toast("パスをコピーしました"), () => toast("コピーできませんでした")), { ic: <Icon n="copy" /> })}
   </div>;
 }

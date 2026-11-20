@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.12.18"
+VERSION = "1.12.19"
 DEFAULT_PORT = 8797
 
 
@@ -1178,7 +1178,8 @@ def valid_password(p):
 
 
 # ---------------------------------------------------------------- 演者のスライドを開く（このPCのコピーを開く。NASのファイルは開かない）
-OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest", "got": False, "got_src": "", "got_auto": False, "enter": "file"}
+OPEN_DEFAULTS = {"enabled": True, "dest": "", "dbl": "file", "multi": "newest", "got": False, "got_src": "", "got_auto": False,
+                 "got_when": "copy", "enter": "file"}
 PRES_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps", ".key", ".pdf")      # 発表ファイル（この順に優先）
 SHOW_EXT = (".pptx", ".ppsx", ".pptm", ".ppsm", ".ppt", ".pps")                      # スライドショーで開けるもの
 OPENABLE_STATES = ("ok", "edited", "old")                                                   # コピー済み（コピー先で編集されたものも含む）
@@ -1777,6 +1778,22 @@ class GotMarks:
             raise ValueError("目印画像が大きすぎます")
         return name, b
 
+    def reveal_nas(self, root, group):
+        """NAS の演者フォルダをエクスプローラーで開く（右クリック→確認のうえで）。GATE は何も書き込まない。
+        開いているあいだは、受付側がそのフォルダの名前変更・削除をできないことがあるため、画面で閉じるよう促す。"""
+        op = self.mgr.cfg["op"]
+        if not op["enabled"] or op["root"] != root:
+            raise ValueError("このPCの会場とコピー先が設定されていません")
+        prefix = (op["venue"] + "/") if op["venue"] else ""
+        if not group or (prefix and not group.startswith(prefix)):
+            raise ValueError("この会場の演者フォルダではありません")
+        p = self.mgr.resolve(root, group)
+        if not os.path.isdir(W.long_path(p)):
+            raise ValueError("NAS に演者フォルダが見つかりません（削除・移動された可能性）: " + p)
+        W.reveal(p)
+        self.mgr.log("nas folder opened: " + group)
+        return {"ok": True, "path": p}
+
     def check(self, p):
         """設定画面で選んだ目印画像が使えるかを確かめる（読むだけ）。"""
         name, b = self._src(p)
@@ -1817,6 +1834,7 @@ class GotMarks:
             cur = dict(w.current or {})
             pend = list(w.pending)
         out = {g: ([], [], False) for g in want}       # got, data, busy
+        recv = set()                                    # 受付済などの目印（役割「受付済」）がある演者
         for k in pend:
             g = k.rsplit("/", 1)[0] if "/" in k else ""
             while g and g not in want and "/" in g:
@@ -1835,6 +1853,8 @@ class GotMarks:
             if m:
                 if m[0] == "got":
                     out[g][0].append((k, s))
+                elif m[0] == "recv":
+                    recv.add(g)
                 continue
             out[g][1].append((k, s))
         res = {}
@@ -1842,11 +1862,11 @@ class GotMarks:
             pre = len(g) + 1
             h = hashlib.sha1(json.dumps(sorted((k[pre:], s[0], s[1]) for k, s in data), ensure_ascii=False)
                              .encode("utf-8")).hexdigest()[:16]
-            res[g] = (got, h, busy, len(data), data)
+            res[g] = (got, h, busy, len(data), data, g in recv)
         return res
 
     def _scan(self, w, group):
-        got, h, busy, n, _d = self._scan_many(w, [group])[group]
+        got, h, busy, n, _d, _r = self._scan_many(w, [group])[group]
         return got, h, busy, n
 
     def set(self, root, group, on):
@@ -1916,10 +1936,13 @@ class GotMarks:
                       if s == W.DIR and k.count("/") + 1 == w.depth and k.startswith(prefix)]
         ch = False
         now = time.time()
-        for g, (got, h, busy, n, data) in self._scan_many(w, groups).items():
+        need_recv = self.opener.settings.get("got_when") == "recv"
+        for g, (got, h, busy, n, data, recv) in self._scan_many(w, groups).items():
             key = root + "|" + g
             if busy or not n or self.auto.get(key) == h or now - self.auto_fail.get(key, 0) < 60:
                 continue
+            if need_recv and not recv:
+                continue                         # 受付済の目印がまだ（受付が確かめてから置く設定）
             if not self.mgr.copier.copied_now(data):
                 continue                         # このPCへのコピーがまだ（または問題あり）
             with self.lock:
@@ -1981,7 +2004,7 @@ class GotMarks:
                 continue
             scans = self._scan_many(w, [g for _k, g, _r in lst])
             for key, group, r in lst:
-                got, h, busy, _n, _d = scans[group]
+                got, h, busy, _n, _d, _r = scans[group]
                 if time.time() - float(r.get("t") or 0) < 15:
                     continue                     # 置いた直後（NAS の一覧がまだ追いついていない）
                 if r["rel"] not in {k for k, _s in got} and \
@@ -2387,7 +2410,8 @@ class Opener:
         out["dbl"] = d.get("dbl") if d.get("dbl") in ("file", "show", "folder") else OPEN_DEFAULTS["dbl"]
         out["multi"] = d.get("multi") if d.get("multi") in ("newest", "folder") else OPEN_DEFAULTS["multi"]
         out["got"] = bool(d.get("got", False))   # 演者の横のチェックで NAS に「会場取得」の目印を置く（既定はオフ）
-        out["got_auto"] = bool(d.get("got_auto", False))   # このPCへのコピーが終わったら自動で目印を置く（既定はオフ）
+        out["got_auto"] = bool(d.get("got_auto", False))
+        out["got_when"] = "recv" if d.get("got_when") == "recv" else "copy"   # 自動で置く：コピーが終わったら／受付済の目印も入ってから   # このPCへのコピーが終わったら自動で目印を置く（既定はオフ）
         out["got_src"] = str(d.get("got_src") or "").strip().strip('"\'“”').strip()[:1000]
         out["enter"] = d.get("enter") if d.get("enter") in ("file", "show", "now") else OPEN_DEFAULTS["enter"]   # GATE で Enter を押したとき
         return out
@@ -2621,6 +2645,8 @@ class OpHandler(W.Handler):
                 st = {k: str(body.get(k) or "")[:200] for k in ("now", "next", "session", "venue")}
                 self.server.remote.status = st
                 return self.send_json({"ok": True})
+            if u.path == "/api/op/nas/open":
+                return self.send_json(self.server.got.reveal_nas(str(body.get("root") or ""), str(body.get("group") or "")))
             if u.path == "/api/op/got/check":
                 return self.send_json(self.server.got.check(body.get("path")))
             if u.path == "/api/op/got":

@@ -8,8 +8,9 @@ import { setDblHandler, store, toast, useApp } from "../store";
 import { CPL } from "../components/Bits";
 import { Icon } from "../components/Icons";
 import { cx } from "../lib/util";
+import { Modal } from "../components/Modal";
 
-export interface OpenCfg { enabled: boolean; dest: string; dbl: "file" | "show" | "folder"; multi: "newest" | "folder"; got?: boolean; got_src?: string; got_auto?: boolean; enter?: "file" | "show" | "now" }
+export interface OpenCfg { enabled: boolean; dest: string; dbl: "file" | "show" | "folder"; multi: "newest" | "folder"; got?: boolean; got_src?: string; got_auto?: boolean; got_when?: "copy" | "recv"; enter?: "file" | "show" | "now" }
 export const OPEN: { settings: OpenCfg; dest: { id: string; label: string } | null } = { settings: { enabled: true, dest: "", dbl: "file", multi: "newest" }, dest: null };
 export function openLoad() { return api<any>("/api/op/open/settings").then((j) => { OPEN.settings = j.settings; OPEN.dest = j.dest; store.emit(); }).catch(() => {}); }
 
@@ -29,6 +30,31 @@ if (IS_OP) {
     if (!OPEN.settings.enabled) { toast("ダブルクリックで開くには、［設定］→「演者のスライドを開く」をオンにしてください", 7000); return; }
     opOpen(root, group, "", OPEN.settings.dbl);
   });
+}
+/* NAS の演者フォルダをエクスプローラーで開く（確かめてから）。開いているあいだ、受付側がそのフォルダを変更できないことがある */
+export const NASOPEN: { root: string; group: string; name: string } = { root: "", group: "", name: "" };
+export function nasOpenAsk(root: string, group: string, name: string) {
+  if (!store.S?.local) { toast("開くのは、このアプリを動かしているPCでのみできます", 4000); return; }
+  NASOPEN.root = root; NASOPEN.group = group; NASOPEN.name = name; store.modal = "nasopen"; store.emit();
+}
+export function NasOpenDialog() {
+  const s = useApp(); if (s.modal !== "nasopen") return null;
+  const close = () => { s.modal = null; s.emit(); };
+  const go = async () => {
+    close();
+    try { await shellBeforeOpen(); const j: any = await api("/api/op/nas/open", { root: NASOPEN.root, group: NASOPEN.group }); toast("NAS のフォルダを開いています。見終わったらすぐ閉じてください（" + j.path + "）", 7000); }
+    catch (e: any) { shellOpenFailed(); toast(e.message, 8000); }
+  };
+  return <Modal onClose={close} id="nasOpenDlg"><div className="dlg nasdlg" role="alertdialog" aria-labelledby="nasOpenH">
+    <h2 id="nasOpenH">NAS のフォルダを開きますか？</h2>
+    <p className="desc">「{NASOPEN.name}」の NAS 上のフォルダを、エクスプローラーで開きます。</p>
+    <ul className="nasnote">
+      <li><b>見終わったら、すぐにエクスプローラーを閉じてください。</b>開いているあいだは、受付（PC受付など）がこのフォルダの名前変更・削除をできないことがあります。</li>
+      <li>NAS 上のファイルを動かしたり、消したり、開いて上書き保存したりしないでください（受付のデータが変わります）。スライドを使うときは、このPCのコピー（［発表ファイルを開く］［フォルダを開く］）を使ってください。</li>
+      <li>Windows の設定によっては、フォルダを表示しただけで NAS に「Thumbs.db」が作られることがあります。</li>
+    </ul>
+    <div className="foot"><span /><span style={{ display: "flex", gap: 8 }}><button id="bNasCancel" onClick={close} autoFocus>キャンセル</button><button className="pri" id="bNasOpen" onClick={go}>開く</button></span></div>
+  </div></Modal>;
 }
 export const opNewest = (F: Folder) => (OPEN.settings.enabled && F.op && F.op.pres ? F.op.pres.newest : "");
 
@@ -108,6 +134,9 @@ export function OpenSettings({ c }: { c: Config }) {
     <h3 style={{ marginTop: 18 }}>会場取得のチェック</h3>
     <p style={{ margin: 0 }}><label className="lbl"><input type="checkbox" id="ooGot" checked={!!st.got} onChange={(e) => set({ got: e.target.checked })} />演者の横にチェックを出し、チェックを入れたら NAS の演者フォルダに「会場取得」の目印画像を置く</label></p>
     <p style={{ margin: "6px 0 0 24px" }}><label className="lbl"><input type="checkbox" id="ooGotAuto" checked={!!st.got_auto} disabled={!st.got} onChange={(e) => set({ got_auto: e.target.checked })} />自動で置く：演者のデータがこのPCのコピー先すべてにコピーし終わったら、チェックを自動で入れる</label></p>
+    <p className="checks col" style={{ margin: "4px 0 0 48px" }}>
+      <label><input type="radio" name="ooGotWhen" value="copy" checked={st.got_when !== "recv"} disabled={!st.got || !st.got_auto} onChange={() => set({ got_when: "copy" })} />このPCへのコピーが終わったら</label>
+      <label><input type="radio" name="ooGotWhen" value="recv" checked={st.got_when === "recv"} disabled={!st.got || !st.got_auto} onChange={() => set({ got_when: "recv" })} />コピーが終わり、さらに受付済の目印（「受付済」「事前預り」など）が入ってから</label></p>
     <p className="hint" style={{ margin: "2px 0 0 24px" }}>NAS への受信が終わり、このPCに届いたことを確かめてから置きます（NAS に届いただけでは置きません）。差し替えがあったときも、新しいデータのコピーが終わったら置き直します。手でチェックを外したときや、PC受付などが目印を消したときは、そのデータのあいだは付け直しません。</p>
     <div className="grid2" style={{ marginTop: 10 }}>
       <span>置く目印画像</span><GotSrc v={st.got_src || ""} set={(v) => set({ got_src: v })} />

@@ -8,6 +8,7 @@ import { CenterPane } from "./components/Folder";
 import { LogPane } from "./components/LogPane";
 import { openCfg, SettingsDialog } from "./components/Settings";
 import { NetDialog } from "./op/Net";
+import { NasOpenDialog } from "./op/Opener";
 import { AddDialog, UsbDialog } from "./rx/RxPanel";
 import { cx } from "./lib/util";
 import { GateApp } from "./gate/Gate";
@@ -31,6 +32,7 @@ export function App() {
     <GateApp />
     <SettingsDialog />
     <NetDialog />
+    <NasOpenDialog />
     {s.quit && <div className="quitov"><div><b>終了しました</b>このウィンドウを閉じてください。もう一度使うときは、アプリ（exe）を起動してください。</div></div>}
     <div id="toast" className={cx("toast", s.toastMsg && "on")} key={s.toastSeq}>{s.toastMsg}</div>
   </>;
