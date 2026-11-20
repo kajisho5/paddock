@@ -374,6 +374,8 @@ _NOTE_SLOT = re.compile(r"^\s*\d{1,3}[\s_\-.・]+.*\.txt$", re.I)
 def mark_stem(name):
     """目印の照合に使う名前：拡張子と先頭の番号を除き、mark_norm でそろえたもの。"""
     stem = name.rsplit(".", 1)[0] if "." in name else name
+    while "." in stem and ext_of(stem) in CATS[5][1]:      # 「16_取得済.jpg.jpg」（拡張子を隠した表示で名前に .jpg を付けた）も同じに
+        stem = stem.rsplit(".", 1)[0]
     return mark_norm(_MK_NUM.sub("", unicodedata.normalize("NFKC", stem), count=1))
 
 
@@ -408,7 +410,9 @@ _MK_OKURI = (("持ち込み", "持込"), ("持込み", "持込"), ("持ち込", 
 def mark_norm(s):
     """目印の照合用：全角半角・大文字小文字をそろえ、空白・_・-・括弧（【】など）を取り除く。
     送り仮名の違い（持ち込み／持込、受け取り／受取、取り下げ／取下げ など）も同じとみなす。"""
-    t = _MK_SEP.sub("", unicodedata.normalize("NFKC", str(s)).lower())
+    t = unicodedata.normalize("NFKC", str(s)).lower()
+    t = "".join(c for c in t if unicodedata.category(c) != "Cf")    # 見えない文字（ゼロ幅スペースなど）は無視
+    t = _MK_SEP.sub("", t)
     for a, b in _MK_OKURI:
         t = t.replace(a, b)
     return t

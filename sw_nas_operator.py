@@ -1750,6 +1750,11 @@ class GotMarks:
         name = os.path.basename(p)
         m = self.mgr.marker_of(name, (1, 0))
         if not m or m[0] != "got":
+            d = W.mark_match(W.compile_marks({"marks": W.DEFAULT_MARKS}), name)
+            if m:      # 目印としては読めるが、役割が「会場取得済」以外になっている
+                raise ValueError("「%s」は目印の「%s」として読まれ、会場取得の目印になっていません（［設定］→［詳細］→ 目印 で役割を「会場取得済」にしてください）" % (name, m[1]))
+            if d and d[0] == "got":   # 既定では読めるのに、このPCの目印の一覧に無い
+                raise ValueError("「%s」の「%s」が、このPCの目印の一覧にありません（［設定］→［詳細］→ 目印 で「%s」を役割「会場取得済」で足してください）" % (name, d[1], d[1]))
             raise ValueError("「%s」は名前が「会場取得」の目印として読めません。ファイル名を「17_会場取得.jpg」のように、番号＋「会場取得」「取得済」などにしてください" % name)
         try:
             with open(W.long_path(p), "rb") as f:
