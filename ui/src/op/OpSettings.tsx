@@ -23,13 +23,15 @@ export function opPrepare(c: Config, defDest = "") {
 
 /* メインPCとバックアップPCで「発表中・発表済み」をそろえる */
 function PairSettings() {
-  const [p, setP] = useState<any>(null); const [code, setCode] = useState(""); const [busy, setBusy] = useState("");
-  const load = () => api<any>("/api/op/pair").then(setP).catch(() => {});
+  /* p＝いまの状態（数秒ごとに読み直す）、f＝入力中の値（読み直しで上書きしない。保存したときだけ入れ替える） */
+  const [p, setP] = useState<any>(null); const [f, setF] = useState<{ enabled: boolean; peer: string } | null>(null);
+  const [code, setCode] = useState(""); const [busy, setBusy] = useState("");
+  const load = () => api<any>("/api/op/pair").then((j) => { setP(j); setF((x) => x || { enabled: !!j.enabled, peer: j.peer || "" }); }).catch(() => {});
   useEffect(() => { load(); const t = window.setInterval(load, 4000); return () => clearInterval(t); }, []);
-  if (!p) return null;
+  if (!p || !f) return null;
   const save = async (over: any = {}) => {
     setBusy("save");
-    try { const j = await api<any>("/api/op/pair", { enabled: p.enabled, peer: p.peer, code: code || undefined, ...over }); setP(j); setCode(""); toast(j.enabled ? "連携を保存しました" : "連携を止めました"); }
+    try { const j = await api<any>("/api/op/pair", { enabled: f.enabled, peer: f.peer, code: code || undefined, ...over }); setP(j); setF({ enabled: !!j.enabled, peer: j.peer || "" }); setCode(""); toast(j.enabled ? "連携を保存しました" : "連携を止めました"); }
     catch (e: any) { toast(e.message, 7000); }
     setBusy("");
   };
@@ -38,8 +40,8 @@ function PairSettings() {
   return <><h3>バックアップPCと発表中をそろえる</h3>
     <p className="hint" style={{ margin: "0 0 8px" }}>メインPCとバックアップPCの両方で設定すると、片方で［次の人へ］や「発表中にする」をしたとき、もう片方も同じ人になります。送るのは「どの演者を発表中・発表済みにしたか」だけです（NAS には触りません）。2台とも同じ会場・同じ合言葉にしてください。</p>
     <div className="grid2" id="pairSet">
-      <span>そろえる</span><span><label className="lbl"><input type="checkbox" id="pairOn" checked={!!p.enabled} onChange={(e) => setP({ ...p, enabled: e.target.checked })} />このPCで使う</label></span>
-      <span>相手のPC</span><span><input type="text" id="pairPeer" value={p.peer} placeholder="BACKUP-PC または 192.168.0.12" onChange={(e) => setP({ ...p, peer: e.target.value })} /> <span className="hint">このPCは「{p.me}」</span></span>
+      <span>そろえる</span><span><label className="lbl"><input type="checkbox" id="pairOn" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} />このPCで使う</label>{f.enabled !== !!p.enabled && <span className="hint">　［連携を保存］で反映します</span>}</span>
+      <span>相手のPC</span><span><input type="text" id="pairPeer" value={f.peer} placeholder="BACKUP-PC または 192.168.0.12" onChange={(e) => setF({ ...f, peer: e.target.value })} /> <span className="hint">このPCは「{p.me}」</span></span>
       <span>合言葉</span><span><input type="text" id="pairCode" value={code} placeholder={p.code_set ? "（設定済み。変えるときだけ入れる）" : "6文字以上。2台で同じもの"} onChange={(e) => setCode(e.target.value)} /></span>
       <span /><span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button className="pri" id="pairSave" disabled={!!busy} onClick={() => save()}>連携を保存</button>
