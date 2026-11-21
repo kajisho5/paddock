@@ -52,7 +52,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 APP_NAME = "PADDOCK SCOUT"
-VERSION = "1.17.19"
+VERSION = "1.17.20"
 DEFAULT_PORT = 8790
 IS_WIN = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
@@ -3593,6 +3593,7 @@ class Manager:
             if r is None or norm_key(r["path"]) != norm_key(w.path) or r["depth"] != w.depth \
                     or self.op_scope(rid) != w.scope:
                 w.stop_now()
+                self.ver += w.ver + 1     # 状態の番号（total_ver）が下がらないように（下がると画面が新しい状態を「古い」と思って捨てる）
                 del self.watchers[rid]
                 if w.dirty:
                     w.save_snapshot()
