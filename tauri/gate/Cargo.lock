@@ -2332,7 +2332,7 @@ dependencies = [
 
 [[package]]
 name = "paddock-gate"
-version = "1.12.19"
+version = "1.12.20"
 dependencies = [
  "serde_json",
  "tauri",

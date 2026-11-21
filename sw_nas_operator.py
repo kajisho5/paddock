@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.12.19"
+VERSION = "1.12.20"
 DEFAULT_PORT = 8797
 
 
@@ -2125,8 +2125,10 @@ class Stage:
         items = sorted(out.items(), key=lambda x: -x[1][1])[:400]
         return dict(items)
 
-    def merge(self, root, entries):
-        """バックアップPCから届いた記録を合わせる（新しいほうを使う）。変わったら True"""
+    def merge(self, root, entries, off=0.0):
+        """バックアップPCから届いた記録を合わせる（新しいほうを使う）。変わったら True
+        off＝相手の時計からこのPCの時計への差（届いた時刻 − 相手が送った時刻）。相手の時刻をこのPCの時計に直してから比べる
+        （2台の時計がずれていると、進んでいるほうの操作がいつも勝ち、もう一方で［次の人へ］などをしても戻されてしまうため）"""
         if not root or not isinstance(entries, dict):
             return False
         ch = False
@@ -2134,13 +2136,16 @@ class Stage:
             n = dict(self.st); cl = dict(self.cl)
             for g, v in list(entries.items())[:400]:
                 try:
-                    st, ts = str(v[0]), float(v[1])
+                    st, ts = str(v[0]), float(v[1]) + off
                 except (TypeError, ValueError, IndexError):
                     continue
                 if not isinstance(g, str) or not g or len(g) > 2000 or st not in ("now", "done", "") or time.time() - ts > self.KEEP:
                     continue
                 key = root + "|" + g
+                cst = n[key]["st"] if key in n else ""
                 cur = n[key]["ts"] if key in n else cl.get(key, 0)
+                if st == cst and (key in n or key in cl or not st):
+                    continue      # 同じ状態（自分が送ったものが戻ってきた など）：時刻だけ書き換えない
                 if ts <= cur:
                     continue
                 if st:
@@ -2327,7 +2332,7 @@ class Pair:
                 if self.err.startswith(("合言葉", "相手のPC")):
                     self.err = ""
                 root = self._root()
-                if root and self.stage.merge(root, d.get("st")):
+                if root and self.stage.merge(root, d.get("st"), now - float(d.get("ts") or now)):
                     pass   # 画面は数秒ごとに読み直す
             except (ValueError, TypeError, AttributeError, UnicodeDecodeError):
                 continue

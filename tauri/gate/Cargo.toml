@@ -1,6 +1,6 @@
 [package]
 name = "paddock-gate"
-version = "1.12.19"
+version = "1.12.20"
 description = "PADDOCK GATE（会場の発表PC用）"
 authors = ["SEVENTHWELL"]
 edition = "2021"
