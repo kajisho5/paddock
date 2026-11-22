@@ -134,7 +134,7 @@ $v = ""
 for ($i = 0; $i -lt 90 -and -not ($v -match "PADDOCK GATE"); $i++) { Start-Sleep 1; $v = Ping }
 if ($v -match "PADDOCK GATE") { Ok "入れ替えて起動し直した $v" } else { Bad "アップデートのあと起動しない" }
 if (Test-Path (Join-Path $rt "app\UPDATED.txt")) { Ok "runtime が新しいものに入れ替わった" } else { Bad "runtime が入れ替わっていない" }
-if (Test-Path (Join-Path $dir "PADDOCK_GATE.exe.prev")) { Ok "前の exe を残した（次の起動で片付け）" } else { Bad "前の exe が残っていない" }
+if (-not (Test-Path (Join-Path $dir "PADDOCK_GATE.exe.prev")) -and -not (Test-Path (Join-Path $dir "runtime_prev"))) { Ok "前の exe・runtime を片付けた" } else { Bad "前の exe・runtime が残っている" }
 if (-not (Test-Path $up)) { Ok "用意したものを片付けた" } else { Bad "runtime_update が残っている" }
 if (Test-Path (Join-Path $rt "shell.json")) { Ok "最前面の設定を引き継いだ" } else { Write-Host "（shell.json は元から無し）" }
 $dataAfter = Get-ChildItem $dir -Directory | Where-Object { $_.Name -like "*_data" } | ForEach-Object { $_.Name }
