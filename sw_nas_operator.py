@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 同梱Python�
 import sw_nas_watch as W  # noqa: E402
 
 APP_NAME = "PADDOCK GATE"
-VERSION = "1.12.21"
+VERSION = "1.12.22"
 DEFAULT_PORT = 8797
 
 
@@ -2522,6 +2522,179 @@ class Opener:
         return {"ok": True, "what": "show" if show else "file", "path": path, "dest": d["label"], "name": name, "msg": msg}
 
 
+# ---------------------------------------------------------------- アップデート（新しいバージョンを自動で取ってきて、次の起動で入れ替える）
+UPD_REPO = "kajisho5/paddock"
+UPD_ASSET = "PADDOCK_GATE_v%s_Windows.zip"
+UPD_TOP = "PADDOCK_GATE/"
+UPD_MAX = 400 * 1024 * 1024
+UPD_RATE = 4 * 1024 * 1024      # 取ってくる速さの上限（会場のネットワーク・NAS からのコピーの邪魔をしないように）
+
+
+class Updater:
+    """GitHub の Releases に新しい PADDOCK GATE があれば、裏で取ってきて確かめ、置いておく（runtime_update）。
+    入れ替えは、次に PADDOCK_GATE.exe を起動したとき（または［終了して入れ替える］を押したとき）に窓（exe）が行う。
+    発表中に勝手に止めたり入れ替えたりはしない。NAS には何もしない。設定・記録のフォルダには触れない。"""
+    NAME = "update.json"
+    EVERY = 6 * 3600
+
+    def __init__(self, mgr):
+        self.mgr = mgr
+        self.lock = threading.Lock()
+        d = mgr.store.read_json(self.NAME, None)
+        d = d if isinstance(d, dict) else {}
+        self.auto = bool(d.get("auto", True))
+        self.home = os.environ.get("SW_NAS_OPERATOR_HOME", "") if os.environ.get("SW_NAS_SHELL_KEYFILE") else ""
+        self.able = W.IS_WIN and bool(self.home) and os.path.isfile(os.path.join(self.home, "PADDOCK_GATE.exe"))
+        self.state = "idle"       # idle / checking / downloading / ready / latest / error / off
+        self.msg = ""
+        self.latest = ""
+        self.ready = ""
+        self.notes = ""
+        self.pct = 0
+        self.checked = 0.0
+        self.kick = threading.Event()
+        r = self._read_ready()
+        if r:
+            self.ready, self.state = r, "ready"
+        try:   # 窓（exe）が入れ替えられなかったとき
+            with open(os.path.join(self.home, "runtime", "update_failed.txt"), encoding="utf-8") as f:
+                self.state, self.msg = "error", "前回、新しいバージョンに入れ替えられませんでした（%s）" % f.read(300).strip()
+        except (OSError, TypeError):
+            pass
+        if self.able:
+            threading.Thread(target=self._loop, daemon=True, name="update").start()
+
+    def dir(self):
+        return os.path.join(self.home, "runtime_update")
+
+    def _read_ready(self):
+        if not self.home:
+            return ""
+        try:
+            with open(os.path.join(self.home, "runtime_update", "ready.json"), encoding="utf-8") as f:
+                v = str(json.load(f).get("version") or "")
+            return v if W.ver_tuple(v) > W.ver_tuple(VERSION) else ""
+        except (OSError, ValueError, AttributeError):
+            return ""
+
+    def get(self):
+        return {"able": self.able, "auto": self.auto, "state": self.state, "msg": self.msg, "cur": VERSION,
+                "latest": self.latest, "ready": self.ready, "notes": self.notes[:4000], "pct": self.pct, "checked": self.checked}
+
+    def set(self, body):
+        if "auto" in body:
+            self.auto = bool(body.get("auto"))
+            self.mgr.store.write_json(self.NAME, {"auto": self.auto})
+        if body.get("check"):
+            if not self.able:
+                raise ValueError("アップデートは、Windows で PADDOCK_GATE.exe から起動したときだけ使えます")
+            self.kick.set()
+        return self.get()
+
+    def _loop(self):
+        time.sleep(90)                     # 起動直後（設定・NAS の読み込み）は避ける
+        while True:
+            manual = self.kick.is_set()
+            self.kick.clear()
+            if (self.auto or manual) and not self.ready:
+                try:
+                    self._run(manual)
+                except Exception as e:     # 失敗しても GATE の動きには関係させない
+                    self.state, self.msg = "error", "アップデートを確かめられませんでした（%s）" % W._err(e) if isinstance(e, OSError) else str(e)
+                    self.mgr.log("update: %r" % (e,))
+            self.kick.wait(self.EVERY)
+
+    def _get(self, url, timeout=20):
+        from urllib.request import Request, urlopen
+        return urlopen(Request(url, headers={"User-Agent": "PADDOCK-GATE/" + VERSION, "Accept": "application/vnd.github+json"}), timeout=timeout)
+
+    def _run(self, manual):
+        self.state, self.msg, self.pct = "checking", "", 0
+        with self._get("https://api.github.com/repos/%s/releases?per_page=30" % UPD_REPO) as r:
+            rel = json.loads(r.read(4 * 1024 * 1024).decode("utf-8"))
+        self.checked = time.time()
+        best = None
+        for x in rel if isinstance(rel, list) else []:
+            tag = str(x.get("tag_name") or "")
+            if x.get("draft") or x.get("prerelease") or not re.fullmatch(r"gate-v\d+\.\d+\.\d+", tag):
+                continue
+            v = tag[len("gate-v"):]
+            if best is None or W.ver_tuple(v) > W.ver_tuple(best[0]):
+                best = (v, x)
+        if not best or W.ver_tuple(best[0]) <= W.ver_tuple(VERSION):
+            self.state, self.latest = "latest", VERSION if not best else best[0]
+            return
+        v, x = best
+        self.latest, self.notes = v, str(x.get("body") or "")
+        asset = next((a for a in x.get("assets") or [] if a.get("name") == UPD_ASSET % v), None)
+        if not asset:
+            raise ValueError("v%s の配布ファイルが見つかりません" % v)
+        size = int(asset.get("size") or 0)
+        if not 0 < size <= UPD_MAX:
+            raise ValueError("v%s の配布ファイルの大きさがおかしいため取りませんでした" % v)
+        want = str(asset.get("digest") or "")
+        want = want[7:].lower() if want.startswith("sha256:") else ""
+        url = str(asset.get("browser_download_url") or "")
+        if not url.startswith("https://github.com/%s/releases/download/" % UPD_REPO):
+            raise ValueError("配布ファイルの場所がおかしいため取りませんでした")
+        d = self.dir()
+        if os.path.isdir(d):
+            shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d, exist_ok=True)
+        part = os.path.join(d, "download.part")
+        self.state = "downloading"
+        h = hashlib.sha256()
+        got = 0
+        t0 = time.time()
+        with self._get(url, timeout=60) as r, open(part, "wb") as f:
+            while True:
+                b = r.read(256 * 1024)
+                if not b:
+                    break
+                got += len(b)
+                if got > UPD_MAX:
+                    raise ValueError("配布ファイルが大きすぎます")
+                f.write(b)
+                h.update(b)
+                self.pct = min(99, got * 100 // size)
+                lag = got / UPD_RATE - (time.time() - t0)
+                if lag > 0:
+                    time.sleep(lag)
+        if got != size or (want and h.hexdigest() != want):
+            raise ValueError("取ってきた配布ファイルが壊れています（もう一度確かめます）")
+        self._stage(part, v)
+        os.remove(part)
+        with open(os.path.join(d, "ready.json"), "w", encoding="utf-8") as f:
+            json.dump({"version": v, "sha256": h.hexdigest(), "at": time.time()}, f)
+        self.ready, self.state, self.pct = v, "ready", 100
+        self.mgr.log("update: v%s を用意しました（次の起動で入れ替え）" % v)
+
+    def _stage(self, zpath, v):
+        """zip を runtime_update\files に展開する（中身を確かめる。zip の外へは書かない）"""
+        import zipfile
+        dst = os.path.join(self.dir(), "files")
+        with zipfile.ZipFile(zpath) as z:
+            bad = z.testzip()
+            if bad:
+                raise ValueError("配布ファイルが壊れています: %s" % bad)
+            names = z.namelist()
+            need = {UPD_TOP + "PADDOCK_GATE.exe", UPD_TOP + "runtime/app/sw_nas_operator.pyc", UPD_TOP + "runtime/app/sw_nas_watch.pyc"}
+            if not need <= set(names):
+                raise ValueError("配布ファイルの中身が足りません")
+            for it in z.infolist():
+                n = it.filename
+                if not n.startswith(UPD_TOP) or n.endswith("/"):
+                    continue
+                rel = n[len(UPD_TOP):]
+                parts = rel.split("/")
+                if not rel or any(p in ("", ".", "..") or ":" in p or "\\" in p for p in parts):
+                    raise ValueError("配布ファイルに不正な名前があります: %s" % n)
+                out = os.path.join(dst, *parts)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                with z.open(it) as src, open(out, "wb") as f:
+                    shutil.copyfileobj(src, f, 1024 * 1024)
+
+
 class OpHandler(W.Handler):
     server_version = "SWNasOperator/" + VERSION
 
@@ -2556,6 +2729,10 @@ class OpHandler(W.Handler):
             if not self.is_local():
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
             return self.send_json(self.server.got.get())
+        if u.path == "/api/op/update":
+            if not self.is_local():
+                return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
+            return self.send_json(self.server.upd.get())
         if u.path == "/api/op/got/img":
             if not self.is_local() or (self.headers.get("Host") or "").lower() not in self.server.allowed_hosts:
                 return self.deny(403, "この操作はアプリを動かしているPCからのみ可能です")
@@ -2650,6 +2827,21 @@ class OpHandler(W.Handler):
                 st = {k: str(body.get(k) or "")[:200] for k in ("now", "next", "session", "venue")}
                 self.server.remote.status = st
                 return self.send_json({"ok": True})
+            if u.path == "/api/op/update":
+                return self.send_json(self.server.upd.set(body))
+            if u.path == "/api/op/update/apply":
+                # ［終了して入れ替える］：コピー中などで終了できないときは断る。終了したあと窓（exe）が入れ替えて起動し直す
+                if not self.server.upd.ready or not self.server.upd._read_ready():
+                    raise ValueError("入れ替える新しいバージョンがまだ用意できていません")
+                block = getattr(self.server, "quit_block", None)
+                msg = block() if block else ""
+                if msg:
+                    return self.deny(409, msg)
+                with open(os.path.join(self.server.upd.dir(), "relaunch"), "w", encoding="utf-8") as f:
+                    f.write(VERSION)
+                self.send_json({"ok": True, "version": self.server.upd.ready})
+                W.request_quit(self.server, "アップデートのため終了します（v%s に入れ替えて起動し直します）" % self.server.upd.ready)
+                return
             if u.path == "/api/op/nas/open":
                 return self.send_json(self.server.got.reveal_nas(str(body.get("root") or ""), str(body.get("group") or "")))
             if u.path == "/api/op/got/check":
@@ -2735,6 +2927,7 @@ def main():
     srv.got = GotMarks(mgr, srv.opener)
     srv.remote = Remote(mgr)
     srv.pair = Pair(mgr, srv.stage, data_dir)
+    srv.upd = Updater(mgr)
     mgr.start()
     W.start_autoquit(srv, enabled=False)
 

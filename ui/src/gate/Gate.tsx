@@ -329,7 +329,12 @@ function curSes(M: Model): Ses | null {
 /* ---------------------------------------------------------------- 画面 */
 export function GateApp() {
   const s = useApp(); const M = build();
-  useEffect(() => { const f = () => { stageLoad(); gotLoad(); }; f(); const t = window.setInterval(f, 3000); return () => clearInterval(t); }, []);   // バックアップPCとそろえているときも数秒で反映
+  useEffect(() => { const f = () => { stageLoad(); gotLoad(); }; f(); const t = window.setInterval(f, 3000); return () => clearInterval(t); }, []);
+  /* 新しいバージョンの用意ができたら1回だけ知らせる（入れ替えは次の起動のとき） */
+  useEffect(() => {
+    let shown = ""; const f = () => api<any>("/api/op/update").then((u) => { if (u.ready && u.ready !== shown) { shown = u.ready; toast("PADDOCK GATE の新しいバージョン v" + u.ready + " の用意ができました。次に起動したときに入れ替わります（［設定］→［詳細］→ アップデート から今すぐ入れ替えることもできます）", 10000); } }).catch(() => {});
+    const t0 = window.setTimeout(f, 5000); const t = window.setInterval(f, 60000); return () => { clearTimeout(t0); clearInterval(t); };
+  }, []);   // バックアップPCとそろえているときも数秒で反映
   const ses = M ? curSes(M) : null;
   const [menu, setMenu] = useState<{ x: number; y: number; g: string; s?: string } | null>(null);
   useEffect(() => { setMenu(null); }, [ses?.key, M?.day, s.q]);

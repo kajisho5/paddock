@@ -117,4 +117,32 @@ for ($i = 0; $i -lt 30 -and ((Count "PADDOCK_GATE") + (Count "PADDOCK_GATE_core"
 if (((Count "PADDOCK_GATE") + (Count "PADDOCK_GATE_core")) -eq 0) { Ok "終了した" } else { Bad "終了しない" }
 
 Copy-Item "$rt\shell.log", "$rt\last_run.log", "$rt\selftest.txt" $Out -ErrorAction SilentlyContinue
+
+# アップデートの入れ替え：エンジンが用意したもの（runtime_update）を、次の起動で入れ替えて起動し直す
+$env:PADDOCK_SELFTEST = ""
+$up = Join-Path $dir "runtime_update"
+$tmp = Join-Path $env:RUNNER_TEMP "upd_src"
+Remove-Item -Recurse -Force $tmp, $up -ErrorAction SilentlyContinue
+Expand-Archive $Zip $tmp
+New-Item -ItemType Directory -Force $up | Out-Null
+Move-Item (Join-Path $tmp "PADDOCK_GATE") (Join-Path $up "files")
+Set-Content (Join-Path $up "files\runtime\app\UPDATED.txt") "架空の新しいバージョン"
+Set-Content (Join-Path $up "ready.json") '{"version": "999.0.0"}'
+$dataBefore = Get-ChildItem $dir -Directory | Where-Object { $_.Name -like "*_data" } | ForEach-Object { $_.Name }
+Start-Process $exe | Out-Null
+$v = ""
+for ($i = 0; $i -lt 90 -and -not ($v -match "PADDOCK GATE"); $i++) { Start-Sleep 1; $v = Ping }
+if ($v -match "PADDOCK GATE") { Ok "入れ替えて起動し直した $v" } else { Bad "アップデートのあと起動しない" }
+if (Test-Path (Join-Path $rt "app\UPDATED.txt")) { Ok "runtime が新しいものに入れ替わった" } else { Bad "runtime が入れ替わっていない" }
+if (Test-Path (Join-Path $dir "PADDOCK_GATE.exe.prev")) { Ok "前の exe を残した（次の起動で片付け）" } else { Bad "前の exe が残っていない" }
+if (-not (Test-Path $up)) { Ok "用意したものを片付けた" } else { Bad "runtime_update が残っている" }
+if (Test-Path (Join-Path $rt "shell.json")) { Ok "最前面の設定を引き継いだ" } else { Write-Host "（shell.json は元から無し）" }
+$dataAfter = Get-ChildItem $dir -Directory | Where-Object { $_.Name -like "*_data" } | ForEach-Object { $_.Name }
+if ("$dataBefore" -eq "$dataAfter" -and "$dataAfter") { Ok "設定・記録のフォルダはそのまま（$dataAfter）" } else { Bad "設定・記録のフォルダが変わった（$dataBefore → $dataAfter）" }
+if ((Get-Content "$rt\shell.log" -Raw) -match "\[update\].*入れ替えました") { Ok "入れ替えの記録がある" } else { Bad "入れ替えの記録が無い" }
+if ((Count "PADDOCK_GATE") -eq 1) { Ok "入れ替えのあとも窓は1つ" } else { Bad "入れ替えのあと窓が $(Count 'PADDOCK_GATE') 個" }
+$key = (Get-Content "$rt\shell.key" -Raw).Trim()
+try { Invoke-WebRequest -UseBasicParsing -Method POST -Headers @{ "X-SW-Shell" = $key } -ContentType "application/json" -Body "{}" http://127.0.0.1:8797/api/shell/quit | Out-Null } catch { Bad "終了を頼めない（入れ替えのあと）: $_" }
+for ($i = 0; $i -lt 30 -and ((Count "PADDOCK_GATE") + (Count "PADDOCK_GATE_core")) -gt 0; $i++) { Start-Sleep 1 }
+Copy-Item "$rt\shell.log" (Join-Path $Out "shell_after_update.log") -ErrorAction SilentlyContinue
 exit $fail

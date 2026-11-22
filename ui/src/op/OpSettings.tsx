@@ -21,6 +21,32 @@ export function opPrepare(c: Config, defDest = "") {
   if (!c.op.root || !ids.includes(c.op.root)) c.op.root = ids[0] || "";
 }
 
+/* アップデート：新しいバージョンを裏で取ってきて、次の起動（または［終了して入れ替える］）で入れ替える */
+function UpdateSettings() {
+  const [u, setU] = useState<any>(null); const [busy, setBusy] = useState(false);
+  const load = () => api<any>("/api/op/update").then(setU).catch(() => {});
+  useEffect(() => { load(); const t = window.setInterval(load, 3000); return () => clearInterval(t); }, []);
+  if (!u) return null;
+  const post = async (b: any) => { setBusy(true); try { setU(await api<any>("/api/op/update", b)); } catch (e: any) { toast(e.message, 7000); } setBusy(false); };
+  const apply = async () => {
+    if (!confirm(`PADDOCK GATE を終了して、v${u.ready} に入れ替えます。\n入れ替えたあと自動で起動し直します（30秒ほど）。\n発表中・コピー中でないことを確かめてから進めてください。`)) return;
+    try { await api<any>("/api/op/update/apply", {}); store.quit = true; store.emit(); }
+    catch (e: any) { toast(e.message, 8000); }
+  };
+  const st: Record<string, string> = { idle: "まだ確かめていません", checking: "確かめています…", downloading: `新しいバージョン v${u.latest} を取ってきています（${u.pct}%）`,
+    ready: `v${u.ready} の用意ができました。次に PADDOCK GATE を起動したときに入れ替わります`, latest: "いまのバージョンが最新です", error: u.msg || "確かめられませんでした" };
+  return <><h3>アップデート</h3>
+    <p className="hint" style={{ margin: "0 0 8px" }}>インターネットにつながっているとき、新しいバージョンを裏で取ってきて用意します。<b>入れ替えは次に起動したとき</b>（または下の［終了して入れ替える］を押したとき）だけで、発表中に勝手に止まったり入れ替わったりはしません。設定・記録はそのまま引き継ぎます。NAS には何もしません。</p>
+    <div className="grid2" id="updSet">
+      <span>いまのバージョン</span><span>v{u.cur}</span>
+      <span>自動で取ってくる</span><span><label className="lbl"><input type="checkbox" id="updAuto" checked={!!u.auto} disabled={busy || !u.able} onChange={(e) => post({ auto: e.target.checked })} />新しいバージョンがあれば裏で取ってくる（6時間ごとに確かめる）</label></span>
+      <span>状態</span><span id="updSt" className={u.state === "error" ? "warn" : ""}>{u.able ? st[u.state] || u.state : "この起動のしかたでは使えません（Windows で PADDOCK_GATE.exe から起動したときに使えます）"}</span>
+      <span /><span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button id="updCheck" disabled={busy || !u.able || u.state === "checking" || u.state === "downloading"} onClick={() => post({ check: true })}>今すぐ確かめる</button>
+        {u.ready && <button className="pri" id="updApply" onClick={apply}>終了して v{u.ready} に入れ替える…</button>}</span>
+    </div></>;
+}
+
 /* メインPCとバックアップPCで「発表中・発表済み」をそろえる */
 function PairSettings() {
   /* p＝いまの状態（数秒ごとに読み直す）、f＝入力中の値（読み直しで上書きしない。保存したときだけ入れ替える） */
@@ -143,6 +169,7 @@ export function OpSection({ c, up, part }: { c: Config; up: () => void; part: "v
       ・コピー先で<b>開かれているファイル（発表中など）は上書きしません</b>。閉じられてから新しい版に差し替えます。<br />
       ・差し替えた旧版はコピー先の「_差し替え前」フォルダに残します。<b>コピー先のファイルを消すことはありません</b>（NAS側で消えても残します）。<br />
       ・コピー先で編集したファイルは、NAS側が更新されない限り上書きしません。</p>
+    <UpdateSettings />
     <PairSettings />
     <RemoteInfo />
   </>;

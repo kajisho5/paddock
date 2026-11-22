@@ -711,6 +711,14 @@ fn start_and_watch(app: AppHandle, st: Arc<Shared>) {
         }
         if clean {
             st.note("エンジンが終了しました（画面の［終了］など）");
+            let up = st.dir.join("runtime_update");
+            if up.join("relaunch").is_file() && up.join("ready.json").is_file() {
+                let _ = fs::remove_file(up.join("relaunch"));
+                st.note("アップデート：起動し直して入れ替えます");
+                let name = std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_owned()));
+                let name = name.unwrap_or_else(|| "PADDOCK_GATE.exe".into());
+                relaunch_self(&st.dir, &name); // 新しい窓は、この窓が閉じてから入れ替えて始まる
+            }
             app.exit(0);
             return;
         }
@@ -823,9 +831,124 @@ fn webview_missing() -> bool {
     }
 }
 
+// ---------------------------------------------------------------- アップデート（エンジンが runtime_update に用意した新しいバージョンに入れ替える）
+fn upd_log(dir: &Path, msg: &str) {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join("runtime").join("shell.log")) {
+        let _ = writeln!(f, "[update] {}", msg);
+    }
+}
+
+fn upd_fail(dir: &Path, up: &Path, msg: &str) {
+    upd_log(dir, msg);
+    let _ = fs::write(dir.join("runtime").join("update_failed.txt"), msg);
+    let _ = fs::remove_dir_all(up); // 用意したものは捨てる（エンジンがあとで取り直す）
+}
+
+/// 起動したときだけ：用意された新しいバージョンがあり、エンジンが動いていなければ入れ替えて、新しい exe を起動する。
+/// 入れ替えるのは exe・runtime（同梱の Python とアプリ）・README・LICENSE だけ。設定・記録（sw_nas_operator_data）には触れない。
+/// 戻り値 true＝新しい exe を起動した（この古い exe はすぐ終わる）
+fn apply_update(dir: &Path, port: u16) -> bool {
+    let up = dir.join("runtime_update");
+    let _ = fs::remove_dir_all(dir.join("runtime_prev")); // 前回の入れ替えの残り
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let name = match exe.file_name() {
+        Some(n) => n.to_owned(),
+        None => return false,
+    };
+    let mut prev_name = name.clone();
+    prev_name.push(".prev");
+    let prev_exe = dir.join(&prev_name);
+    let _ = fs::remove_file(&prev_exe);
+    let v = match fs::read_to_string(up.join("ready.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|j| j.get("version").and_then(|x| x.as_str()).map(String::from))
+    {
+        Some(v) => v,
+        None => return false,
+    };
+    if vt(&v) <= vt(VERSION) {
+        let _ = fs::remove_dir_all(&up);
+        return false;
+    }
+    if dev_env("PADDOCK_DIR").is_some() || port_busy(port) {
+        return false; // 試験中、またはエンジンが動いている（窓を閉じても裏でコピー中など）：入れ替えない
+    }
+    let files = up.join("files");
+    let new_exe = files.join("PADDOCK_GATE.exe");
+    if !new_exe.is_file() || !files.join("runtime").join("app").join(APP_PYC).is_file() {
+        upd_fail(dir, &up, "用意されたファイルが足りません");
+        return false;
+    }
+    upd_log(dir, &format!("v{} から v{} に入れ替えます", VERSION, v));
+    let rt = dir.join("runtime");
+    let rt_prev = dir.join("runtime_prev");
+    if let Err(e) = fs::rename(&rt, &rt_prev) {
+        upd_fail(dir, &up, &format!("runtime を動かせません（{}）", e));
+        return false;
+    }
+    if let Err(e) = fs::rename(files.join("runtime"), &rt) {
+        let _ = fs::rename(&rt_prev, &rt);
+        upd_fail(dir, &up, &format!("新しい runtime を置けません（{}）", e));
+        return false;
+    }
+    for f in ["shell.json", "shell.log", "last_run.log", "last_run.prev.log"] {
+        let _ = fs::copy(rt_prev.join(f), rt.join(f)); // 最前面の設定・記録は引き継ぐ
+    }
+    let back = |why: String| {
+        let _ = fs::rename(&rt, files.join("runtime"));
+        let _ = fs::rename(&rt_prev, &rt);
+        upd_fail(dir, &up, &why);
+    };
+    if let Err(e) = fs::rename(&exe, &prev_exe) {
+        back(format!("exe を動かせません（{}）", e));
+        return false;
+    }
+    if let Err(e) = fs::rename(&new_exe, &exe) {
+        let _ = fs::rename(&prev_exe, &exe);
+        back(format!("新しい exe を置けません（{}）", e));
+        return false;
+    }
+    if let Ok(rd) = fs::read_dir(&files) {
+        for ent in rd.flatten() {
+            let p = ent.path();
+            if p.is_file() {
+                let to = dir.join(ent.file_name());
+                let _ = fs::remove_file(&to);
+                let _ = fs::rename(&p, &to); // README.md・LICENSE.txt
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&up);
+    let _ = fs::remove_file(rt.join("update_failed.txt"));
+    upd_log(dir, &format!("v{} に入れ替えました。起動し直します", v));
+    if !relaunch_self(dir, &name) {
+        plain_message(APP, &format!("新しいバージョン（v{}）に入れ替えました。\nもう一度 PADDOCK_GATE.exe を起動してください。", v));
+    }
+    true
+}
+
+/// この exe（入れ替えたあとなら新しい exe）を起動し直す。新しいほうは、この窓が閉じるのを待ってから始まる
+fn relaunch_self(dir: &Path, name: &std::ffi::OsStr) -> bool {
+    Command::new(dir.join(name))
+        .current_dir(dir)
+        .env("PADDOCK_WAIT_PID", std::process::id().to_string())
+        .spawn()
+        .is_ok()
+}
+
 fn main() {
     let dir = exe_dir();
     let port = dev_env("PADDOCK_PORT").and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
+    if let Some(pid) = std::env::var("PADDOCK_WAIT_PID").ok().and_then(|p| p.parse::<u32>().ok()) {
+        wait_exit(pid, Duration::from_secs(30)); // アップデートで起動し直したとき：前の窓が閉じるのを待つ
+    }
+    if apply_update(&dir, port) {
+        return; // 新しいバージョンを起動した
+    }
     let _ = fs::create_dir_all(dir.join("runtime"));
     let log = OpenOptions::new().create(true).append(true).open(dir.join("runtime").join("shell.log")).ok();
     let pinned = fs::read_to_string(dir.join("runtime").join("shell.json"))
